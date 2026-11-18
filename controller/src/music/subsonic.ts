@@ -15,6 +15,7 @@ import { CUE_EARLY_MAX_SEC, CUE_LATE_MAX_SEC } from './cue-landing.js';
 import { libraryMountProven } from './library-mount.js';
 import { STALE_SOCKET_RETRY_MS } from '../util/fetch-timeout.js';
 import { fileTitle, MAX_REPORTED_TITLE_BYTES, normalizeTitle, titleVerdict } from './tag-title.js';
+import { firstAlbumArtistId } from './artist-credit.js';
 
 function buildAuth() {
   const salt = crypto.randomBytes(8).toString('hex');
@@ -613,6 +614,30 @@ export async function getRecentlyAddedAlbums({ size = 20, signal }: { size?: num
   return r.albumList2?.album || [];
 }
 
+/** getScanStatus with Navidrome's `lastScan`, the time its last scan ended. */
+export interface ScanState {
+  scanning: boolean;
+  /** null when the server does not report one (Gonic, plain Subsonic). */
+  lastScan: string | null;
+}
+
+// The same call as getScanStatus, keeping `lastScan` too: two reads with the
+// same `lastScan` prove no scan ended between them, which `scanning` alone
+// cannot (a watcher scan of a small folder is true for under 100 ms). For
+// heart-follow-policy.ts scanSettled. Navidrome (0.49 to 0.64 at least) moves
+// it on every scan, a no-op one included, and answers Go's zero time
+// ("0001-01-01T00:00:00Z") before its first. null = unknown, as getScanStatus.
+export async function getScanState(): Promise<ScanState | null> {
+  try {
+    const r = await call('getScanStatus', {}, RETRY_FAST_TRANSPORT);
+    const s = r.scanStatus;
+    if (typeof s?.scanning !== 'boolean') return null;
+    return { scanning: s.scanning, lastScan: typeof s.lastScan === 'string' && s.lastScan ? s.lastScan : null };
+  } catch {
+    return null;
+  }
+}
+
 // Albums by play count. `offset` rotates the window — the top-N list barely
 // moves, so an offset-less read pins the same albums forever.
 export async function getFrequentAlbums({ size = 20, offset = 0, signal }: { size?: number; offset?: number; signal?: AbortSignal } = {}) {
@@ -673,6 +698,15 @@ export async function getRecentSongsByArtist(
 export async function getAlbum(id, { signal }: { signal?: AbortSignal } = {}) {
   const r = await call('getAlbum', { id }, { ...RETRY_FAST_TRANSPORT, signal });
   return rejectArchive(r.album?.song || []);
+}
+
+// The album exactly as Navidrome answers it, with no archive or blocklist
+// filter, or null when the answer carries none. For heart-follow-policy.ts,
+// which asks whether an id is still listed: a blocked song is still on the
+// server. One attempt with the fast-transport retry, like getSong.
+export async function getAlbumListing(id: string): Promise<unknown> {
+  const r = await call('getAlbum', { id }, RETRY_FAST_TRANSPORT);
+  return r.album ?? null;
 }
 
 // Single song lookup. The Child carries albumId, which is how manual album
@@ -827,16 +861,32 @@ export async function* iterateAllSongs({ requireComplete = false } = {}) {
           // station-archive entry inflating the album into a false anthology.
           trackArtists: songs.map((s) => s.artist),
         });
+        // What decides whether the album is filed under a label (album-kind
+        // labelOwner, applied by the walk with the library's artist index):
+        // one object, shared by every song of the album.
+        const albumOwner = suspicion.suspect
+          ? {
+              albumArtist: r.album?.artist ?? album.artist ?? null,
+              path: songs.find((s) => s.path)?.path ?? null,
+              trackArtists: songs.map((s) => s.artist),
+            }
+          : null;
         for (const s of songs) {
           yield {
             ...s,
             // A Child's albumId is optional in the spec; the album being
             // iterated is the authoritative fallback.
             albumId: s.albumId ?? r.album?.id ?? album.id ?? null,
+            // The album artist the era judgement keyed on, stored per track
+            // so the era review can key overrides without Navidrome.
+            albumArtist: r.album?.artist ?? album.artist ?? null,
+            // Its id, by the rule a prepared artist episode reads (#2333).
+            albumArtistId: firstAlbumArtistId(s, r.album ?? album),
             albumIsCompilation: isCompilation,
             albumOriginalYear: originalYear,
             albumEraUntrusted: suspicion.suspect,
             albumEraReason: suspicion.reason,
+            albumOwner,
           };
         }
       } catch (err) {

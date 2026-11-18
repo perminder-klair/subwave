@@ -16,21 +16,25 @@ import type { z } from 'zod';
 import {
   hostedFlagSchema,
   hostedHttpsUrlSchema,
-  hostedListenerCapSchema,
   hostedMaxBitrateSchema,
 } from './schemas.generated';
 
+// Everything in here reaches the browser: the pages hand it to a client
+// provider, so it is serialised into the page, and the admin pages are served
+// before sign-in (the auth gate is client-side, app/admin/layout.tsx). So it
+// carries only what the admin needs to render. The box's listener ceiling
+// (SUBWAVE_LISTENER_CAP) is deliberately not read: it is an unpublished guard
+// for the box's shared port, Icecast enforces it through the ICECAST_MAX_CLIENTS
+// the box agent sets, and no copy shows it.
 export interface HostedInfo {
   hosted: boolean;
   // A hosted music library (Navidrome + upload box run for this station):
   // where its owner uploads and browses. Absent = they bring their own server.
   musicUploadUrl?: string;
   musicLibraryUrl?: string;
-  // The plan's concurrent-listener ceiling (SUBWAVE_LISTENER_CAP, set by the box
-  // agent to the ICECAST_MAX_CLIENTS it gives the broadcast container).
-  listenerCap?: number;
-  // The plan's stream bitrate ceiling in kbps (SUBWAVE_MAX_BITRATE). Bitrate
-  // pickers offer only values at or under it, and FLAC is unavailable.
+  // This station's stream bitrate ceiling in kbps (SUBWAVE_MAX_BITRATE), an
+  // unpublished hosting ceiling, not a plan limit. Bitrate pickers offer only
+  // values at or under it, and FLAC is unavailable.
   maxBitrate?: number;
 }
 
@@ -48,13 +52,11 @@ export function hostedFromEnv(env: Record<string, string | undefined>): HostedIn
   if (!hosted) return { hosted };
   const musicUploadUrl = read(hostedHttpsUrlSchema, env.SUBWAVE_MUSIC_UPLOAD_URL);
   const musicLibraryUrl = read(hostedHttpsUrlSchema, env.SUBWAVE_MUSIC_LIBRARY_URL);
-  const listenerCap = read(hostedListenerCapSchema, env.SUBWAVE_LISTENER_CAP);
   const maxBitrate = read(hostedMaxBitrateSchema, env.SUBWAVE_MAX_BITRATE);
   return {
     hosted,
     ...(musicUploadUrl ? { musicUploadUrl } : {}),
     ...(musicLibraryUrl ? { musicLibraryUrl } : {}),
-    ...(listenerCap ? { listenerCap } : {}),
     ...(maxBitrate ? { maxBitrate } : {}),
   };
 }

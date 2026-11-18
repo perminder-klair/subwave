@@ -13,7 +13,8 @@ export interface VoiceMarker {
   filename: string | null;
 }
 
-const POLL_MS = 500;
+export const VOICE_MARKER_POLL_MS = 500;
+const POLL_MS = VOICE_MARKER_POLL_MS;
 // How long a segment waits for its own marker before giving up and reporting an
 // unknown air time. Generous: the normal lag is well under 2s, but a clip
 // handed over while the queue still holds the previous one airs later, and a
@@ -123,7 +124,7 @@ export function resetVoiceMarkers() {
 // #1382 or one that has not spoken since it started — both of which must
 // degrade to instant, handoff-time bookkeeping rather than a 20s stall on every
 // segment.
-function markerFilePresent(): boolean {
+export function markerFilePresent(): boolean {
   return existsSync(config.liquidsoap.voicePlayingFile);
 }
 

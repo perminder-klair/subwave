@@ -316,6 +316,35 @@ test('a late tail measurement that removes "instrumental" embeds once', async ()
   assert.deepEqual(drain(), [], 'then never again');
 });
 
+// #2237: the head's vocal rule changed (vocal facet v2), so `--facets vocal`
+// re-measures rows taken at v1. Bleed that v1 read as 26 s of singing comes
+// back empty, and the vector gains "instrumental" through the same mark as any
+// other measured word; a re-measure that agrees marks nothing.
+test('a vocal re-measure under the new head rule marks only a moved verdict', async () => {
+  const outro = { startMs: 220_000, ending: 'cold', vocalRanges: [] } as never;
+  for (const id of ['bleed', 'singer']) {
+    addTrack(id);
+    db.upsertTrackAnalysis(id, { bpm: 124, musicalKey: '8A', vocalRanges: [{ startMs: 2_000, endMs: 28_000 }],
+      outro, source: 'full' });
+    db.requireDb().prepare("UPDATE track_facet_status SET version = ? WHERE track_id = ? AND facet = 'vocal'")
+      .run(db.FACET_VERSIONS.vocal - 1, id);
+  }
+  await phaseEmbed(['bleed', 'singer'], 8, 'plain');
+  for (const text of drain()) assert.match(text, /\nSound: upbeat tempo, minor key$/m);
+  assert.ok(['bleed', 'singer'].every(id => db.facetNeedsIds('vocal').includes(id)), 'v1 rows are due');
+
+  db.writeFacetResults('bleed', { source: 'full', vocal: { vocalRanges: [], tailVocalRanges: [] } });
+  db.writeFacetResults('singer', { source: 'full',
+    vocal: { vocalRanges: [{ startMs: 3_000, endMs: 27_000 }], tailVocalRanges: [] } });
+  assert.deepEqual(dirty(), ['bleed'], 'only the row whose verdict moved');
+  assert.ok(!db.facetNeedsIds('vocal').includes('bleed') && !db.facetNeedsIds('vocal').includes('singer'),
+    'both settle at the current version');
+  await reembedMarked();
+  const once = drain();
+  assert.equal(once.length, 1);
+  assert.match(once[0], /\nSound: upbeat tempo, minor key, instrumental$/m);
+});
+
 // #2255: a vocal-off --re-analyze kept the head's vocal ranges but cleared
 // outro_json, and with it the tail's. 'tail' has an instrumental head and a sung
 // tail, so it read as instrumental from the clear on, was marked for a wrong

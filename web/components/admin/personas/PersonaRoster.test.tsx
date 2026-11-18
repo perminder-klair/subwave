@@ -28,6 +28,7 @@ const persona: Persona = {
     gainDb: 0,
     speed: 1,
   },
+  fallbackVoice: null,
   skills: [],
   tags: ['late-night'],
 };

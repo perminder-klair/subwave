@@ -71,6 +71,8 @@ function writeStems(dir: string, window: 'head' | 'tail'): void {
     if (sparseStemBytes > STEM_BYTES) truncateSync(f, sparseStemBytes);
   }
   if (window === 'tail') writeFileSync(path.join(dir, 'tail-meta.json'), JSON.stringify({ duration_s: 200, offset_s: 180 }));
+  // The worker restamps a head it writes (#2238); this fake knows no size.
+  if (window === 'head') writeFileSync(path.join(dir, 'head-meta.json'), JSON.stringify({ file_size: null, duration_sec: null }));
 }
 
 const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
@@ -278,6 +280,20 @@ test('only the tail missing on a complete download: the worker is asked for the 
   assert.equal(db.needsStemsIds().includes('tail-only-1'), false, 'stamped like any attempt');
 });
 
+test('a head cut from another file than the row\'s is missing: both windows are separated (#2238)', async () => {
+  db.upsertTrackMeta('stale-head-1', { title: 'Song stale-head-1', artist: 'A', album: 'B', duration: 200, fileSize: 6_000_000 });
+  addTrack('stale-head-1');
+  const dir = stemCache.dirFor('stale-head-1');
+  writeStems(dir, 'head');
+  writeFileSync(path.join(dir, 'head-meta.json'), JSON.stringify({ file_size: 5_000_000, duration_sec: 200 }));
+  assert.equal(await stemCache.hasWindow('stale-head-1', 'head', { fileSize: null }), true, 'judged without the row, the head looks cached');
+  assert.equal(await stemCache.hasWindow('stale-head-1', 'head'), false, 'hasWindow reads the row itself');
+  const result = await run('stale-head-1').outcome;
+  assert.equal(result.ran && result.ok, true);
+  assert.equal(seen.analyze.at(-1)?.stems_windows, undefined, 'not the tail alone: the stale head is redone');
+  assert.equal(await stemCache.hasWindow('stale-head-1', 'head'), true);
+});
+
 test('a truncated download still separates a missing head, and asks for no tail', async () => {
   addTrack('big-2');
   const result = await run('big-2').outcome;
@@ -344,6 +360,9 @@ const DAY_S = 86_400;
 // the default), so the pass's headroom is 0 for good.
 function fullSnapshot(bytes = stemCache.budgetBytes(), dirs = 600): void {
   const now = new Date().toISOString();
+  // Written by hand, as from before the usage journal: the journal goes too,
+  // and the next read stamps it.
+  rmSync(path.join(stateRoot, 'stem-cache-usage.journal'), { force: true });
   writeFileSync(snapFile, JSON.stringify({
     version: 1, root: stemCache.stemsRoot(), bytes, dirs, measuredAt: now, updatedAt: now,
   }));

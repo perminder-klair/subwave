@@ -9,6 +9,7 @@ import * as subsonic from '../../music/subsonic.js';
 import * as lastfm from '../../music/lastfm.js';
 import { listAfterArtistLookup } from '../../music/lastfm-tag-policy.js';
 import * as musicbrainz from '../../music/musicbrainz.js';
+import { lookupOriginalYearAnySource } from '../../music/original-year.js';
 import * as settings from '../../settings.js';
 import * as embeddings from '../../music/embeddings.js';
 import { resolveEraYear } from '../../music/show-filter.js';
@@ -138,6 +139,19 @@ router.post('/library/coverage/refresh', requireAdmin, async (_req, res) => {
     // sensible request timeout.
     coverage.refresh();
     res.json({ ok: true, coverage: await coverage.get() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// The stale-vector notice's action (#2313): mark the vectors whose Sound: line
+// carries mood words a relabel-all moved, so the next tag run (or an Analyse run
+// that re-embeds) rebuilds just those. Marking only: nothing is embedded here.
+router.post('/library/vectors/mark-stale-sound', requireAdmin, async (_req, res) => {
+  try {
+    const marked = db.markForgottenSoundVectorsDirty();
+    coverage.countVectors();
+    res.json({ ok: true, marked, coverage: await coverage.get() });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -322,13 +336,14 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
       try {
         const t = db.getTrack(id);
         if (t && musicbrainz.needsOriginalYearLookup(t, true)) {
-          const year = await musicbrainz.lookupOriginalYear({
+          const outcome = await lookupOriginalYearAnySource({
             title: song.title,
             artist: song.artist,
             mbid: song.musicBrainzId || null,
             year: Number(song.year) || null,
           });
-          db.setOriginalYear(id, year);
+          db.recordOriginalYearOutcome(id, outcome);
+          if (outcome.kind === 'error') queue.log('warn', `/library/retag enrich(originalYear) ${id}: ${outcome.reason}`);
         }
       } catch (err) {
         queue.log('warn', `/library/retag enrich(originalYear) ${id}: ${err.message}`);

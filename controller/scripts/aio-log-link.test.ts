@@ -305,4 +305,63 @@ function scratch(): Scratch {
   assert.match(out, /cycle half/, 'cycle half: the repair should be logged');
 }
 
+// --- the relaunch path (prepare_broadcast_state, #2349) -----------------------
+// The pair relaunches inside a running container (a station switch, Restart
+// mixer), so the link made at boot must be re-made there too. A multi-station
+// conversion used to move <root>/logs into stations/main/, leaving the boot-time
+// link dangling and the mixer crash-looping on "Log directory does not exist".
+// An install that converted before the fix is still in that shape, so the
+// relaunch has to heal it, not just avoid causing it.
+function runRelaunch(stateRoot: string, liqLogDir: string): string {
+  return execFileSync(
+    'bash',
+    ['-c', `set -u; SUBWAVE_SUPERVISOR_LIB=1 source "$1"; prepare_broadcast_state 2>&1; echo "SUBWAVE_STATE_DIR=$SUBWAVE_STATE_DIR"`, 'bash', SUPERVISOR],
+    {
+      env: { ...process.env, SUBWAVE_STATE_ROOT: stateRoot, SUBWAVE_LIQ_LOG_DIR: liqLogDir, SUBWAVE_STEMS_DIR: '' },
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  );
+}
+
+// Already converted: root logs/ gone, the boot-time link dangling at it.
+{
+  const { stateRoot, liqLogDir } = scratch();
+  const main = join(stateRoot, 'stations', 'main');
+  mkdirSync(join(main, 'logs'), { recursive: true });
+  writeFileSync(join(main, 'logs', 'radio.log'), 'before conversion\n');
+  writeFileSync(join(stateRoot, 'stations', 'active.json'), '{"activeId":"main"}');
+  symlinkSync(join(stateRoot, 'logs'), liqLogDir); // what init_state made at boot
+  assert.ok(!radioLogOpenable(liqLogDir), 'precondition: the dangling link is the crash-loop shape');
+
+  const out = runRelaunch(stateRoot, liqLogDir);
+
+  assert.match(out, /SUBWAVE_STATE_DIR=.*\/stations\/main$/m, 'relaunch: still serves the active station');
+  assert.ok(radioLogOpenable(liqLogDir), 'relaunch: radio.log must be openable after a conversion moved logs/');
+  assert.doesNotMatch(out, /unopenable/, 'relaunch: the probe should pass without the container-local fallback');
+  assert.ok(lstatSync(join(stateRoot, 'logs')).isDirectory(), 'relaunch: the root logs/ must be a real dir again');
+  assert.ok(lstatSync(liqLogDir).isSymbolicLink(), 'relaunch: the container path stays linked at the root (persists)');
+  writeFileSync(join(liqLogDir, 'radio.log'), 'after relaunch\n');
+  assert.equal(readFileSync(join(stateRoot, 'logs', 'radio.log'), 'utf8'), 'after relaunch\n');
+  assert.equal(
+    readFileSync(join(main, 'logs', 'radio.log'), 'utf8'),
+    'before conversion\n',
+    'relaunch: the moved history is left where it is',
+  );
+}
+
+// Healthy relaunch: idempotent, the existing log and link are kept.
+{
+  const { stateRoot, liqLogDir } = scratch();
+  mkdirSync(join(stateRoot, 'logs'));
+  writeFileSync(join(stateRoot, 'logs', 'radio.log'), 'running\n');
+  symlinkSync(join(stateRoot, 'logs'), liqLogDir);
+
+  const out = runRelaunch(stateRoot, liqLogDir);
+
+  assert.doesNotMatch(out, /WARNING|ERROR/, 'healthy relaunch: nothing to warn about');
+  assert.ok(lstatSync(liqLogDir).isSymbolicLink(), 'healthy relaunch: the link is kept');
+  assert.equal(readFileSync(join(liqLogDir, 'radio.log'), 'utf8'), 'running\n', 'healthy relaunch: the log is kept');
+}
+
 console.log('aio-log-link: all assertions passed');

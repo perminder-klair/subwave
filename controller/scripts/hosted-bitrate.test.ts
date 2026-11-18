@@ -1,13 +1,14 @@
-// A hosted plan's stream bitrate ceiling (SUBWAVE_MAX_BITRATE, setup/hosted.ts)
+// A hosted station's stream bitrate ceiling (SUBWAVE_MAX_BITRATE, setup/hosted.ts;
+// an unpublished hosting ceiling, not a plan limit)
 // at the places it reaches past a save:
 //   - settings/liquidsoap.ts writes the CAPPED values into the liquidsoap_*
 //     files the mixer, broadcast-entrypoint.sh and the AIO supervisor read, so
-//     a value saved before the plan changed can't exceed it; the owner's stored
+//     a value saved before the ceiling changed can't exceed it; the owner's stored
 //     settings stay as they were, and the archive recording isn't capped;
 //   - BOOT (settings.ensureLiquidsoapSettingsFile, which server.ts calls)
-//     rewrites those mount files when the plan changed with no save: a
-//     downgrade or an upgrade is an env change, and files already on disk
-//     otherwise kept the old plan until some unrelated save. The jingle ratio
+//     rewrites those mount files when the ceiling changed with no save: a
+//     lowered or raised ceiling is an env change, and files already on disk
+//     otherwise kept the old ceiling until some unrelated save. The jingle ratio
 //     keeps its only-if-missing rule;
 //   - /listen.pls, /listen.m3u, /now-playing's *Enabled flags and the admin
 //     Connect catalog (one advertisedMounts) never offer a mount the ceiling
@@ -39,7 +40,7 @@ const { writeLiquidsoapSettings } = await import('../src/settings/liquidsoap.js'
 const { router } = await import('../src/routes/public.js');
 const { router: connect } = await import('../src/routes/connect.js');
 await settings.load();
-// Everything a 192 kbps plan must not air, saved before the ceiling existed.
+// Everything a 192 kbps ceiling must not air, saved before the ceiling existed.
 await settings.update({
   stream: { bitrate: 320, opusEnabled: true, opusBitrate: 320, aacEnabled: true, aacBitrate: 256, flacEnabled: true },
   archive: { enabled: true, bitrate: 320 },
@@ -110,8 +111,8 @@ for (const file of ['/listen.pls', '/listen.m3u']) {
 const mountFiles = () => ['stream_bitrate', 'opus_bitrate', 'aac_bitrate', 'aac_enabled', 'flac_enabled', 'opus_enabled'].map(liq);
 const storedStream = () => JSON.parse(readFileSync(join(stateDir, 'settings.json'), 'utf8')).stream;
 
-test('boot brings the mount files to a plan downgrade and back on an upgrade, without a save', async () => {
-  // Where a station stands before the plan changes: files written by its last
+test('boot brings the mount files to a lowered ceiling and back on a raised one, without a save', async () => {
+  // Where a station stands before the ceiling changes: files written by its last
   // save, at 320 and FLAC on, and a jingle ratio the running mixer read.
   await settings.update({ stream: { bitrate: 320 } });
   assert.deepEqual(mountFiles(), ['320', '320', '256', 'true', 'true', 'true']);
@@ -125,7 +126,7 @@ test('boot brings the mount files to a plan downgrade and back on an upgrade, wi
   assert.deepEqual(down.rewroteMountFiles.sort(), [
     'liquidsoap_aac_bitrate.txt', 'liquidsoap_flac_enabled.txt', 'liquidsoap_opus_bitrate.txt', 'liquidsoap_stream_bitrate.txt',
   ]);
-  // A second boot on the same plan has nothing to rewrite.
+  // A second boot on the same ceiling has nothing to rewrite.
   assert.deepEqual((await withCeiling('192', () => settings.ensureLiquidsoapSettingsFile())).rewroteMountFiles, []);
 
   // Down to 96: AAC's lowest is 128, so its mount goes off (its bitrate file
@@ -133,11 +134,11 @@ test('boot brings the mount files to a plan downgrade and back on an upgrade, wi
   await withCeiling('96', () => settings.ensureLiquidsoapSettingsFile());
   assert.deepEqual(mountFiles(), ['96', '96', '256', 'false', 'false', 'true']);
 
-  // Upgrade to a 320 plan: the saved values fit again; FLAC stays off under any ceiling.
+  // Raised to 320: the saved values fit again; FLAC stays off under any ceiling.
   await withCeiling('320', () => settings.ensureLiquidsoapSettingsFile());
   assert.deepEqual(mountFiles(), ['320', '320', '256', 'true', 'false', 'true']);
 
-  // A plan with no ceiling (and self-hosted alike): everything saved, FLAC back on.
+  // No ceiling (and self-hosted alike): everything saved, FLAC back on.
   const up = await withCeiling(null, () => settings.ensureLiquidsoapSettingsFile());
   assert.deepEqual(mountFiles(), ['320', '320', '256', 'true', 'true', 'true']);
   assert.deepEqual(up.rewroteMountFiles, ['liquidsoap_flac_enabled.txt']);

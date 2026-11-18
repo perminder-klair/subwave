@@ -16,7 +16,7 @@
        docs/unraid.md walks the swap. -->
   <ExtraParams>--add-host host.docker.internal:host-gateway</ExtraParams>
 
-  <Icon>https://raw.githubusercontent.com/perminder-klair/subwave/main/app/assets/icon.png</Icon>
+  <Icon>https://raw.githubusercontent.com/getsubwave/app/main/assets/icon.png</Icon>
   <WebUI>http://[IP]:[PORT:80]</WebUI>
 
   <!-- CA and the Apps tab collapse whitespace, so [br][br] is the paragraph

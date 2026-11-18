@@ -313,21 +313,21 @@ def t_vocal_and_stems_share_one_separation_and_shift_tail_ranges():
             calls.append("separate")
             return {"vocals": y}
 
-        def detect(self, y, sr, librosa, min_loud=None, stems=None):
+        def detect(self, y, sr, librosa, *, mix_floor, min_loud=None, stems=None):
             return [{"startMs": 1000, "endMs": 3000}]
 
     written = []
     y = np.concatenate([tone(12.0), silence(8.0)])
     with Patched(get_vocal_detector=lambda force=False: Detector(), measure_loudness=fixed_loudness,
                  write_stems=lambda stems, window, d: written.append(window),
-                 write_tail_meta=lambda d, off, dur: written.append("meta"), log=lambda *_a: None):
+                 write_head_meta=lambda *_a: None, write_tail_meta=lambda d, off, dur, **_kw: written.append("meta"), log=lambda *_a: None):
         out = aw.analyze_facets(FakeLibrosa, FakeSource(tail=(y, SR, 180.0)), ["vocal", "stems"], stems_dir="/x")
     assert calls == ["separate", "separate"], calls  # head + tail, shared by both facets
     assert written == ["head", "tail", "meta"], written
     assert out["vocal"]["data"]["vocal_ranges"] == [{"startMs": 1000, "endMs": 3000}], out
     # Tail ranges are ABSOLUTE: shifted by the tail window's offset (200 - 20 s).
     assert out["vocal"]["data"]["tail_vocal_ranges"] == [{"startMs": 181000, "endMs": 183000}], out
-    assert out["stems"] == {"status": "ok", "data": {"stems_cached": True, "tail_stems": True}}, out
+    assert out["stems"] == {"status": "ok", "data": {"stems_cached": True, "tail_stems": True, "tail_stems_landed": True}}, out
 
 
 def t_stems_windows_tail_alone_skips_the_head_separation():
@@ -340,7 +340,7 @@ def t_stems_windows_tail_alone_skips_the_head_separation():
             calls.append("separate")
             return {"vocals": y}
 
-        def detect(self, y, sr, librosa, min_loud=None, stems=None):
+        def detect(self, y, sr, librosa, *, mix_floor, min_loud=None, stems=None):
             return [{"startMs": 1000, "endMs": 3000}]
 
     written = []
@@ -348,19 +348,19 @@ def t_stems_windows_tail_alone_skips_the_head_separation():
     src = FakeSource(tail=(y, SR, 180.0))
     with Patched(get_vocal_detector=lambda force=False: Detector(),
                  write_stems=lambda stems, window, d: written.append(window),
-                 write_tail_meta=lambda d, off, dur: written.append("meta"), log=lambda *_a: None):
+                 write_head_meta=lambda *_a: None, write_tail_meta=lambda d, off, dur, **_kw: written.append("meta"), log=lambda *_a: None):
         out = aw.analyze_facets(FakeLibrosa, src, ["stems"], stems_dir="/x", stems_windows=["tail"])
     assert calls == ["separate"], calls
     assert written == ["tail", "meta"], written
     assert [d for (_sr, off, d) in src.loads] == [aw.OUTRO_SECONDS], src.loads  # the tail window only
-    assert out == {"stems": {"status": "ok", "data": {"tail_stems": True}}}, out
+    assert out == {"stems": {"status": "ok", "data": {"tail_stems": True, "tail_stems_landed": True}}}, out
 
     # The vocal facet still needs the head: separated, but its stems not written.
     calls.clear()
     written.clear()
     with Patched(get_vocal_detector=lambda force=False: Detector(),
                  write_stems=lambda stems, window, d: written.append(window),
-                 write_tail_meta=lambda d, off, dur: written.append("meta"), log=lambda *_a: None):
+                 write_head_meta=lambda *_a: None, write_tail_meta=lambda d, off, dur, **_kw: written.append("meta"), log=lambda *_a: None):
         out = aw.analyze_facets(FakeLibrosa, FakeSource(tail=(y, SR, 180.0)), ["vocal", "stems"],
                                 stems_dir="/x", stems_windows=["tail"])
     assert calls == ["separate", "separate"], calls
@@ -392,7 +392,7 @@ def t_tail_only_request_can_carry_tail_vocals():
             calls.append("separate")
             return {"vocals": y}
 
-        def detect(self, y, sr, librosa, min_loud=None, stems=None):
+        def detect(self, y, sr, librosa, *, mix_floor, min_loud=None, stems=None):
             return [{"startMs": 1000, "endMs": 3000}]
 
     y = np.concatenate([tone(12.0), silence(8.0)])
@@ -520,13 +520,15 @@ def t_stem_publication_error_preserves_vocals(stage):
         "tail_vocal_ranges": [{"startMs": 181000, "endMs": 183000}],
     }}, out
     if stage == "tail-meta":
+        # #2238: a tail whose meta cannot be published is dropped, never left
+        # beside an older tail-meta.json (or none) to be read as a set.
         assert "tail-meta.json" not in files, files
-        assert all(f"tail-{name}.flac" in files for name in ("drums", "bass", "other", "vocals")), files
+        assert not any(f.startswith("tail-") for f in files), files
 
 
 def t_stem_publication_success():
     out, files = _cache_publication(None)
-    assert out["stems"] == {"status": "ok", "data": {"stems_cached": True, "tail_stems": True}}, out
+    assert out["stems"] == {"status": "ok", "data": {"stems_cached": True, "tail_stems": True, "tail_stems_landed": True}}, out
     assert all(f"{window}-{name}.flac" in files for window in ("head", "tail")
                for name in ("drums", "bass", "other", "vocals")), files
     assert "tail-meta.json" in files, files
@@ -558,14 +560,14 @@ def _stems_marker_run(mark, lose_after=None):
                     os.remove(marker)
                 return {"vocals": y}
 
-            def detect(self, y, sr, librosa, min_loud=None, stems=None):
+            def detect(self, y, sr, librosa, *, mix_floor, min_loud=None, stems=None):
                 return [{"startMs": 1000, "endMs": 3000}]
 
         written = []
         y = np.concatenate([tone(12.0), silence(8.0)])
         with Patched(get_vocal_detector=lambda force=False: Detector(), measure_loudness=fixed_loudness,
                      write_stems=lambda stems, window, d: written.append(window),
-                     write_tail_meta=lambda d, off, dur: written.append("meta"), log=lambda *_a: None):
+                     write_head_meta=lambda *_a: None, write_tail_meta=lambda d, off, dur, **_kw: written.append("meta"), log=lambda *_a: None):
             out = aw.analyze_facets(FakeLibrosa, FakeSource(tail=(y, SR, 180.0)), ["vocal", "stems"],
                                     stems_dir=os.path.join(root, "track-1"), stems_require_marker=True)
         return out, written, calls
@@ -574,7 +576,7 @@ def _stems_marker_run(mark, lose_after=None):
 def t_stems_facet_marked_root_writes():
     out, written, _calls = _stems_marker_run(mark=True)
     assert written == ["head", "tail", "meta"], written
-    assert out["stems"] == {"status": "ok", "data": {"stems_cached": True, "tail_stems": True}}, out
+    assert out["stems"] == {"status": "ok", "data": {"stems_cached": True, "tail_stems": True, "tail_stems_landed": True}}, out
 
 
 def t_stems_facet_unmarked_root_is_unavailable_and_writes_nothing():
