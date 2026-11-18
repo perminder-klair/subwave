@@ -8,6 +8,7 @@ import {
 import { HANDOVER_OFFSET_STEP_MINUTES } from '../schemas/settings.js';
 import { pendingVoiceValidForMs } from './queue/kinds.js';
 import type { PendingTalk } from './queue/kinds.js';
+import { zonedParts } from '../time.js';
 
 // ---------------------------------------------------------------------------
 // THE SLOT TABLE
@@ -15,9 +16,17 @@ import type { PendingTalk } from './queue/kinds.js';
 
 export type TalkKind = 'hourly' | 'programme' | 'banter' | 'station-id' | 'segment' | 'jingle';
 
-// Jingles claim the same talk table as speech. Slot minutes follow the process clock;
-// programme beats follow the station zone, including half-hour offsets. #1619.
-export type TalkClock = 'process' | 'station';
+// Jingles claim the same talk table as speech (#1619). Every row reads the
+// STATION clock (settings.timezone, time.ts zonedParts), the clock the show
+// grid, the session roll and programme beats already keep (#2234, #2254). On
+// the process clock a station a fractional number of hours from its host (IST
+// or Nepal on a UTC host, St John's, or a London station on an IST host) heard
+// its "top of the hour" time check at station :30, :15 or :45 and an ident on
+// its own :00, beside the show boundary. An unset zone is the process's, so a
+// whole-hour station's minutes are unchanged.
+export function talkMinute(now: Date): number {
+  return zonedParts(now).minute;
+}
 
 // How a fired row reaches air. Per-row and never unified away; idents defer to a
 // track boundary, everything else ducks the song. `djTalkOnlyBetweenTracks`
@@ -46,8 +55,7 @@ export type TalkSlot = {
   // that cannot retry outranks one that can, and among those that can, fewer
   // remaining chances outranks more.
   priority: number;
-  clock: TalkClock;
-  // Only evaluate this row on process minutes divisible by `stride`. For the
+  // Only evaluate this row on station minutes divisible by `stride`. For the
   // programme row this is a contract, not a convenience (#1576): a window
   // narrower than the stride, or opening off a multiple of it, is never sampled
   // and the show silently stops signing off. So the stride and the bound on
@@ -75,12 +83,11 @@ export const TALK_SLOTS: readonly TalkSlot[] = [
     air: 'immediate',
     role: 'slot',
     priority: 1,
-    clock: 'station',
     stride: HANDOVER_OFFSET_STEP_MINUTES,
     oneFirePerSlot: false,
   },
   // Top of the hour. The window runs to :09; the script is written at FIRE time,
-  // so a postponed check still reads the clock correctly. The :00 SESSION ROLL
+  // so a postponed check still reads the clock correctly. The SESSION ROLL
   // is not a row — it runs unconditionally before the planner (scheduler.talkTick),
   // because a muted or empty station must still roll.
   {
@@ -91,7 +98,6 @@ export const TALK_SLOTS: readonly TalkSlot[] = [
     air: 'immediate',
     role: 'slot',
     priority: 2,
-    clock: 'process',
     stride: 1,
     oneFirePerSlot: true,
   },
@@ -104,7 +110,6 @@ export const TALK_SLOTS: readonly TalkSlot[] = [
     air: 'immediate',
     role: 'slot',
     priority: 3,
-    clock: 'process',
     stride: 1,
     oneFirePerSlot: true,
   },
@@ -120,7 +125,6 @@ export const TALK_SLOTS: readonly TalkSlot[] = [
     air: 'next-track',
     role: 'slot',
     priority: 4,
-    clock: 'process',
     stride: 1,
     oneFirePerSlot: true,
   },
@@ -136,7 +140,6 @@ export const TALK_SLOTS: readonly TalkSlot[] = [
     air: 'immediate',
     role: 'fill',
     priority: 5,
-    clock: 'process',
     stride: 5,
     oneFirePerSlot: true,
   },
@@ -152,7 +155,6 @@ export const TALK_SLOTS: readonly TalkSlot[] = [
     air: 'immediate',
     role: 'fill',
     priority: 6,
-    clock: 'process',
     stride: 1,
     // The counter is the guard: it is zeroed when the jingle is handed over, so
     // the row cannot fire twice for one rotate. An in-memory slot claim would
@@ -187,11 +189,21 @@ export function windowEndMinute(row: TalkSlot, openMinute: number): number {
 }
 
 // Stable identity for "this hour's :20 window", so one-fire-per-slot survives a
-// per-minute tick with no timer. Process-local time, because the cron fires on
-// process minutes. A DST fall-back re-opens a slot once; harmless.
+// per-minute tick with no timer. Station time, like the minutes the windows
+// are read in.
+//
+// A DST fall-back repeats the station hour and so every key in it, and a row
+// skips a slot whose key is the one it fired last (`fired` holds one per row).
+// A row with several slots an hour has moved on by the repeat and airs each
+// slot again; a row with ONE (the hourly check, the quiet rung's :45 ident,
+// the moderate rung's :20 banter) does not air in the repeated hour. A station
+// in its host's zone always behaved this way, since the process clock repeats
+// too; a station whose zone falls back when its host's does not (London on a
+// UTC host) used to air the hourly check in both 01:00 hours, and now airs it
+// once (#2254). Pinned by scripts/talk-scheduler.test.ts.
 export function talkSlotKey(kind: TalkKind, now: Date, slot: string): string {
-  const day = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
-  return `${kind}-${day}-${now.getHours()}-${slot}`;
+  const { year, month, day, hour } = zonedParts(now);
+  return `${kind}-${year}-${month}-${day}-${hour}-${slot}`;
 }
 
 // The quiet gap. Every STANDALONE talk break counts, which is what
@@ -229,7 +241,7 @@ function sinceLabel(gap: TalkGap): string {
 // track boundary, or another row taking the minute.
 export type TalkWaitReason =
   | { held: 'gap'; gap: TalkGap }
-  | { held: 'pending'; pendingKind: string }
+  | { held: 'pending'; pendingKind: string; generating?: boolean }
   | { held: 'yield'; to: TalkKind };
 
 // One function so the stand-down and missed lines can't word a cause differently.
@@ -239,7 +251,9 @@ function becauseOf(reason: TalkWaitReason): string {
       + `minimum gap ${Math.round(reason.gap.needMs / 1000)}s`;
   }
   if (reason.held === 'pending') {
-    return `a ${reason.pendingKind} is rendered and waiting for the next track boundary`;
+    return reason.generating
+      ? `a ${reason.pendingKind} is being written for the next track boundary`
+      : `a ${reason.pendingKind} is rendered and waiting for the next track boundary`;
   }
   return `${reason.to} took the minute`;
 }
@@ -305,7 +319,7 @@ function waitPlan(row: TalkSlot, slot: string, slotKey: string, reason: TalkWait
   // A fill row standing down is normal, not an event; narrating it would bury
   // the lines that matter.
   if (row.role === 'fill') return { ...base, log: null, markLogged: null };
-  if (!canRetry(row, slot, p.now.getMinutes())) {
+  if (!canRetry(row, slot, talkMinute(p.now))) {
     return { ...base, log: missedLine(row, slot, reason), markLogged: null };
   }
   // Once per slot, not once per tick.
@@ -318,10 +332,14 @@ function waitPlan(row: TalkSlot, slot: string, slotKey: string, reason: TalkWait
 // can't be why the row never speaks (#1539). Equality favours the scheduled row;
 // queue still owns the stale drop. Only asked of a row that can retry, so
 // `Number(slot)` is a real opening minute.
-function pendingOutlivesWindow(row: TalkSlot, slot: string, pending: PendingTalk, nowMs: number): boolean {
-  const windowClose = new Date(nowMs);
-  windowClose.setMinutes(windowEndMinute(row, Number(slot)) + 1, 0, 0);
-  const windowRemainingMs = Math.max(0, windowClose.getTime() - nowMs);
+function pendingOutlivesWindow(row: TalkSlot, slot: string, pending: PendingTalk, now: Date): boolean {
+  // The window closes at the top of the minute after its last one, counted in
+  // station minutes from the start of this one. Zone offsets are whole
+  // minutes, so the minute boundary is the same instant on every clock.
+  const nowMs = now.getTime();
+  const minuteStartMs = nowMs - (nowMs % 60_000);
+  const windowCloseMs = minuteStartMs + (windowEndMinute(row, Number(slot)) + 1 - talkMinute(now)) * 60_000;
+  const windowRemainingMs = Math.max(0, windowCloseMs - nowMs);
   return pendingVoiceValidForMs(pending.queuedAt, nowMs) > windowRemainingMs;
 }
 
@@ -338,14 +356,14 @@ function pendingHolds(
   // airs. Finite-window retry bounds would never hold these rows. #1539, #1619.
   if (row.opens === 'any') return pendingVoiceValidForMs(pending.queuedAt, p.now.getTime()) > 0;
   return canRetry(row, slot, minute)
-    && pendingOutlivesWindow(row, slot, pending, p.now.getTime());
+    && pendingOutlivesWindow(row, slot, pending, p.now);
 }
 
 // One row's decision, or null for nothing to do (outside the window, already
 // spoken, ineligible). Silent by design. Arbitration is NOT here: this answers
 // "would this row like the minute?"; talkTickPlan resolves contention.
 export function talkSlotPlan(row: TalkSlot, p: TalkTickInput): TalkPlan | null {
-  const minute = p.now.getMinutes();
+  const minute = talkMinute(p.now);
   if (minute % row.stride !== 0) return null;
   const slot = row.opens === 'external'
     ? p.externalSlot(row.kind)
@@ -358,7 +376,9 @@ export function talkSlotPlan(row: TalkSlot, p: TalkTickInput): TalkPlan | null {
   // bounded twice so postpone never becomes cancel (#1539): see pendingHolds.
   const pending = p.pendingTalk;
   if (pending && pendingHolds(row, slot, minute, pending, p)) {
-    return waitPlan(row, slot, slotKey, { held: 'pending', pendingKind: pending.kind }, p);
+    return waitPlan(row, slot, slotKey, {
+      held: 'pending', pendingKind: pending.kind, ...(pending.generating ? { generating: true } : {}),
+    }, p);
   }
   const gap = talkGap({ nowMs: p.now.getTime(), lastTalkBreakAt: p.lastTalkBreakAt, needMs: row.minGapMs });
   // The switch forces EVERY row onto the boundary, the hourly check included.

@@ -14,8 +14,9 @@ export function fallbackTextFor(requested: string, cloudCueFamily: string | null
 // `personaTts: null` on the hardcoded rungs is load-bearing: a cloud persona
 // rerouted off an unconfigured provider and rescued onto `cloud` would
 // otherwise re-apply the dead provider instead of the credentials the
-// availability probe just validated. Only the operator's own configured slot
-// carries an override, where it is an explicit instruction.
+// availability probe just validated. Only an explicitly configured slot
+// carries an override — the persona's own rescue voice or the operator's
+// station fallback — where it is an explicit instruction.
 export interface RescueSlot {
   engine: string;
   personaTts: { engine: string; voice: string; cloudProvider: string } | null;
@@ -67,6 +68,27 @@ export interface TtsFallbackConfig {
   cloudProvider?: string;
 }
 
+// An explicit rescue voice ({engine, voice, cloudProvider}) as a slot, or null
+// when absent or naming an engine this build doesn't know. The one builder for
+// both explicit rungs, so their shape and the `openai` provider default (unused
+// by every engine but cloud) live in one place.
+function explicitSlot(
+  voice: { engine?: string; voice?: string; cloudProvider?: string } | null | undefined,
+  engines: readonly string[],
+): RescueSlot | null {
+  if (!voice || typeof voice !== 'object') return null;
+  const engine = voice.engine || '';
+  if (!engines.includes(engine)) return null;
+  return {
+    engine,
+    personaTts: {
+      engine,
+      voice: voice.voice || '',
+      cloudProvider: voice.cloudProvider || 'openai',
+    },
+  };
+}
+
 // The operator's configured fallback (settings.tts.fallback) as a slot, or null
 // when absent, disabled, or naming an engine this build doesn't know. One
 // answer shared by the pre-flight reroute and the mid-render rescue.
@@ -74,37 +96,48 @@ export function configuredSlot(
   fallback: TtsFallbackConfig | null | undefined,
   engines: readonly string[],
 ): RescueSlot | null {
-  if (!fallback?.enabled) return null;
-  const engine = fallback.engine || '';
-  if (!engines.includes(engine)) return null;
-  return {
-    engine,
-    personaTts: {
-      engine,
-      voice: fallback.voice || '',
-      cloudProvider: fallback.cloudProvider || 'openai',
-    },
-  };
+  return fallback?.enabled ? explicitSlot(fallback, engines) : null;
+}
+
+export interface PersonaFallbackVoiceConfig {
+  engine?: string;
+  voice?: string;
+  cloudProvider?: string;
+}
+
+// A persona's own rescue voice (persona.fallbackVoice, #2029) as a slot, or null
+// when absent or naming an engine this build doesn't know. Same shape as
+// configuredSlot(): engine + provider + voice, never the persona's own `tts`
+// (#1793) — voice identity, with the station's credentials.
+export function personaRescueSlot(
+  fallbackVoice: PersonaFallbackVoiceConfig | null | undefined,
+  engines: readonly string[],
+): RescueSlot | null {
+  return explicitSlot(fallbackVoice, engines);
 }
 
 // Pure ordering for speak()'s runtime rescue chain, kept out of tts.ts so
 // scripts/tts-fallback.test.ts can pin it without the engine modules.
 //
-// Order: operator's configured fallback (engine AND voice), the configured
-// default engine, Piper (universal local floor), Kokoro (for when Piper was the
-// failed primary). The primary, duplicates and anything `usable` rejects are
-// dropped. A disabled fallback reproduces the pre-fallback order exactly.
+// Order: the configured slots in the order given — speak() passes the
+// persona's own rescue voice, then the operator's station fallback (each engine
+// AND voice) — then the configured default engine, Piper (universal local
+// floor), Kokoro (for when Piper was the failed primary). The primary,
+// duplicates and anything `usable` rejects are dropped. No configured slot
+// reproduces the pre-fallback order exactly.
 //
-// Dedup is by ENGINE, first-wins, so the configured slot's voice survives when
-// it and the default name the same engine. Dedup stays engine-keyed even though
+// Dedup is by ENGINE, first-wins, so a configured slot's voice survives when
+// it and a later rung name the same engine. Dedup stays engine-keyed even though
 // EXCLUSION is provider-keyed for cloud (sameTtsTarget): one cloud attempt per
 // rescue, since a second buys another round-trip while the local floor waits.
+// So a persona `cloud` rescue displaces the station fallback's or default's
+// `cloud` rung; if it fails, the chain goes on to the local floor.
 //
-// `usable` gets the slot's own cloud provider for the configured rung and null
-// for the hardcoded ones, so the probe agrees with the call.
+// `usable` gets each configured slot's own cloud provider and null for the
+// hardcoded ones, so the probe agrees with the call.
 export function orderedFallbacks(
   primary: string | TtsTarget,
-  configured: RescueSlot | null,
+  configured: RescueSlot | null | ReadonlyArray<RescueSlot | null>,
   defaultEngine: string | null | undefined,
   usable: (engine: string, cloudProvider?: string | null) => boolean,
   defaultCloudProvider: string | null | undefined = null,
@@ -112,8 +145,10 @@ export function orderedFallbacks(
   const primaryTarget: TtsTarget = typeof primary === 'string'
     ? { engine: primary }
     : primary;
+  const configuredSlots = (Array.isArray(configured) ? configured : [configured])
+    .filter((slot): slot is RescueSlot => !!slot);
   const candidates: RescueSlot[] = [
-    ...(configured ? [configured] : []),
+    ...configuredSlots,
     // `stationDefault` for the same reason `stationSlot()` sets it: these are
     // hardcoded rungs, so their `null` means "engine's own credentials" and a
     // caller must not backfill it with the persona's override.

@@ -1,9 +1,9 @@
-// A stand-in line never airs. A model told "silence is not an option" but
-// handed no data answered {"text": "placeholder"}, and the DJ read the word
-// out (eleven times, from a prompt-only skill). stand-in-policy decides what
-// a stand-in is; these pin the matcher and the speech paths that must consult
-// it (announce, announceAtNextTrack, announceExchange, and a pushed pick's
-// link or request intro), asserting on what reaches _speak.
+// A stand-in line is dropped before TTS. A model told "silence is not an
+// option" but handed no data answered {"text": "placeholder"}, and the DJ read
+// the word out (eleven times, from a prompt-only skill). stand-in-policy
+// decides what a stand-in is; these pin the matcher and the speech paths that
+// must consult it (announce, announceAtNextTrack, announceExchange, and a
+// pushed pick's link or request intro), asserting on what reaches _speak.
 //
 // Run: npm test -- stand-in-speech
 
@@ -70,6 +70,10 @@ test('markup that leaves nothing to say is a stand-in, not an empty line', () =>
   for (const [shape, line] of Object.entries(TEMPLATES)) assert.ok(standInToken(line), shape);
   assert.ok(standInToken('[Music swells]'), 'a cue with no words after it never aired');
   assert.ok(standInToken('<br>'), 'a bare tag normalises to nothing');
+  // Normalising empties a cue or tag but keeps the quotes round it, so only the
+  // last rule (no words left in the display form) stops the quotes reaching TTS.
+  for (const line of ['"[laughs]"', '“[music swells]”', '"<pause>"'])
+    assert.ok(standInToken(line), `a quoted cue leaves only its quotes: ${line}`);
 });
 
 test('todo and null are words elsewhere, so only the capitals are a stand-in', () => {
@@ -105,10 +109,15 @@ test('an empty line is the callers\' own "no line" case, not a stand-in', () => 
 
 // ── the speech paths ─────────────────────────────────────────────────────────
 
-type Seams = { _speak: (text: string) => Promise<string>; _airVoice: () => Promise<boolean> };
+type Seams = {
+  _speak: (text: string) => Promise<string>;
+  _airVoice: () => Promise<boolean>;
+  _airExchange: (file: string, clips: { wavPath: string; text: string }[]) => Promise<{ voiceId: string; clipMs: number; aired: Promise<null> }[]>;
+};
 const seams = queue as unknown as Seams;
 const realSpeak = seams._speak;
 const realAirVoice = seams._airVoice;
+const realAirExchange = seams._airExchange;
 const realForcedRun = forcedDirectorAgent.run;
 const template = settings.get().personas[0];
 const HOST = { ...template, id: 'p_host', name: 'Manolo X', language: '' };
@@ -130,6 +139,8 @@ beforeEach(async () => {
   queue._pendingVoice = null;
   seams._speak = async (text: string) => { spoken.push(text); return wav; };
   seams._airVoice = async () => true;
+  seams._airExchange = async (_file, clips) =>
+    clips.map((_clip, index) => ({ voiceId: `line-${index}`, clipMs: 100, aired: Promise.resolve(null) }));
   forcedDirectorAgent.run = realForcedRun;
   await settings.update({
     personas: [HOST, GUEST], activePersonaId: HOST.id,
@@ -138,6 +149,7 @@ beforeEach(async () => {
     tts: { enabled: true },
     skills: { enabled: { 'forced-words': true } },
     sfx: { enabled: false },
+    djBehaviour: { holdDuckBetweenSpeakers: true },
   } as never);
   session.start({
     at: new Date().toISOString(),
@@ -150,6 +162,7 @@ beforeEach(async () => {
 after(async () => {
   seams._speak = realSpeak;
   seams._airVoice = realAirVoice;
+  seams._airExchange = realAirExchange;
   forcedDirectorAgent.run = realForcedRun;
   queue.senderBusy = false;
   await new Promise(resolve => setTimeout(resolve, 1_100));

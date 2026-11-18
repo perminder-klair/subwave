@@ -8,9 +8,11 @@
 #   * subwave-analyzer        — LEAN (default), ~1.1GB, multi-arch, no torch.
 #   * subwave-analyzer-heavy  — CLAP + Demucs baked (~1.9GB), amd64-only,
 #       CPU torch. Selected by ANALYZER_HEAVY=1 in .env.
-#   * subwave-analyzer-cuda   — heavy + cu128 torch, amd64-only. Selected by
-#       the docker-compose.analyzer-gpu.yml overlay (a device reservation
-#       can't be toggled from .env).
+#   * subwave-analyzer-cuda   — heavy + CUDA torch, amd64-only, built twice
+#       (TORCH_CUDA=cu128, the primary, and cu124 for pre-Turing cards).
+#       Selected by the docker-compose.analyzer-gpu.yml overlay (a device
+#       reservation can't be toggled from .env), which picks the build with
+#       ANALYZER_CUDA_TAG (the tag table in docs/internals/infrastructure.md).
 # Models are NOT baked — the heavy worker downloads weights into HF_HOME on
 # first use; compose mounts a named volume over that cache. That makes the
 # heavy tier's FIRST sounds-like/vocals pass a one-time outbound dependency on
@@ -33,16 +35,30 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # toggle); with the stack absent those are clean no-ops.
 #
 # All pins exact for reproducible rebuilds — keep in lockstep with the mirrored
-# analyzer block in docker/Dockerfile.aio. torch/torchaudio held at 2.7.1 on
-# both cpu and cu128 indexes, including cp313 wheels for the AIO. cu128 adds
-# Blackwell (sm_120) kernels and vendors the runtime as nvidia-*-cu12 deps.
+# analyzer block in docker/Dockerfile.aio, TORCH_CUDA case included. The one
+# exception to the shared pins is TORCH_CUDA=cu124, which pins torch 2.6.0
+# because its cu124 wheel still ships sm_50, sm_60 and sm_70 SASS: cu128
+# dropped those three (Maxwell, Pascal, Volta), and CUDA 13 cannot emit them
+# (#2280, docs/internals/infrastructure.md). torch/torchaudio are otherwise
+# held at 2.7.1 on both cpu and cu128 indexes, including cp313 wheels for the
+# AIO. cu128 adds Blackwell (sm_120) kernels and vendors the runtime as
+# nvidia-*-cu12 deps. WITH_CUDA=1 defaults to cu128; publish-images.yml passes
+# each build's cuda_family as TORCH_CUDA.
 # Chatterbox's separate venv keeps its own upstream torch pin.
 ARG WITH_CLAP=0
 ARG WITH_DEMUCS=0
 ARG WITH_CUDA=0
+ARG TORCH_CUDA=cu128
 ENV ANALYZER_HF_HOME=/opt/analyzer/hf-cache
 RUN TORCH_INDEX="https://download.pytorch.org/whl/cpu" && \
-    if [ "$WITH_CUDA" = "1" ]; then TORCH_INDEX="https://download.pytorch.org/whl/cu128"; fi && \
+    TORCH_VER=2.7.1 && \
+    if [ "$WITH_CUDA" = "1" ]; then \
+      case "$TORCH_CUDA" in \
+        cu128) TORCH_INDEX="https://download.pytorch.org/whl/cu128" ;; \
+        cu124) TORCH_INDEX="https://download.pytorch.org/whl/cu124"; TORCH_VER=2.6.0 ;; \
+        *) echo "unsupported TORCH_CUDA=$TORCH_CUDA" >&2; exit 1 ;; \
+      esac; \
+    fi && \
     python3 -m venv /opt/analyzer/venv && \
     /opt/analyzer/venv/bin/pip install --no-cache-dir --upgrade pip && \
     /opt/analyzer/venv/bin/pip install --no-cache-dir librosa==0.11.0 soundfile==0.14.0 pyloudnorm==0.2.0 && \
@@ -53,7 +69,7 @@ RUN TORCH_INDEX="https://download.pytorch.org/whl/cpu" && \
       /opt/analyzer/venv/bin/pip install --no-cache-dir \
         --index-url "$TORCH_INDEX" \
         --extra-index-url https://pypi.org/simple \
-        torch==2.7.1 transformers==5.13.0 onnxruntime==1.27.0 && \
+        torch==$TORCH_VER transformers==5.13.0 onnxruntime==1.27.0 && \
       /opt/analyzer/venv/bin/python -c "import torch, transformers, onnxruntime" ; \
     fi && \
     if [ "$WITH_DEMUCS" = "1" ]; then \
@@ -63,7 +79,7 @@ RUN TORCH_INDEX="https://download.pytorch.org/whl/cpu" && \
       /opt/analyzer/venv/bin/pip install --no-cache-dir \
         --index-url "$TORCH_INDEX" \
         --extra-index-url https://pypi.org/simple \
-        torch==2.7.1 torchaudio==2.7.1 demucs==4.0.1 && \
+        torch==$TORCH_VER torchaudio==$TORCH_VER demucs==4.0.1 && \
       /opt/analyzer/venv/bin/python -c "import torch, torchaudio, demucs" ; \
     fi && \
     find /opt/analyzer/venv -depth -type d -name __pycache__ -exec rm -rf {} +
@@ -93,14 +109,24 @@ RUN mkdir -p /var/sub-wave && chmod 777 /var/sub-wave
 # JIT cache. HOME/XDG/NUMBA point at a user-owned tree so numba's cache=True
 # JIT files land somewhere writable; the hf-cache chown makes the compose named
 # volume inherit ownership on first create.
+# NUMBA_CPU_NAME=generic keys the JIT cache on no particular CPU, so the cache
+# pre-warmed below (on the build machine) is the one every host reads.
 ENV HOME=/home/subwave \
     XDG_CACHE_HOME=/home/subwave/.cache \
-    NUMBA_CACHE_DIR=/home/subwave/.cache/numba
+    NUMBA_CACHE_DIR=/home/subwave/.cache/numba \
+    NUMBA_CPU_NAME=generic
 RUN groupadd -g 10001 subwave && \
     useradd -u 10001 -g 10001 -m -d /home/subwave -s /usr/sbin/nologin subwave && \
     mkdir -p /home/subwave/.cache/numba /opt/analyzer/hf-cache && \
     chown -R 10001:10001 /home/subwave /opt/analyzer/hf-cache
 USER 10001:10001
+
+# Ship librosa's numba kernels compiled. Left to runtime, every worker in the
+# pool compiles them on its first job at once, the concurrent cache writes tear
+# the cache, and each later worker that loads it segfaults (one pool slot
+# crash-loops after every recreate). docker/analyzer/prewarm_numba.py explains.
+COPY docker/analyzer/prewarm_numba.py /opt/analyzer/prewarm_numba.py
+RUN /opt/analyzer/venv/bin/python /opt/analyzer/prewarm_numba.py
 
 EXPOSE 8080
 CMD ["/opt/server/venv/bin/uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8080"]

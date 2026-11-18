@@ -121,6 +121,35 @@ export const LLM_PROVIDER_CATALOG = [
     }
   },
   {
+    "id": "cheaperinference",
+    "label": "Cheaper Inference",
+    "longLabel": "Cheaper Inference (multi-vendor aggregator)",
+    "blurb": "Multi-vendor aggregator",
+    "group": "gateway",
+    "kind": "cloud",
+    "envVar": "CHEAPER_INFERENCE_API_KEY",
+    "keyPlaceholder": "Cheaper Inference API key",
+    "exampleModel": "gpt-5.4-mini",
+    "cliLabel": "Cheaper Inference — multi-vendor",
+    "openaiCompatible": {
+      "baseUrl": "https://api.cheaperinference.com/v1",
+      "reasoning": "openaiModels"
+    },
+    "embedding": {
+      "defaultModel": "text-embedding-3-small",
+      "suggestions": [
+        {
+          "id": "text-embedding-3-small",
+          "dim": 1536
+        },
+        {
+          "id": "text-embedding-3-large",
+          "dim": 3072
+        }
+      ]
+    }
+  },
+  {
     "id": "anthropic",
     "label": "Anthropic",
     "longLabel": "Anthropic (Claude)",

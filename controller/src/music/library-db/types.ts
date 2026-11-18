@@ -1,6 +1,8 @@
 // Record shapes library-db reads and writes. TrackRow is the raw SQLite row;
 // the rest are the consumer-facing shapes rows.ts maps it to.
 
+import type { LoudnessCurve } from '../loudness-curve.js';
+
 export type EnergyValue = 'low' | 'medium' | 'high' | null;
 export type TagSource = 'llm' | 'propagated' | 'uncertain-llm' | 'legacy-v1' | 'manual';
 
@@ -17,7 +19,7 @@ export interface TrackRecord {
   // True first-release year when it differs from the file tag (#842). null =
   // unresolved; era filtering then falls back to `year`.
   originalYear: number | null;
-  originalYearSource: string | null;      // 'album-tag' | 'musicbrainz' | 'manual'
+  originalYearSource: string | null;      // 'album-tag' | 'musicbrainz' | 'discogs' | 'manual'
   originalYearCheckedAt: string | null;   // last lookup attempt, hit or miss
   isCompilation: boolean | null;          // Navidrome album FLAG; null = unknown
   // Derived era suspicion (#1418). Separate from isCompilation, which is false on
@@ -44,6 +46,9 @@ export interface TrackRecord {
   promptHash: string | null;
   model: string | null;
   taggedAt: string | null;
+  // The LLM saw the track's measured acoustics when it decided these tags
+  // (#2281): false = blind, null = not an LLM decision under the stamp.
+  taggedMeasured: boolean | null;
   // Acoustic analysis; null means no signal and consumers fall back to their
   // unanalysed behaviour.
   bpm: number | null;
@@ -79,6 +84,12 @@ export interface TrackRecord {
   // Where the trailing gap opens, absolute ms from byte zero (the cue_out). null
   // on pre-column rows; silence-trim.ts falls back to duration - tailSilenceMs.
   tailStartMs: number | null;
+  // Whole-file facet `edges`: silence at each end against the same absolute
+  // floor, and the decoded length (not the container tag). null = not
+  // measured; silence-trim.ts prefers them over the window figures above.
+  edgeLeadMs: number | null;
+  edgeTailMs: number | null;
+  decodedDurationMs: number | null;
   // 2D UMAP of the CLAP audio vector, normalised to [0,1] per axis. null = not
   // projected.
   mapX: number | null;
@@ -99,6 +110,14 @@ export interface TrackOutro {
   // not computed (the backfill probes the raw JSON for it); parseOutroJson
   // materialises it as null on read.
   vocalRanges?: Array<{ startMs: number; endMs: number }> | null;
+  // Short-term loudness over the tail window (tail v3; music/loudness-curve.ts
+  // has the stored form). ABSENT when not measured or malformed, never null.
+  loudnessCurve?: LoudnessCurve;
+  // The whole-track curve's 1 s series, set only at read time when
+  // transitions.tailFromCurve is on (music/tail-levels.ts); never stored. The
+  // audible-end cut searches it when `loudnessCurve` never reaches the
+  // threshold.
+  wholeLoudnessCurve?: LoudnessCurve;
 }
 
 // Tonic note (sharps) + mode over a time range.
@@ -144,6 +163,8 @@ export interface TrackRow {
   is_compilation: number | null;
   era_untrusted: number | null;
   text_vector_dirty: number;
+  // The Sound: words the text vector was built from (tracks.ts); NULL = unknown.
+  text_vector_sound: string | null;
   genres: string | null; // JSON array; `genre` is generated from genres[0]
   genre: string | null;
   duration_sec: number | null;
@@ -159,6 +180,7 @@ export interface TrackRow {
   prompt_hash: string | null;
   model: string | null;
   tagged_at: string | null;
+  tagged_measured: number | null;
   bpm: number | null;
   musical_key: string | null;
   intro_ms: number | null;
@@ -178,6 +200,9 @@ export interface TrackRow {
   lead_silence_ms: number | null;
   tail_silence_ms: number | null;
   tail_start_ms: number | null;
+  edge_lead_ms?: number | null;
+  edge_tail_ms?: number | null;
+  decoded_duration_ms?: number | null;
   map_x: number | null;
   map_y: number | null;
   explicit_status: ExplicitStatus | null;
@@ -196,11 +221,25 @@ export interface TrackMeta {
   duration?: number | null;
   // The album's originalReleaseDate.year, source 'album-tag' (#842/#1418). Passed
   // only when informative: not on an era-suspect album, and not when it echoes the
-  // release year. Never overwrites a 'musicbrainz' or 'manual' value.
+  // release year. Never overwrites a 'musicbrainz', 'discogs' or 'manual' value.
   originalYear?: number | null;
   isCompilation?: boolean | null;
   /** music/era-suspect.albumEraSuspect's verdict for this track's album. */
   eraUntrusted?: boolean | null;
+  /** Which marker produced that verdict ('compilation-flag', 'title-year-range',
+   *  ...). Walk-time audit truth; null when the walk flagged nothing. COALESCEd
+   *  like the ids, so a non-walk writer never clears it. */
+  eraReason?: string | null;
+  /** The album's effective kind (era-review.eraWalkFields): the operator's,
+   *  else the title's suggestion; null when the album is not flagged. Travels
+   *  with eraUntrusted like eraReason. */
+  albumKind?: string | null;
+  /** The ALBUM artist the era judgement keyed on (Navidrome's album record),
+   *  not the per-track `artist`. Walk only. */
+  albumArtist?: string | null;
+  /** The first album artist's Subsonic id (artist-credit.firstAlbumArtistId).
+   *  COALESCEd like the other ids: the walks are its only writers. */
+  albumArtistId?: string | null;
   /** The walk's answer, normalised on write. Unlike the ids, null CLEARS: only
    *  a walk can see a tag was removed, and it always passes a value. A writer
    *  with no opinion leaves it undefined and the stored value stands. */
@@ -232,6 +271,9 @@ export interface TagWrite {
   confidence?: number | null;
   promptHash?: string | null;
   model?: string | null;
+  // tracks.tagged_measured: only an LLM decision knows this; omitted
+  // (propagated, manual) writes NULL.
+  taggedMeasured?: boolean | null;
 }
 
 export interface FilterOpts {

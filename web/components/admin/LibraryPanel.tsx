@@ -9,6 +9,7 @@ import { useLibraryUrlState } from './library/useLibraryUrlState';
 import { useTaggerControls } from './library/useTaggerControls';
 import BrowseTab from './library/tabs/BrowseTab';
 import SearchTab from './library/tabs/SearchTab';
+import EraReviewSection from './library/EraReviewSection';
 import TracksTab from './library/tabs/TracksTab';
 import HistoryTabContainer from './library/tabs/HistoryTabContainer';
 import BlockedTabContainer from './library/tabs/BlockedTabContainer';
@@ -112,6 +113,8 @@ function LibraryBody() {
         onReconcile={tag.reconcile}
         onCountLibrary={tag.countLibrary}
         countingLibrary={tag.countingLibrary}
+        onMarkStaleSound={tag.markStaleSound}
+        markingStaleSound={tag.markingStaleSound}
         onReset={tag.resetLibrary}
         audioEnabled={tag.audioEnabled}
         onToggleAudio={tag.toggleAudio}
@@ -154,6 +157,8 @@ function LibraryBody() {
           urlRestored={urlRestored}
         />
       )}
+
+      {tab === 'era' && <EraReviewSection />}
 
       {tab !== 'blocked' && tab !== 'history' && selected.size > 0 && (
         <AddToPlaylistBar

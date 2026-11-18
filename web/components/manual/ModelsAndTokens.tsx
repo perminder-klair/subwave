@@ -217,7 +217,10 @@ export default function ModelsAndTokens() {
             <strong>Reasoning on</strong> (Admin &rarr; LLM) — let a thinking model work
             through its choice before answering. Worth trying only on a model built for it
             and a generous token budget; the picker and other structured calls suppress
-            thinking regardless, so this mainly buys more considered scripts.
+            thinking regardless, so this mainly buys more considered scripts. Through
+            Cheaper Inference the setting reaches OpenAI&rsquo;s reasoning models (GPT-5 and the o-series) only; any
+            other model there
+            runs at the gateway&rsquo;s default, whichever way it&rsquo;s set.
           </li>
           <li>
             <strong>Extended scripts</strong> (Admin &rarr; Personas) — a storytelling DJ
@@ -272,7 +275,8 @@ export default function ModelsAndTokens() {
             Vercel AI <code>gateway</code> <em>providers</em> have no embeddings endpoint at
             all. A DJ on one of those works fine, but the tagger can&rsquo;t follow it, so the
             console only lists <em>embedding-capable</em> providers in the tagger dropdown
-            (Ollama, OpenAI, Google, OpenRouter, locca, OpenAI-compatible). If you don&rsquo;t see
+            (Ollama, OpenAI, Google, OpenRouter, Requesty, Cheaper Inference, locca,
+            OpenAI-compatible). If you don&rsquo;t see
             your chat provider there, that&rsquo;s why — pick Ollama (local and free) for the
             embedding step and leave the DJ where it is.
           </li>

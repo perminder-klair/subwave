@@ -4,6 +4,7 @@
 import { config } from './config.js';
 import { fetchWithTimeout } from './util/fetch-timeout.js';
 import { resolveActiveShow, resolveOnAirLocation, get as getSettings, moodScheduleFor, weatherMoodFor } from './settings.js';
+import { buildOutlook, conditionForCode, describeCode, outlookEvents, OUTLOOK_HOURS, type HourlyForecast, type OutlookHour, type OutlookNoteKind } from './weather-codes.js';
 import * as session from './broadcast/session.js';
 import { getListenerCount } from './broadcast/listeners.js';
 import { zonedParts, zonedISODate, clockDisplay, spokenHourPhrase, spokenTimePhrases, spokenDaypartPhrase } from './time.js';
@@ -58,12 +59,23 @@ export function getFestivalContext(date = new Date()) {
 }
 
 // Weather via Open-Meteo (no API key required)
-let weatherCache: { data: any; fetchedAt: number; configKey: string } = {
+// `hourly` and `readingTime` are the raw forecast rows and the reading's own
+// clock, kept so the outlook is built at read time, aged by how long ago the
+// fetch was (buildOutlook's elapsedMs).
+let weatherCache: { data: any; fetchedAt: number; configKey: string; hourly: HourlyForecast | null; readingTime: string } = {
   data: null,
   fetchedAt: 0,
   configKey: '',
+  hourly: null,
+  readingTime: '',
 };
 const WEATHER_TTL_MS = 30 * 60 * 1000;
+// Past this age the cached forecast is an old one: getWeather serves a reading
+// that stale only through a failure (fetchWeather keeps the last good one), and
+// an outlook aged that far stops covering its window and changes as its rows
+// run out. The cache's own life plus an hour, the hour the fetch's spare row
+// (OUTLOOK_HOURS + 3) is there to cover.
+const OUTLOOK_MAX_AGE_MS = WEATHER_TTL_MS + 60 * 60 * 1000;
 // After a failed fetch, wait this long before asking Open-Meteo again. The
 // public /now-playing poll reaches getWeather() through getFullContext() every
 // few seconds per listener, so an uncached failure turned a down or
@@ -96,7 +108,7 @@ function weatherConfigKey(weather: ReturnType<typeof weatherConfig>) {
 // Force the next getWeather() call to re-fetch — used when the user changes
 // their location in /settings.
 export function invalidateWeatherCache() {
-  weatherCache = { data: null, fetchedAt: 0, configKey: '' };
+  weatherCache = { data: null, fetchedAt: 0, configKey: '', hourly: null, readingTime: '' };
   weatherFailure = null;
 }
 
@@ -139,6 +151,36 @@ export async function getWeather() {
   }
 }
 
+// The next few hours of the forecast, for the weather skill only (station
+// services). Kept off getWeather()'s result on purpose: that object is the
+// public /now-playing context, and every prompt's weather line. Reads the cache
+// the last getWeather() filled (the skill's ctx.weather came from it moments
+// earlier) and never fetches, so a cold cache or a moved location is simply no
+// outlook, at once. The rows are aged to now, so a note read 25 minutes after
+// the fetch still says how far away the rain is from now. `kinds` names what
+// the notes are about, without their timing, so the skill can tell a standing
+// note from a new one.
+//
+// `kinds: null` is no outlook known: a cold cache, a moved location, a reply
+// without hourly rows, or a forecast older than OUTLOOK_MAX_AGE_MS (an outage).
+// weather-policy.ts never calls that news. An empty array is a known outlook
+// with nothing in it, which can be (the rain is no longer coming), so it is
+// kept for a forecast fresh enough to stand behind.
+export function getWeatherOutlook(now = Date.now()): { nextHours: OutlookHour[]; notes: string[]; kinds: OutlookNoteKind[] | null } {
+  const unknown = { nextHours: [], notes: [], kinds: null };
+  const current = weatherCache.data;
+  if (!current || current.condition === 'unknown' || weatherCache.configKey !== weatherConfigKey(weatherConfig())) {
+    return unknown;
+  }
+  const ageMs = now - weatherCache.fetchedAt;
+  if (ageMs > OUTLOOK_MAX_AGE_MS) return unknown;
+  const nextHours = buildOutlook(weatherCache.hourly, weatherCache.readingTime, OUTLOOK_HOURS, ageMs);
+  // No rows in the window: the reply had none, or its clock didn't parse.
+  if (nextHours.length === 0) return unknown;
+  const events = outlookEvents({ condition: current.condition, temp: current.temp ?? null, tempUnit: current.tempUnit }, nextHours);
+  return { nextHours, notes: events.map(e => e.text), kinds: events.map(e => e.kind) };
+}
+
 function unknownWeather(weather: ReturnType<typeof weatherConfig>) {
   const tempUnit = weather.units === 'imperial' ? 'F' : 'C';
   return { condition: 'unknown', mood: null, temp: null, tempUnit, location: attributedLocation(weather) };
@@ -149,21 +191,33 @@ async function fetchWeather(weather: ReturnType<typeof weatherConfig>, configKey
   const tempUnit = imperial ? 'F' : 'C';
   try {
     const unitParam = imperial ? '&temperature_unit=fahrenheit' : '';
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${weather.lat}&longitude=${weather.lng}&current=temperature_2m,weather_code,is_day${unitParam}`;
+    // The next hours ride the same call, in the location's own time zone so the
+    // hourly rows and the current reading share one clock (buildOutlook). The
+    // rows start at the current hour, which has already begun, so a reading at
+    // :45 aged by the cache's 30 minutes needs OUTLOOK_HOURS + 2 rows to still
+    // reach six hours ahead. The third extra row keeps the full window for an
+    // hour more of a reading getWeather serves stale through a failure backoff.
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${weather.lat}&longitude=${weather.lng}&current=temperature_2m,weather_code,is_day`
+      + `&hourly=temperature_2m,weather_code,precipitation_probability&forecast_hours=${OUTLOOK_HOURS + 3}&timezone=auto${unitParam}`;
     const res = await fetchWithTimeout(url, { timeoutMs: 10_000 });
     if (!res.ok) throw new Error(`weather upstream ${res.status}`);
     const data = await res.json() as any;
     const code = data.current.weather_code;
-    const condition = mapWeatherCode(code);
+    const condition = conditionForCode(code);
     const result = {
       condition,
+      // The forecast's own wording ("mainly clear", "light rain showers"): what
+      // is spoken. `condition` is the coarse word the mood map keys on.
+      detail: describeCode(code),
       mood: weatherToMood(condition),
       temp: Math.round(data.current.temperature_2m),
       tempUnit,
       isDay: data.current.is_day === 1,
       location: attributedLocation(weather),
     };
-    weatherCache = { data: result, fetchedAt: Date.now(), configKey };
+    const hourly = data.hourly && Array.isArray(data.hourly.time) ? data.hourly as HourlyForecast : null;
+    const readingTime = typeof data.current.time === 'string' ? data.current.time : '';
+    weatherCache = { data: result, fetchedAt: Date.now(), configKey, hourly, readingTime };
     weatherFailure = null;
     return result;
   } catch {
@@ -171,17 +225,6 @@ async function fetchWeather(weather: ReturnType<typeof weatherConfig>, configKey
     // A slightly old forecast beats 'unknown' flapping in and out.
     return stale ?? unknownWeather(weather);
   }
-}
-
-function mapWeatherCode(code: number) {
-  // WMO weather codes simplified
-  if (code === 0) return 'clear';
-  if (code <= 3) return 'cloudy';
-  if (code >= 45 && code <= 48) return 'foggy';
-  if (code >= 51 && code <= 67) return 'rainy';
-  if (code >= 71 && code <= 77) return 'snowy';
-  if (code >= 80 && code <= 99) return 'stormy';
-  return 'cloudy';
 }
 
 // Operator-editable weather → mood map (settings.weatherMoods). '' (no steer)
@@ -435,7 +478,10 @@ export function showHandoverContext(
 // when it plays (issue: a pick made minutes before a show boundary followed the
 // outgoing show's brief). Weather and listener count stay live: they're
 // station-now facts and drift too little over one track to matter.
-export async function getFullContext(at?: Date) {
+// `ignoreTakeover` reads the moment as the weekly grid has it, for a caller
+// about to end a live takeover (a steer's opening list, routes/steer.ts), so
+// the show, its mood and everything derived from them are the grid's.
+export async function getFullContext(at?: Date, { ignoreTakeover = false }: { ignoreTakeover?: boolean } = {}) {
   const now = at ?? new Date();
   const time = getTimeContext(now);
   const weather = await getWeather();
@@ -452,7 +498,9 @@ export async function getFullContext(at?: Date) {
 
   // A scheduled show for this hour, if any. Its mood wins everything below —
   // an empty hour leaves the station running autonomously.
-  const activeShow: any = resolveActiveShow(now);
+  const activeShow: any = ignoreTakeover
+    ? resolveActiveShow(now, { ...getSettings(), scheduleOverride: null })
+    : resolveActiveShow(now);
 
   // Programme shows: ride today's episode angle on the show context so every
   // prompt built from it (links, picker brief, segments) breathes the same

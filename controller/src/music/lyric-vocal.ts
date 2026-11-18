@@ -56,6 +56,18 @@ export interface VocalEvidence {
   tailVocalRangesInvalid?: boolean;
 }
 
+// Whether a row already holds the evidence for its own verdict, so a reader
+// that would otherwise look the track up should not (#2235). Every library-row
+// mapper carries both windows, an unmeasured one as null, and the lookup reads
+// the same columns, so re-reading such a row returns the same answer from a
+// full-row read. A shape without the fields (a raw Subsonic child, a mood-pool
+// row) carries none, and only it is worth the lookup. A head array alone counts
+// too, as it always has.
+export function carriesVocalEvidence(track: VocalEvidence | null | undefined): boolean {
+  return Array.isArray(track?.vocalRanges)
+    || (track?.vocalRanges === null && track?.tailVocalRanges !== undefined);
+}
+
 // Sung ms in one window. null = not measured; malformed non-empty ranges read as
 // Infinity, which keeps them vocal rather than granting instrumental eligibility.
 function sungMs(ranges: unknown[] | null | undefined, invalid: boolean | undefined): number | null {

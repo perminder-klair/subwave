@@ -1,6 +1,10 @@
 // `subwave init` — scaffold a fresh install directory. The only command that
-// runs before a home exists: writes the embedded compose files + a 3-var .env,
-// then records the home in ~/.config/subwave/config.json for later commands.
+// runs before a home exists: writes the embedded compose files + .env (admin
+// login, TZ, site URL, version pin), then records the home in
+// ~/.config/subwave/config.json for later commands. Re-running over an existing
+// install overwrites the compose files but merges into the existing .env via
+// writeEnvFile(), so unrelated keys survive — `subwave setup` relies on the same
+// merge.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -10,7 +14,7 @@ import crypto from 'node:crypto';
 import { COMPOSE_YML, COMPOSE_BYO_YML, COMPOSE_TTS_HEAVY_GPU_YML, COMPOSE_ANALYZER_GPU_YML, ENV_EXAMPLE } from '../assets.ts';
 import { DEFAULT_SUBWAVE_HOME, writeHomeConfig } from '../home.ts';
 import { loadConfig, saveConfig } from '../config.ts';
-import { writeEnvFile } from '../util.ts';
+import { parseEnvFile, writeEnvFile } from '../util.ts';
 import { cliImageTag } from '../version.ts';
 import { runStartCommand } from './start.ts';
 import {
@@ -119,8 +123,9 @@ async function collectAnswers(): Promise<InitAnswers> {
 
   if (existsSync(resolve(homeAbs, 'docker-compose.yml'))) {
     warn(`${homeAbs} already contains a docker-compose.yml.`);
+    muted('To start from a clean .env, move it aside first (e.g. `mv .env .env.old`) and re-run `subwave init`.');
     const overwrite = exitIfCancelled(await p.confirm({
-      message: 'Overwrite the existing compose file and .env?',
+      message: 'Overwrite the compose files? Your existing .env is kept — only the admin login, TZ and site URL (if given) are updated.',
       initialValue: false,
     }), { backOnCancel: false });
     if (!overwrite) {
@@ -204,8 +209,18 @@ async function scaffold(a: InitAnswers): Promise<void> {
   };
   if (a.siteUrl) envValues.SITE_URL = a.siteUrl;
   const envPath = resolve(a.home, '.env');
+  const envExisted = existsSync(envPath);
+  const keptSiteUrl = !a.siteUrl && envExisted ? parseEnvFile(envPath).SITE_URL?.trim() : undefined;
+  // Merge, not replace: the old .env can hold secrets, ports and overlays that
+  // nothing regenerates, and state/ survives a re-init anyway.
   writeEnvFile(envPath, envValues, { templateFallback: envExamplePath });
-  ok(`wrote .env (ADMIN_USER, ADMIN_PASS, TZ=${a.tz}${a.siteUrl ? ', SITE_URL' : ''})`);
+  const envKeys = `ADMIN_USER, ADMIN_PASS, TZ=${a.tz}${a.siteUrl ? ', SITE_URL' : ''}`;
+  if (envExisted) {
+    ok(`updated .env (${envKeys}) — other existing settings kept`);
+    if (keptSiteUrl) muted(`SITE_URL left as ${keptSiteUrl} (blank answer keeps the existing value)`);
+  } else {
+    ok(`wrote .env (${envKeys})`);
+  }
 
   // Unpinned, image refs float on :latest and can drift ahead of the compose
   // files this binary carries. A dev build has no tag to pin to.

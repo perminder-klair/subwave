@@ -49,7 +49,27 @@ const INSTALL_LEVEL = new Set([
   'stations', 'icecast-secrets.env', 'hf-cache', 'analyze-tmp', 'lost+found',
 ]);
 
-export function conversionAction(entry: string): 'move' | 'keep' {
+// `logs` is the one entry that is split (#2349). Liquidsoap's radio.log lives in
+// the ROOT's logs/ for every station: the compose files bind-mount it over
+// /var/log/liquidsoap, the AIO symlinks /var/log/liquidsoap at it, and
+// routes/debug.ts tails it there. Moving the whole dir left the AIO's link
+// dangling, and radio.liq opens its log path first, so the mixer crash-looped on
+// `Log directory … does not exist`. Everything else in it is the controller's
+// per-station history (events, requests, picks, playback failures), which the
+// daily token seed, the 24 h repeat backfill and the orphan-name source read
+// from the station's own logs/, so it moves with the station.
+export function conversionAction(entry: string): 'move' | 'keep' | 'split' {
   if (entry === 'show-preparations.json') return 'move';
+  if (entry === 'logs') return 'split';
   return INSTALL_LEVEL.has(entry) ? 'keep' : 'move';
+}
+
+// Inside a split logs/: what stays at the root. radio.log and its boot rotation
+// (`radio.log.old`) are liquidsoap's, `.write-probe` is the AIO's log-dir probe,
+// and web-dev.log/.pid are the host CLI's dev web server, written to the root's
+// state/logs whatever station is live.
+const ROOT_LOG = /^(radio\.log(\..+)?|\.write-probe|web-dev\.(log|pid))$/;
+
+export function conversionLogAction(name: string): 'move' | 'keep' {
+  return ROOT_LOG.test(name) ? 'keep' : 'move';
 }

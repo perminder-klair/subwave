@@ -298,6 +298,7 @@ Everything that survives `docker compose down` lives in `state/`:
 | `archive/` | Liquidsoap | Hourly MP3 archive (`YYYY-MM-DD/HH-00.mp3`) |
 | `logs/` | Controller + Liquidsoap | Event logs |
 | `stems/` | Analyzer | Cached Demucs stem windows for stem-blend transitions — byte-budgeted by `audio.stemCacheGb` (Settings → Stems) |
+| `stem-cache-usage.json`, `stem-cache-usage.journal` | Controller + tagger | The stem cache's stored size, so the hourly sweep need not walk it, and the journal of stem-folder changes that keeps it true. Not backed up (re-measured on the next walk); safe to delete, which costs one walk |
 | `transitions/` | Analyzer | Rendered stem-blend clips (swept after ~1h) |
 | `next.txt`, `jingle-now.txt`, `say.txt`, `intro.txt`, `auto.m3u`, `now-playing.json` | Controller ⇄ Liquidsoap | File-based IPC (see `CLAUDE.md`) |
 
@@ -388,9 +389,12 @@ Before you do it, know this:
   `/var/sub-wave/stations/<id>/stems`. A `chmod` error names a folder the
   analyzer cannot change: run `chmod 777` on it as root on the machine that
   holds the files (the file server, on NFS). Until a stuck folder is opened the
-  sweep leaves it out of the budget check and warns, rather than evicting other
-  tracks in its place, but its bytes still count as used. A cache held over
-  budget by stuck folders alone writes no new stems.
+  sweep leaves it out of the budget check and warns, but its bytes still count
+  as used. A folder the sweep's permission check catches costs no other track.
+  One that passes the check and then refuses its delete leaves the budget check
+  only when that delete fails, so the tracks the sweep deleted before reaching
+  it may have gone in its place. A cache held over budget by stuck folders alone
+  writes no new stems.
 - **Transition clips are not part of this cache.** The rendered clips live in
   `state/transitions` (multi-station: `state/stations/<id>/transitions`), so
   `STEMS_DIR` does not move them and they do not count against the stem

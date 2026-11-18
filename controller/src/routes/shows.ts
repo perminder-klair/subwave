@@ -4,6 +4,7 @@
 
 import express from 'express';
 import * as settings from '../settings.js';
+import { updateEndingSteer } from '../broadcast/takeover-steer.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { validateBody, validateBodyAsync } from '../middleware/validate.js';
 import {
@@ -98,6 +99,7 @@ router.post('/shows/community/:slug/install', requireAdmin, async (req, res) => 
     playlistInOrder: false,
     excludedPlaylistIds: [],
     excludeExplicit: false,
+    excludedAlbumKinds: [],
   };
 
   try {
@@ -272,7 +274,9 @@ router.post('/schedule/override', requireAdmin, validateBody(scheduleOverrideReq
     }[resolved.source]
     : '';
   try {
-    await settings.update({ scheduleOverride: override });
+    // A takeover ends a running steer (broadcast/takeover-steer.ts), and this
+    // waits its turn behind a steer that is still starting.
+    await updateEndingSteer({ scheduleOverride: override });
     queue.log(
       'scheduler',
       show

@@ -3,6 +3,8 @@
 // so a local path it can't open is dead air, and nothing notices: a local hit gets
 // no resolve probe, and auto.m3u is built from the same paths. So every answer but
 // an exact "yes" must stream, and a proof must go as soon as it stops being true.
+// The proof reads one sample, so each pick's own file is asked about too (#2222);
+// library-mount-drain.test.ts drives that through the real drain.
 // Against a fake mixer on a real socket; radio.liq's own command is run on real
 // Liquidsoap by hand, because no test here can start one.
 //
@@ -23,6 +25,10 @@ const OLDER_MIXER = 'ERROR: unknown command, type "help" to get a list of comman
 // What the fake mixer does with the next question. A string is the reply; `hang`
 // accepts and never answers; `drop` closes without a word.
 let reply: string | 'hang' | 'drop' = YES;
+// Files the mixer's own copy lacks: a broadcast mount narrower than the controller's.
+const missing = new Set<string>();
+// How long the mixer keeps answering after it is told to restart.
+let restartDelayMs = 0;
 const held: Socket[] = [];
 const commands: string[] = [];
 
@@ -33,8 +39,14 @@ function handle(socket: Socket) {
     commands.push(command);
     if (command === 'restart') {
       // The port going down is what proves a restart landed.
-      socket.destroy();
-      mixer.close();
+      const server = mixer;
+      const down = () => { socket.destroy(); server.close(); };
+      if (restartDelayMs > 0) setTimeout(down, restartDelayMs);
+      else down();
+      return;
+    }
+    if (command.startsWith('path_readable ') && missing.has(command.slice('path_readable '.length))) {
+      socket.end(NO);
       return;
     }
     if (reply === 'hang') {
@@ -61,8 +73,10 @@ process.env.LIQUIDSOAP_PORT = String(PORT);
 const base = createTempDir(join(tmpdir(), 'subwave-library-mount-'));
 
 const { pathReadable, restartLiquidsoap } = await import('../src/broadcast/liquidsoap-control.js');
-const { libraryMountProven, onLibraryMountLost, proveLibraryMount, _resetLibraryMount } =
-  await import('../src/music/library-mount.js');
+const {
+  libraryMountProven, libraryMountStands, mixerReadablePath, onLibraryMountLost, proveLibraryMount,
+  _resetLibraryMount, _setReproveAfterRestartMs,
+} = await import('../src/music/library-mount.js');
 const { libraryMountFinding } = await import('../src/music/library-mount-policy.js');
 const { findLibraryFile, getAnnotatedUri, getLocalPath, getPlayableUri } = await import('../src/music/subsonic.js');
 
@@ -82,6 +96,8 @@ function put(path: string) {
 beforeEach(() => {
   _resetLibraryMount();
   reply = YES;
+  missing.clear();
+  restartDelayMs = 0;
   commands.length = 0;
   lost = 0;
   root = join(base, `mount-${(run += 1)}`);
@@ -102,6 +118,13 @@ const streams = () => {
   assert.match(String(getPlayableUri(track)), /^subhttp:/);
   assert.match(getAnnotatedUri(track), /:subhttp:/);
 };
+async function waitFor(check: () => boolean, ms = 3000) {
+  const until = Date.now() + ms;
+  while (!check()) {
+    if (Date.now() > until) throw new Error('timed out');
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+}
 const playsLocal = () => {
   assert.equal(getLocalPath(track), `${root}/${SONG}`);
   assert.equal(getPlayableUri(track), `${root}/${SONG}`);
@@ -283,6 +306,38 @@ test('a yes asked before a restart says nothing about the mixer after it', async
   streams();
 });
 
+test('a proof answered while a restart is under way goes once the restart lands', async () => {
+  // The old mixer still answers between the restart command and the port going
+  // down, and its yes says nothing about the mixer that comes back.
+  await proveLibraryMount();
+  restartDelayMs = 150;
+  const restarting = restartLiquidsoap();
+  try {
+    await waitFor(() => commands.includes('restart'));
+    await proveLibraryMount();
+    playsLocal();
+    await restarting;
+    streams();
+  } finally {
+    await restarting.catch(() => {});
+    await listen();
+  }
+});
+
+test('the mixer is proven again on its own after a restart, with nobody asking', async () => {
+  _setReproveAfterRestartMs(200);
+  await proveLibraryMount();
+  await restartLiquidsoap();
+  await listen();
+  commands.length = 0;
+  streams();
+
+  await waitFor(() => libraryMountProven(root));
+  assert.deepEqual(commands, [`path_readable ${join(root, SONG)}`]);
+  playsLocal();
+  assert.equal(lost, 0);
+});
+
 test('concurrent asks share one question', async () => {
   const [a, b] = await Promise.all([proveLibraryMount(), proveLibraryMount()]);
   assert.equal(commands.length, 1);
@@ -328,6 +383,102 @@ for (const [name, setup] of [
   });
 }
 
+// The pick's own file (#2222). The proof reads one sample, so it can't speak for
+// a file the mixer's copy lacks, or for a mount that dropped since the last tick.
+const OTHER = 'Other/Album/01 - Elsewhere.flac';
+const other = { id: 'def', title: 'Elsewhere', artist: 'Other', album: 'Album', path: OTHER };
+
+test('a pick goes local only on the mixer\'s yes to its own file', async () => {
+  await proveLibraryMount();
+  commands.length = 0;
+  assert.equal(await mixerReadablePath(getLocalPath(track), 1500), `${root}/${SONG}`);
+  assert.deepEqual(commands, [`path_readable ${root}/${SONG}`], 'asked about the pick, not the sample');
+});
+
+test('a file the mixer\'s copy lacks streams, and the mount stays proven for the rest', async () => {
+  // Proven first, on SONG: the walk's sample is whichever file readdir lists
+  // last, and on ext4 that would be the file the mixer lacks.
+  assert.equal((await proveLibraryMount())?.sample, join(root, SONG));
+  put(join(root, OTHER));
+  missing.add(join(root, OTHER));
+  assert.equal(getLocalPath(other), `${root}/${OTHER}`, 'the proof alone would have sent it local');
+  commands.length = 0;
+
+  assert.equal(await mixerReadablePath(getLocalPath(other), 1500), null);
+  await proveLibraryMount();
+  assert.deepEqual(commands.slice(0, 2), [`path_readable ${root}/${OTHER}`, `path_readable ${join(root, SONG)}`],
+    'a no re-proves the mount at once');
+  playsLocal();
+  assert.equal(lost, 0, 'the coast keeps its paths');
+});
+
+test('a mount that dropped under the mixer streams the pick and takes the coast with it at once', async () => {
+  await proveLibraryMount();
+  reply = NO;
+  assert.equal(await mixerReadablePath(getLocalPath(track), 1500), null);
+  await waitFor(() => lost === 1);
+  streams();
+  assert.equal(libraryMountStands(), false);
+});
+
+test('no proof, no file or no budget asks nothing, and streams', async () => {
+  assert.equal(await mixerReadablePath(`${root}/${SONG}`, 1500), null, 'unproven');
+  await proveLibraryMount();
+  commands.length = 0;
+  assert.equal(await mixerReadablePath(null, 1500), null, 'no file on the mount');
+  for (const budget of [0, -5, Number.NaN]) {
+    assert.equal(await mixerReadablePath(getLocalPath(track), budget), null, `budget ${budget}`);
+  }
+  assert.deepEqual(commands, []);
+});
+
+for (const [name, answer] of [
+  ['an answer past the budget', 'hang'],
+  ['an empty close', ''],
+  ['a dropped connection', 'drop'],
+] as const) {
+  test(`${name} streams the pick, and leaves the proof alone`, async () => {
+    await proveLibraryMount();
+    reply = answer;
+    const started = Date.now();
+    assert.equal(await mixerReadablePath(getLocalPath(track), 150), null);
+    assert.ok(Date.now() - started < 1000, 'within the budget, not the 2 s default');
+    reply = YES;
+    assert.ok(libraryMountStands(), 'only a no re-proves');
+    assert.equal(lost, 0);
+  });
+}
+
+test('a yes from the mixer a restart replaced streams the pick, even once the new one is proven', async () => {
+  await proveLibraryMount();
+  reply = 'hang';
+  const before = held.length;
+  const asking = mixerReadablePath(getLocalPath(track), 1500);
+  await waitFor(() => held.length > before);
+
+  reply = YES;
+  await restartLiquidsoap();
+  await listen();
+  await proveLibraryMount();
+  held.pop()?.end(YES);
+
+  assert.equal(await asking, null);
+  playsLocal();
+});
+
+test('the proof the drain checks as it writes is the standing one', async () => {
+  assert.equal(libraryMountStands(), false);
+  await proveLibraryMount();
+  assert.equal(libraryMountStands(), true);
+  const restarting = restartLiquidsoap();
+  try {
+    assert.equal(libraryMountStands(), false, 'a restart drops it before it is sent');
+  } finally {
+    await restarting.catch(() => {});
+    await listen();
+  }
+});
+
 test('pathReadable believes an exact answer and nothing else', async () => {
   for (const [answer, expected] of [
     [YES, 'yes'], ['yes\r\nEND\r\n', 'yes'], [NO, 'no'], ['no\r\nEND\r\n', 'no'],
@@ -368,17 +519,10 @@ test('only Liquidsoap-bound callers go through getLocalPath', () => {
   assert.deepEqual(callers.sort(), ['broadcast/queue.ts', 'music/subsonic.ts']);
 
   const queue = readFileSync(join(src, 'broadcast/queue.ts'), 'utf8');
-  assert.equal(queue.match(/\bgetLocalPath\(/g)?.length, 1, 'the drain\'s no-probe decision, which must agree with the URI');
-  assert.match(queue, /item\.resolveProbeId = subsonic\.getLocalPath\(item\.track\)/);
+  assert.equal(queue.match(/\bgetLocalPath\(/g)?.length, 1, 'the drain decides once, and the URI is built from that decision');
+  assert.match(queue, /const onMount = subsonic\.getLocalPath\(item\.track\);\n\s*let localPath = await libraryMount\.mixerReadablePath\(onMount, /);
+  assert.match(queue, /item\.resolveProbeId = localPath \? undefined : randomBytes/);
   assert.match(queue, /source = subsonic\.findLibraryFile\(item\.track\)/, 'ffprobe reads it from this container');
-});
-
-test('a local hit that loses its proof before the URI is built streams, without a probe id to chase', async () => {
-  await proveLibraryMount();
-  assert.equal(getLocalPath(track), `${root}/${SONG}`, 'the drain decides no probe');
-  reply = NO;
-  await proveLibraryMount();
-  assert.match(getAnnotatedUri(track, { resolveProbeId: undefined }), /:subhttp:/);
 });
 
 test('the coast rebuilds as soon as the proof is lost', async () => {

@@ -1,21 +1,26 @@
 // All providers return { answer, results: [{ title, content }] } behind a 30-minute memo.
 // DDG instant answers may be empty; Tavily/Brave need keys; SearXNG needs a base URL;
-// Keenable is keyless, with an optional key that raises its rate limit; Firecrawl needs a key.
+// Keenable is keyless, with an optional key that raises its rate limit; Firecrawl,
+// Outcrawl and SpecStream need a key. Parallel uses anonymous MCP search.
 // Brave supports artist-name queries (#623); searxngEngines pins only these calls (#1353).
 
+import { parallelSearch } from './parallel-search.js';
 import { config } from '../config.js';
 import * as settings from '../settings.js';
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
 import { BoundedKeyMap } from '../util/bounded-key-map.js';
+import { cleanSnippet, type SearchResponse, type SearchResult } from './search-snippet.js';
+import {
+  searchKeyFits, searchKeyMismatch, searchKeyRequired, searchProvidersRefusing,
+} from './search-key-policy.js';
 
 const TAVILY_ENDPOINT = 'https://api.tavily.com/search';
 const DDG_ENDPOINT = 'https://api.duckduckgo.com/';
 const BRAVE_ENDPOINT = 'https://api.search.brave.com/res/v1/web/search';
 const KEENABLE_ENDPOINT = 'https://api.keenable.ai/v1/search';
 const FIRECRAWL_ENDPOINT = 'https://api.firecrawl.dev/v2/search';
-
-type SearchResult = { title: string; content: string };
-type SearchResponse = { answer: string; results: SearchResult[] };
+const OUTCRAWL_ENDPOINT = 'https://api.outcrawl.ai/v1/search';
+const SPECSTREAM_ENDPOINT = 'https://api.specstream.ai/v1/web-search';
 
 // 30-min TTL cache keyed by `${provider}:${query}`. BOUNDED: the request path's
 // identifyRequestedTrack searches on a listener's free-text description, so the
@@ -54,8 +59,19 @@ export function searchKeySlot(): { key: string; source: 'settings' | 'env' | nul
   return env ? { key: env, source: 'env' } : { key: '', source: null };
 }
 
+// The sentence for a key on file that `provider` refuses, or null when it
+// doesn't (an empty key included). search-key-policy.ts decides.
+function keyOnFileRefusal(provider: string, key: string): string | null {
+  const mismatch = searchKeyMismatch(provider, key);
+  return mismatch && `The key on file is ${mismatch}`;
+}
+
+// The slot may hold another provider's key, which is refused here before
+// anything is sent (#2223).
 export async function tavilySearch(query: string): Promise<SearchResponse> {
   const apiKey = searchKeySlot().key;
+  const refusal = keyOnFileRefusal('tavily', apiKey);
+  if (refusal) throw new Error(refusal);
   const res = await fetchWithTimeout(TAVILY_ENDPOINT, {
     method: 'POST',
     headers: {
@@ -227,7 +243,8 @@ export function parseSearxngResponse(data: unknown): SearchResponse {
 }
 
 // Brave Search API backend (issue #623). Keyed like Tavily — the key lives in
-// settings.search.apiKey with SEARCH_API_KEY as the env fallback. Threads
+// settings.search.apiKey with SEARCH_API_KEY as the env fallback, and another
+// provider's key left there is refused before anything is sent. Threads
 // optional recency through Brave's `freshness` param (pd/pw/pm), and asks for
 // undecorated snippets (text_decorations=0) so descriptions arrive as plain
 // text instead of <strong>-highlighted HTML.
@@ -237,6 +254,8 @@ export async function braveSearch(
 ): Promise<SearchResponse> {
   const apiKey = searchKeySlot().key;
   if (!apiKey) throw new Error('Brave Search API key not configured');
+  const refusal = keyOnFileRefusal('brave', apiKey);
+  if (refusal) throw new Error(refusal);
 
   const url = new URL(BRAVE_ENDPOINT);
   url.searchParams.set('q', query);
@@ -256,28 +275,6 @@ export async function braveSearch(
   if (!res.ok) throw new Error(`Brave Search HTTP ${res.status}`);
   const data = await res.json();
   return parseBraveResponse(data);
-}
-
-// Strips residual markup from a search snippet. Brave and Firecrawl both pass
-// through page descriptions, which can carry entities (&#x27; etc.) and the
-// occasional stray tag depending on the source page, even with Brave's
-// text_decorations=0 removing the highlighting.
-function cleanSnippet(raw: unknown): string {
-  if (typeof raw !== 'string') return '';
-  return raw
-    .replace(/<[^>]+>/g, '')
-    .replace(/&#(x?)([0-9a-fA-F]+);/g, (whole, x: string, digits: string) => {
-      const code = parseInt(digits, x ? 16 : 10);
-      return Number.isFinite(code) && code > 0 && code <= 0x10ffff
-        ? String.fromCodePoint(code)
-        : whole;
-    })
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;|&apos;/g, "'")
-    .trim();
 }
 
 // Pure parser for Brave's web-search JSON. Maps the Brave shape (web.results[],
@@ -334,10 +331,10 @@ export async function keenableSearch(
   return parseKeenableResponse(data);
 }
 
-// The one test for "is this a Keenable key": the request builder, the admin
-// key probe and keenableKeySource all ask it.
+// "Is this a Keenable key": the request builder, the admin key probe and
+// keenableKeySource all ask it. The rule is search-key-policy.ts's.
 export function isKeenableKey(key: string): boolean {
-  return key.trim().startsWith('keen_');
+  return searchKeyFits('keenable', key);
 }
 
 // Where the key a Keenable search would send comes from, or null when it runs
@@ -410,8 +407,6 @@ export function parseKeenableResponse(data: unknown): SearchResponse {
   return { answer: '', results };
 }
 
-const FOREIGN_FIRECRAWL_KEY = 'The key on file is not a Firecrawl key (they start with fc-)';
-
 // Firecrawl backend. Keyed via the shared settings.search.apiKey /
 // SEARCH_API_KEY slot (same resolution as Tavily and Brave). The slot may still
 // hold another provider's key, which must not reach Firecrawl, so anything but
@@ -423,7 +418,8 @@ export async function firecrawlSearch(
 ): Promise<SearchResponse> {
   const apiKey = searchKeySlot().key;
   if (!apiKey) throw new Error('Firecrawl API key not configured');
-  if (!isFirecrawlKey(apiKey)) throw new Error(FOREIGN_FIRECRAWL_KEY);
+  const refusal = keyOnFileRefusal('firecrawl', apiKey);
+  if (refusal) throw new Error(refusal);
   const { url, init } = buildFirecrawlRequest({ query, apiKey, recency });
   const res = await fetchWithTimeout(url, { ...init, timeoutMs: 30_000 });
   if (!res.ok) throw new Error(`Firecrawl HTTP ${res.status}`);
@@ -431,13 +427,12 @@ export async function firecrawlSearch(
   return parseFirecrawlResponse(data);
 }
 
-// The one test for "is this a Firecrawl key": firecrawlSearch, searchReady, the
-// admin key probe, firecrawlKeySource and searchKeyProblem all ask it. It matches
+// "Is this a Firecrawl key", with the rule in search-key-policy.ts. It matches
 // Firecrawl's own CLI, which refuses any cloud key without the prefix. Their API
 // still accepts a legacy key as a bare UUID, but that key also works as `fc-` +
 // the UUID without its dashes, so nothing valid is locked out.
 export function isFirecrawlKey(key: string): boolean {
-  return key.trim().startsWith('fc-');
+  return searchKeyFits('firecrawl', key);
 }
 
 // Where the key a Firecrawl search would send comes from, or null when the slot
@@ -450,11 +445,19 @@ export function firecrawlKeySource(): 'settings' | 'env' | null {
 
 // Why the selected provider refuses the key on file, or null when it doesn't.
 // No key at all is null too: that one keeps its own "set a key" wording, which
-// can't fix this state, because a saved key shadows SEARCH_API_KEY.
+// can't fix this state, because a saved key shadows SEARCH_API_KEY. Only a
+// provider that needs a key has a problem: Keenable runs keyless instead.
 export function searchKeyProblem(): string | null {
-  if (settings.get().search?.provider !== 'firecrawl') return null;
-  const { key } = searchKeySlot();
-  return key && !isFirecrawlKey(key) ? FOREIGN_FIRECRAWL_KEY : null;
+  const provider = settings.get().search?.provider || 'duckduckgo';
+  if (!searchKeyRequired(provider)) return null;
+  return keyOnFileRefusal(provider, searchKeySlot().key);
+}
+
+// The keyed providers that would refuse the key on file. GET /settings serves
+// it because the admin only sees a redacted key, and the provider dropdown can
+// change before a save.
+export function searchKeyRefusedBy(): string[] {
+  return searchProvidersRefusing(searchKeySlot().key);
 }
 
 // Pure request builder for a Firecrawl search, exported so endpoint, headers
@@ -500,6 +503,130 @@ export function parseFirecrawlResponse(data: unknown): SearchResponse {
   return { answer: '', results };
 }
 
+// Outcrawl backend. Keyed via the shared settings.search.apiKey /
+// SEARCH_API_KEY slot, like Firecrawl. The slot may still hold another
+// provider's key, which must not reach Outcrawl, so anything but an `ock_`
+// value is refused here and reads as not ready in searchReady(). Outcrawl's
+// search takes no time window, so recency is not sent.
+export async function outcrawlSearch(query: string): Promise<SearchResponse> {
+  const apiKey = searchKeySlot().key;
+  if (!apiKey) throw new Error('Outcrawl API key not configured');
+  const refusal = keyOnFileRefusal('outcrawl', apiKey);
+  if (refusal) throw new Error(refusal);
+  const { url, init } = buildOutcrawlRequest({ query, apiKey });
+  const res = await fetchWithTimeout(url, { ...init, timeoutMs: 30_000 });
+  if (!res.ok) throw new Error(`Outcrawl HTTP ${res.status}`);
+  const data = await res.json();
+  return parseOutcrawlResponse(data);
+}
+
+// Pure request builder for an Outcrawl search, exported so endpoint, headers
+// and body can be pinned without mocking fetch. Keys are `ock_<keyId>.<secret>`
+// (search-key-policy.ts holds the rule). A search asks for 5 results; the admin
+// "Test key" probe asks for 1, because Outcrawl charges per result returned.
+export function buildOutcrawlRequest(opts: {
+  query: string;
+  apiKey: string;
+  limit?: number;
+}): { url: string; init: RequestInit } {
+  return {
+    url: OUTCRAWL_ENDPOINT,
+    init: {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${opts.apiKey.trim()}` },
+      body: JSON.stringify({ query: opts.query, limit: opts.limit ?? 5 }),
+    },
+  };
+}
+
+// Pure parser for Outcrawl's search JSON (hits[] of url/title/snippet/rank).
+// Snippets go through the same cleanup as Brave's and Firecrawl's, then
+// whitespace is collapsed before the 300-char cap. There is no answer field.
+// Any shape mismatch yields { answer: '', results: [] }.
+export function parseOutcrawlResponse(data: unknown): SearchResponse {
+  if (!data || typeof data !== 'object') return { answer: '', results: [] };
+  const raw = (data as Record<string, unknown>).hits;
+
+  const text = (v: unknown): string => cleanSnippet(v).replace(/\s+/g, ' ').trim();
+  const results: SearchResult[] = [];
+  for (const r of Array.isArray(raw) ? raw : []) {
+    if (!r || typeof r !== 'object') continue;
+    const rec = r as Record<string, unknown>;
+    const title = text(rec.title);
+    const content = text(rec.snippet).slice(0, 300);
+    if (!title || !content) continue;
+    results.push({ title, content });
+    if (results.length >= 5) break;
+  }
+
+  return { answer: '', results };
+}
+
+// SpecStream backend. Keyed via the shared settings.search.apiKey /
+// SEARCH_API_KEY slot, like Outcrawl. Anything but an `ss_` key is refused
+// here and reads as not ready in searchReady(). recency is not sent:
+// /v1/web-search takes no time-window parameter, only after:/before: date
+// operators written into the query itself, and rewriting the caller's query
+// would change what it asked for.
+export async function specstreamSearch(query: string): Promise<SearchResponse> {
+  const apiKey = searchKeySlot().key;
+  if (!apiKey) throw new Error('SpecStream API key not configured');
+  const refusal = keyOnFileRefusal('specstream', apiKey);
+  if (refusal) throw new Error(refusal);
+  const { url, init } = buildSpecStreamRequest({ query, apiKey });
+  const res = await fetchWithTimeout(url, { ...init, timeoutMs: 30_000 });
+  if (!res.ok) throw new Error(`SpecStream HTTP ${res.status}`);
+  const data = await res.json();
+  return parseSpecStreamResponse(data);
+}
+
+// Pure request builder for a SpecStream search, exported so endpoint, headers
+// and query can be pinned without mocking fetch. Keys are `ss_live_…` or
+// `ss_test_…` (search-key-policy.ts holds the rule). speed=fast returns the
+// ranked results with their snippets and no generated answer. A search asks for
+// 5 results; the admin "Test key" probe asks for 1.
+export function buildSpecStreamRequest(opts: {
+  query: string;
+  apiKey: string;
+  limit?: number;
+}): { url: string; init: RequestInit } {
+  const url = new URL(SPECSTREAM_ENDPOINT);
+  url.searchParams.set('q', opts.query);
+  url.searchParams.set('num', String(opts.limit ?? 5));
+  url.searchParams.set('speed', 'fast');
+  return {
+    url: url.toString(),
+    init: {
+      method: 'GET',
+      headers: { Accept: 'application/json', Authorization: `Bearer ${opts.apiKey.trim()}` },
+    },
+  };
+}
+
+// Pure parser for SpecStream's search JSON (data.sources[] of url/title/
+// snippet). Snippets go through the same cleanup as Outcrawl's, then whitespace
+// is collapsed before the 300-char cap. speed=fast has no answer. Any shape
+// mismatch yields { answer: '', results: [] }.
+export function parseSpecStreamResponse(data: unknown): SearchResponse {
+  if (!data || typeof data !== 'object') return { answer: '', results: [] };
+  const inner = (data as Record<string, unknown>).data;
+  const raw = inner && typeof inner === 'object' ? (inner as Record<string, unknown>).sources : undefined;
+
+  const text = (v: unknown): string => cleanSnippet(v).replace(/\s+/g, ' ').trim();
+  const results: SearchResult[] = [];
+  for (const r of Array.isArray(raw) ? raw : []) {
+    if (!r || typeof r !== 'object') continue;
+    const rec = r as Record<string, unknown>;
+    const title = text(rec.title);
+    const content = text(rec.snippet).slice(0, 300);
+    if (!title || !content) continue;
+    results.push({ title, content });
+    if (results.length >= 5) break;
+  }
+
+  return { answer: '', results };
+}
+
 // Provider dispatcher — reads the active provider from live settings on every
 // call so admin-UI changes take effect immediately. Wraps the backend in a
 // 30-min memo. Cache key includes recency so two callsites with different
@@ -516,23 +643,29 @@ export async function searchWeb(
     if (provider === 'tavily') return tavilySearch(query);
     if (provider === 'brave') return braveSearch(query, recency);
     if (provider === 'keenable') return keenableSearch(query, recency);
+    if (provider === 'parallel') return parallelSearch(query, recency);
     if (provider === 'firecrawl') return firecrawlSearch(query, recency);
+    if (provider === 'outcrawl') return outcrawlSearch(query);
+    if (provider === 'specstream') return specstreamSearch(query);
     return duckduckgoSearch(query);
   });
 }
 
 // True when the active search provider is usable right now.
 //   duckduckgo:   always ready (no key, no URL)
+//   parallel:     always ready (anonymous MCP; no shared key is sent)
 //   keenable:     always ready (keyless; a key only raises the rate limit)
-//   tavily/brave: needs settings.search.apiKey, or SEARCH_API_KEY env
+//   tavily/brave: needs settings.search.apiKey, or SEARCH_API_KEY env, that
+//                 isn't another provider's (search-key-policy.ts)
 //   firecrawl:    the same, and it has to be an fc- key
+//   outcrawl:     the same, and it has to be an ock_ key
+//   specstream:   the same, and it has to be an ss_ key
 //   searxng:      needs settings.search.baseUrl (no env fallback by design)
 export function searchReady(): boolean {
   const s = settings.get().search;
   const provider = s?.provider || 'duckduckgo';
-  if (provider === 'duckduckgo' || provider === 'keenable') return true;
+  if (provider === 'duckduckgo' || provider === 'keenable' || provider === 'parallel') return true;
   if (provider === 'searxng') return !!(s?.baseUrl && s.baseUrl.trim());
-  if (provider === 'firecrawl') return isFirecrawlKey(searchKeySlot().key);
-  // tavily / brave (and any future keyed provider)
-  return !!searchKeySlot().key;
+  // tavily / brave / firecrawl / outcrawl / specstream (and any future keyed provider)
+  return searchKeyFits(provider, searchKeySlot().key);
 }

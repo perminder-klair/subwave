@@ -60,7 +60,18 @@ const defaultOwnershipRegistry = [
   {
     file: 'dash/queries.ts', function: 'fetchTakeoverWindow',
     reads: [{ callee: 'adminJson', method: 'GET', path: '/schedule/next-change', signal: 'signal' }],
-    consumers: [{ file: 'dash/TakeoverCard.tsx', owner: 'useAdminQuery', property: 'request', count: 1 }],
+    consumers: [
+      { file: 'dash/TakeoverCard.tsx', owner: 'useAdminQuery', property: 'request', count: 1 },
+      { file: 'dash/SteerCard.tsx', owner: 'useAdminQuery', property: 'request', count: 1 },
+    ],
+  },
+  {
+    file: 'dash/queries.ts', function: 'fetchSteer',
+    reads: [{ callee: 'adminJson', method: 'GET', path: '/steer', signal: 'signal' }],
+    consumers: [
+      { file: 'dash/SteerCard.tsx', owner: 'useAdminQuery', property: 'request', count: 1 },
+      { file: 'DashPanel.tsx', owner: 'useAdminQuery', property: 'request', count: 1 },
+    ],
   },
   {
     file: 'dash/queries.ts', function: 'fetchNavidromeStatus',
@@ -169,6 +180,15 @@ const allowed = new Map([
   ])],
   ['connect/Playground.tsx', new Map([
     ['operator-api-command', { callee: 'adminResponse', method: 'endpoint.method', path: /^relPath$/ }],
+  ])],
+  ['library/EraReviewSection.tsx', new Map([
+    // Era review. The suspect-album listing as a one-shot CSV blob,
+    // like playback-failure-export next door; nothing cached reads it.
+    ['era-csv-export', {
+      callee: 'adminResponse',
+      method: 'GET',
+      path: /^\/library\/era\/csv$/,
+    }],
   ])],
   ['library/useTaggerRunLog.ts', new Map([
     // One run's log file as a download, byte for byte; nothing cached reads it.

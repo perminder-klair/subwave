@@ -9,10 +9,12 @@ import { Btn, Card, Pill, Seg } from '../ui';
 // Navidrome sends a `path` built from the tags rather than the file on disk.
 // The controller reads and switches the rows (routes/settings/core.ts,
 // music/navidrome-players.ts); this card shows them, offers a one-off switch
-// and the opt-in that keeps them on. The setting is Navidrome's own, so on any
+// and the opt-in that keeps them on. Reading them logs in to Navidrome with the
+// station's password, so with the opt-in off opening the card reads nothing and
+// the rows wait for "Check status". The setting is Navidrome's own, so on any
 // other Subsonic server the card shrinks to one line and offers nothing.
 
-type RealPathState = 'on' | 'off' | 'no-players' | 'refused' | 'not-navidrome' | 'unavailable';
+type RealPathState = 'on' | 'off' | 'not-read' | 'no-players' | 'refused' | 'not-navidrome' | 'unavailable';
 
 interface RealPathView {
   state: RealPathState;
@@ -28,6 +30,7 @@ const realPathKey = ['settings', 'navidrome', 'players'] as const;
 const STATE_TEXT: Record<RealPathState, string> = {
   on: 'Every SUB/WAVE player reports real paths.',
   off: 'Some SUB/WAVE players still send tag-built paths.',
+  'not-read': "Not checked. While the setting below is off, SUB/WAVE leaves these rows alone until you ask.",
   'no-players': 'Navidrome has no SUB/WAVE player yet — it appears after the first request.',
   refused: 'Navidrome refused the change for this account. Tick it by hand in Navidrome → Settings → Players.',
   'not-navidrome': 'Report Real Path is a Navidrome setting; there is nothing to switch on this music server.',
@@ -40,6 +43,13 @@ export function NavidromeRealPathCard({ adminFetch }: { adminFetch: AdminFetch }
     adminFetch,
     request: (fetcher, signal) => adminJson<RealPathView>(fetcher, '/settings/navidrome/players', undefined, signal),
     toastOnError: false,
+  });
+
+  const checkNow = useAdminMutation<RealPathView, void>({
+    adminFetch,
+    request: (_vars, fetcher) =>
+      adminJson<RealPathView>(fetcher, '/settings/navidrome/players/check', { method: 'POST' }),
+    onDone: (view, _vars, client) => { client.setQueryData(realPathKey, view); },
   });
 
   const switchNow = useAdminMutation<RealPathView, void>({
@@ -77,8 +87,9 @@ export function NavidromeRealPathCard({ adminFetch }: { adminFetch: AdminFetch }
   });
 
   const view = query.data;
-  const busy = switchNow.isPending || setAuto.isPending;
+  const busy = checkNow.isPending || switchNow.isPending || setAuto.isPending;
   const canSwitch = view?.state === 'off' || view?.state === 'refused';
+  const canCheck = view !== undefined && !view.autoEnable;
 
   if (view?.state === 'not-navidrome') {
     const name = view.server?.type
@@ -106,7 +117,7 @@ export function NavidromeRealPathCard({ adminFetch }: { adminFetch: AdminFetch }
             <>
               <div className="text-[12px] leading-[1.5]">
                 {STATE_TEXT[view.state]}
-                {view.state === 'unavailable' && view.reason ? ` (${view.reason}).` : ''}
+                {view.reason ? ` (${view.reason}).` : ''}
               </div>
               {view.players.length > 0 && (
                 <ul className="mt-2 grid gap-1 text-[12px]">
@@ -127,16 +138,21 @@ export function NavidromeRealPathCard({ adminFetch }: { adminFetch: AdminFetch }
             starts each new one with &quot;Report Real Path&quot; off, so the file paths it sends
             are built from the tags. A mounted library (<code>MUSIC_LIBRARY_PATH</code>) finds its
             files from a tag-built path only when its folders match the tags; the real path finds
-            them however they&apos;re laid out. The controller and broadcast containers both need
-            the library, at the same path. Until the mixer can read it, or for any file it
-            can&apos;t find, the track plays from the stream. Only SUB/WAVE&apos;s own players on
-            this account are ever changed.
+            them however they&apos;re laid out. If the mount sits somewhere other than
+            Navidrome&apos;s own folder, a file plays only when its size matches the track and
+            its tags give it the title Navidrome reports for the track; at Navidrome&apos;s own
+            path nothing has to match.
+            The controller and broadcast containers both need the library, at the same path. Until
+            the mixer can read it, or for any file it can&apos;t find or can&apos;t prove, the track
+            plays from the stream. Only SUB/WAVE&apos;s own players on this account are ever
+            changed.
           </div>
         </div>
 
         <div className="field">
           <Label>Keep Report Real Path on</Label>
           <Seg
+            aria-label="Keep Report Real Path on"
             value={view?.autoEnable ? 'on' : 'off'}
             onChange={v => { if (!busy) setAuto.mutate(v === 'on'); }}
             options={[{ id: 'off', label: 'Off' }, { id: 'on', label: 'On' }]}
@@ -148,11 +164,23 @@ export function NavidromeRealPathCard({ adminFetch }: { adminFetch: AdminFetch }
           </div>
         </div>
 
-        {canSwitch && (
+        {(canCheck || canSwitch) && (
           <div className="field">
-            <Btn sm tone="accent" onClick={() => switchNow.mutate()} disabled={busy}>
-              {switchNow.isPending ? 'Switching…' : 'Turn on now'}
-            </Btn>
+            <div className="flex flex-wrap gap-2">
+              {canCheck && (
+                <Btn sm onClick={() => checkNow.mutate()} disabled={busy}>
+                  {checkNow.isPending ? 'Checking…' : 'Check status'}
+                </Btn>
+              )}
+              {canSwitch && (
+                <Btn sm tone="accent" onClick={() => switchNow.mutate()} disabled={busy}>
+                  {switchNow.isPending ? 'Switching…' : 'Turn on now'}
+                </Btn>
+              )}
+            </div>
+            {canCheck && (
+              <div className="field-hint">Check status signs in to Navidrome once with the station&apos;s password.</div>
+            )}
           </div>
         )}
       </div>

@@ -15,7 +15,7 @@ import { useSectionChrome, useReportDirty } from './section-chrome';
 import { ownsErrorPath } from './form-diff';
 import { Button } from '../../ui/button';
 import { FieldError } from '../../ui/field';
-import type { TransitionEffect, JingleRotateOwner, JinglePlacement, GeminiSafety } from '../../../lib/schemas.generated';
+import type { TransitionEffect, JingleRotateOwner, JinglePlacement, GeminiSafety, TaggerAutoSettings } from '../../../lib/schemas.generated';
 import { LLM_PROVIDER_CATALOG } from '../../../lib/schemas.generated';
 export type { TransitionEffect } from '../../../lib/schemas.generated';
 
@@ -139,8 +139,13 @@ export interface LlmFallbackForm {
   repeatPenalty: number;
   providerBaseUrls: Record<string, string>;
   headers: LlmHeaderRow[];
+  // Extra request-body fields (#2296), per leg like headers.
+  bodyParams: { key: string; value: string }[];
+  toolCallBodyParams: { key: string; value: string }[];
   compatibleMode: 'local' | 'hosted' | 'auto';
   reasoning: boolean;
+  // The level On asks for, per leg (#2296); read only where the leg can express one.
+  reasoningEffort: 'default' | 'low' | 'medium' | 'high';
   // Per-leg, like the primary's: a swap moves it between the legs.
   toolChoice: string;
   discoverySteps: number;
@@ -161,8 +166,12 @@ export interface LlmForm {
   repeatPenalty: number;
   providerBaseUrls: Record<string, string>;
   headers: LlmHeaderRow[];
+  bodyParams: { key: string; value: string }[];
+  toolCallBodyParams: { key: string; value: string }[];
   compatibleMode: 'local' | 'hosted' | 'auto';
   reasoning: boolean;
+  // The level On asks for, per leg (#2296); read only where the leg can express one.
+  reasoningEffort: 'default' | 'low' | 'medium' | 'high';
   toolChoice: string;
   pickerAgent: boolean;
   trackSelection: 'agentic' | 'shortlist';
@@ -197,9 +206,16 @@ export interface SearchForm {
 }
 
 export interface EmbeddingEnrichmentForm {
-  lastfmTags: boolean;
+  /** null is auto: on when a Last.fm key is set (lastfm.lastfmEnrichEnabled). */
+  lastfmTags: boolean | null;
   lastfmTrackTags: boolean;
   lyrics: boolean;
+}
+
+/** Energy from the measured audio (music/propagated-energy.ts); both opt-in. */
+export interface AudioEnergyForm {
+  fillEmpty: boolean;
+  overruleLlm: boolean;
 }
 
 export interface EmbeddingForm {
@@ -215,6 +231,7 @@ export interface EmbeddingForm {
   confidenceThreshold: string;
   maxActiveLearningRounds: string;
   audioFusionWeight: string; // '0' = text-only vote (fusion off)
+  audioEnergy: AudioEnergyForm;
   batchSize: string;         // '5', '10', or '25'
   enrichment: EmbeddingEnrichmentForm;
 }
@@ -306,7 +323,11 @@ export interface LoudnessForm {
 export interface TransitionsForm {
   pairDrain: boolean;   // hold picks until the successor is known (#749 fix)
   stemBlends: boolean;  // pre-rendered stem-blend seams (needs pairDrain + stem cache)
+  pickTimeStems: boolean;  // separate a held pick's missing stems while it waits (#2197)
   equalPowerCrossfade: boolean;  // plain crossfade curve: false = linear, true = equal-power (mixer restart)
+  fadeAudibleEnd: boolean;  // cut a fade ending at its audible end (controller cue point, no restart)
+  fadeAudibleEndDb: string; // dB under the track's loudness where a fade stops being audible (15..35)
+  tailFromCurve: boolean;   // read the ending's levels off the whole-file loudness curve (no restart)
   stemCache: boolean;   // settings.audio.stemCache — persist Demucs stems during analysis
   stemCacheGb: string;  // settings.audio.stemCacheGb — byte budget the LRU sweep enforces
   /** settings.transitions.effects — which gestures the DJ may reach for. Always
@@ -355,6 +376,9 @@ export interface DjBehaviourForm {
   showWelcome: boolean;
   previewNextShow: boolean;
   sameHostAcknowledgement: boolean;
+  /** Keep the music ducked for the whole multi-voice exchange instead of
+   *  letting it lift between speakers. */
+  holdDuckBetweenSpeakers: boolean;
   extendedSleeveNotes: boolean;
   releaseYearMentions: 'regular' | 'occasional' | 'rare';
   recapLimit: string;
@@ -368,6 +392,7 @@ export interface DjBehaviourValues {
   showWelcome?: boolean;
   previewNextShow?: boolean;
   sameHostAcknowledgement?: boolean;
+  holdDuckBetweenSpeakers?: boolean;
   extendedSleeveNotes?: boolean;
   releaseYearMentions?: 'regular' | 'occasional' | 'rare';
   recapLimit?: number;
@@ -440,13 +465,26 @@ export interface SettingsData {
      *  the schedule is edited from the Backup panel, beside Export/Restore, and
      *  posts `{ backups }` through the same POST /settings chokepoint. */
     backups?: { cadence?: string; keep?: number };
+    /** Scheduled tagging (#2282), edited on the Library Tagger's Run tab and
+     *  posted as `{ tagger: { auto } }`. Absent on an older controller. */
+    tagger?: { auto?: TaggerAutoSettings };
     transitions?: {
       pairDrain?: boolean;
       stemBlends?: boolean;
+      pickTimeStems?: boolean;
       equalPowerCrossfade?: boolean;
+      fadeAudibleEnd?: boolean;
+      fadeAudibleEndDb?: number;
+      tailFromCurve?: boolean;
       effects?: Partial<Record<TransitionEffect, boolean>>;
     };
-    audio?: { embeddings?: boolean; vocalActivity?: boolean; stemCache?: boolean; stemCacheGb?: number };
+    audio?: {
+      embeddings?: boolean;
+      vocalActivity?: boolean;
+      stemCache?: boolean;
+      stemCacheGb?: number;
+      analyzeQuietOnly?: boolean;
+    };
     stream?: {
       opusEnabled?: boolean;
       opusBitrate?: number;
@@ -530,6 +568,7 @@ export interface SettingsData {
       confidenceThreshold?: number;
       maxActiveLearningRounds?: number;
       audioFusionWeight?: number;
+      audioEnergy?: Partial<AudioEnergyForm>;
       batchSize?: number;
       enrichment?: Partial<EmbeddingEnrichmentForm>;
     };
@@ -606,6 +645,9 @@ export interface SettingsData {
     // Where the key a Firecrawl search sends comes from; null when the slot holds
     // none, or holds another provider's, which searches refuse.
     firecrawlKeySource?: 'settings' | 'env' | null;
+    // The keyed providers (Tavily, Brave, Firecrawl, Outcrawl, SpecStream) whose searches would refuse
+    // the key on file, because it is another provider's. Empty with no key.
+    keyRefusedBy?: string[];
   };
   defaults?: {
     search?: Partial<SearchForm>;
@@ -620,6 +662,8 @@ export interface SettingsData {
     embeddingMeta?: { model: string; dim: number } | null;
   };
   tagger?: { running?: boolean };
+  /** The scheduled run's own record (#2282); null when it could not be read. */
+  taggerSchedule?: TaggerScheduleView | null;
   env?: Record<string, unknown>;
   // passSet only — the password value never reaches the browser. Env flags are
   // per-field: url can be env-managed while user/pass come from the wizard.
@@ -632,6 +676,25 @@ export interface SettingsData {
   streamOnAir?: boolean;
   // What timezone '' (Auto) resolves to — the controller's own zone.
   serverTimezone?: string;
+}
+
+/** GET /settings `taggerSchedule`: controller/src/broadcast/tag-schedule.ts
+ *  TagScheduleView. `waiting` is a hold standing today (quiet times, a run
+ *  already going, a Navidrome scan). */
+export interface TaggerScheduleView {
+  lastDay: string | null;
+  startedAt: string | null;
+  outcome: 'running' | 'ok' | 'failed' | 'stopped' | 'held' | 'skipped' | 'missed' | 'interrupted' | null;
+  detail: string | null;
+  at: string | null;
+  runLogId: string | null;
+  /** The baseline the running run's clean finish raises to. */
+  raiseTo: number | null;
+  /** The new-music baseline the schedule compares Navidrome's count with. */
+  walkedCount: number | null;
+  /** When a save last turned the schedule on or moved its time. */
+  armedAt: string | null;
+  waiting: string | null;
 }
 
 export type Patch = Record<string, unknown>;

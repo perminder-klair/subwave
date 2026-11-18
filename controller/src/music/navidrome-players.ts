@@ -8,22 +8,37 @@
 // rows there. That API is not a published contract, so every failure here
 // degrades to a reading the operator can act on (the Doctor's warning and the
 // manual step); none of it throws, and none of it can hold up music.
+//
+// That login sends the password itself, where Subsonic auth only ever sends a
+// salted token, so it is the operator's to allow. With the opt-in off the player
+// rows are left alone: the scheduler stands down, and the Doctor and the settings
+// card read through passiveRealPathStatus(). Only an operator's press calls
+// realPathStatus() directly. The library walk's read of change times
+// (file-changes.ts) is a separate login, outside this opt-in. The Subsonic ping is
+// not a login, and it goes out under the station's own client name so that no
+// read can recreate a `sub-wave-admin` row.
 import { config } from '../config.js';
+import * as settings from '../settings.js';
 import {
   normalizePlayerRow,
   ownPlayers,
   passwordRefusal,
+  playerLabel,
   serverKind,
   stateOf,
+  type LocalPathSample,
   type NavidromePlayerRow,
   type RealPathStatus,
   type ServerIdentity,
 } from './navidrome-players-policy.js';
-import { pingWith } from './subsonic.js';
+import { getRandomSongs, localFileState, pingWith, transportDetail } from './subsonic.js';
 
 const TIMEOUT_MS = 5_000;
 // Navidrome's list endpoint pages; this covers every realistic player table.
 const PAGE = 500;
+// Enough to catch a mount that holds little of the library, cheap enough for
+// the Doctor: one Subsonic call, then what findLibraryFile() costs per track.
+const SAMPLE_SIZE = 5;
 
 class NativeApiError extends Error {
   constructor(message: string, readonly status: number | null, readonly notSent = false) {
@@ -55,7 +70,7 @@ export async function nativeFetch(path: string, init: RequestInit & { token?: st
   } catch (err) {
     const name = err instanceof Error ? err.name : '';
     const timedOut = name === 'TimeoutError' || name === 'AbortError';
-    throw new NativeApiError(timedOut ? 'Navidrome did not answer within 5s' : errMessage(err, 'unreachable'), null);
+    throw new NativeApiError(timedOut ? 'Navidrome did not answer within 5s' : `could not reach Navidrome: ${transportDetail(err)}`, null);
   }
   if (!res.ok) throw new NativeApiError(`HTTP ${res.status} on ${path.split('?')[0]}`, res.status);
   return res;
@@ -84,8 +99,8 @@ async function listPlayers(token: string): Promise<NavidromePlayerRow[]> {
   return body.map(normalizePlayerRow).filter((r): r is NavidromePlayerRow => r !== null);
 }
 
-// Read-modify-write of the whole row: Navidrome's PUT replaces the record, so
-// sending only the flag would blank the row's other fields.
+// Read-modify-write of the whole row, the shape Navidrome's own UI sends. The
+// API is unpublished, so this does not lean on what a partial PUT would do.
 async function switchOn(token: string, id: string): Promise<void> {
   const res = await nativeFetch(`/api/player/${encodeURIComponent(id)}`, { token });
   const row = (await res.json()) as Record<string, unknown>;
@@ -106,37 +121,60 @@ function ownership() {
   return { clientName: config.navidrome.clientName, user: config.navidrome.user };
 }
 
-export type NativeServer =
-  | { usable: true; server?: ServerIdentity }
-  | { usable: false; reason: 'not-configured' }
-  | { usable: false; reason: 'not-navidrome'; server?: ServerIdentity };
+/** Has the operator opted in to the station keeping the flag on? */
+export function realPathOptedIn(): boolean {
+  return settings.get().musicSource?.reportRealPath === true;
+}
 
-/** May Navidrome's own API be asked? The one check before any native call. */
+export type NativeServer =
+  | { usable: true; server: ServerIdentity }
+  | { usable: false; reason: 'not-configured' }
+  | { usable: false; reason: 'unreachable'; error: string }
+  | { usable: false; reason: 'not-navidrome'; server: ServerIdentity };
+
+/**
+ * May Navidrome's own API be asked? The one check before any native call. It asks
+ * the Subsonic API which server this is, and a failed ping ends it: the password
+ * goes to a server that has just answered as a working music server, never to
+ * one that did not.
+ */
 export async function nativeServer(): Promise<NativeServer> {
   if (!config.navidrome.url || !config.navidrome.user || !config.navidrome.password) {
     return { usable: false, reason: 'not-configured' };
   }
-  // Ask the Subsonic API which server this is before touching Navidrome's own.
-  // A failed ping is not a verdict: the native login that follows reports the outage.
-  const ping = await pingWith({ url: config.navidrome.url, user: config.navidrome.user, pass: config.navidrome.password });
-  const server: ServerIdentity | undefined = ping.ok
-    ? { type: ping.serverType && ping.serverType !== 'unknown' ? ping.serverType : '', version: ping.serverSoftwareVersion ?? null }
-    : undefined;
-  if (serverKind(server?.type) === 'other') return { usable: false, reason: 'not-navidrome', server };
+  const ping = await pingWith({
+    url: config.navidrome.url,
+    user: config.navidrome.user,
+    pass: config.navidrome.password,
+    client: config.navidrome.clientName,
+  });
+  if (!ping.ok) return { usable: false, reason: 'unreachable', error: ping.error || 'the Subsonic ping failed' };
+  const server: ServerIdentity = {
+    type: ping.serverType && ping.serverType !== 'unknown' ? ping.serverType : '',
+    version: ping.serverSoftwareVersion ?? null,
+  };
+  if (serverKind(server.type) === 'other') return { usable: false, reason: 'not-navidrome', server };
   return { usable: true, server };
+}
+
+function stoppedAt(native: Exclude<NativeServer, { usable: true }>): RealPathStatus {
+  if (native.reason === 'not-navidrome') return { state: 'not-navidrome', players: [], switched: [], server: native.server };
+  const reason = native.reason === 'unreachable' ? native.error : 'the music server is not configured';
+  return { state: 'unavailable', players: [], switched: [], reason };
 }
 
 /**
  * Read the station's player rows; with `enable`, switch on every one still off.
- * A row refused mid-way leaves the others switched and reports `refused`.
+ * A 401/403 stops the pass and reports `refused`, leaving the rows already
+ * switched: it is the account's answer, the same for every row. Any other HTTP
+ * error is that row's, so the rest still get their turn and the row's failure
+ * comes back as `reason`. A connection that dies ends the pass the same way.
+ * This logs in, so with the opt-in off only an operator's press may call it;
+ * a passive reader goes through passiveRealPathStatus().
  */
 export async function realPathStatus({ enable = false }: { enable?: boolean } = {}): Promise<RealPathStatus> {
   const native = await nativeServer();
-  if (!native.usable) {
-    return native.reason === 'not-configured'
-      ? { state: 'unavailable', players: [], switched: [], reason: 'the music server is not configured' }
-      : { state: 'not-navidrome', players: [], switched: [], server: native.server };
-  }
+  if (!native.usable) return stoppedAt(native);
   const { server } = native;
   let token: string;
   let players: NavidromePlayerRow[];
@@ -156,6 +194,8 @@ export async function realPathStatus({ enable = false }: { enable?: boolean } = 
   }
 
   const switched: string[] = [];
+  const failures: string[] = [];
+  let refused = false;
   if (enable) {
     for (const p of players) {
       if (p.reportRealPath) continue;
@@ -165,14 +205,56 @@ export async function realPathStatus({ enable = false }: { enable?: boolean } = 
         switched.push(p.id);
       } catch (err) {
         const status = err instanceof NativeApiError ? err.status : null;
-        const reason = status === 401 || status === 403
-          ? `HTTP ${status}: this account may not edit its players`
-          : errMessage(err, 'write failed');
-        return { state: 'refused', players, switched, server, reason };
+        refused = status === 401 || status === 403;
+        // Named as the operator finds the row; its id stays server-side.
+        const why = refused
+          ? `HTTP ${status}, this account may not edit its players`
+          : status ? `HTTP ${status}` : errMessage(err, 'write failed');
+        failures.push(`${playerLabel(p)}: ${why}`);
+        if (refused || status === null) break;
       }
     }
   }
-  return { state: stateOf(players), players, switched, server };
+  return {
+    state: refused ? 'refused' : stateOf(players),
+    players,
+    switched,
+    server,
+    ...(failures.length ? { reason: failures.join('; ') } : {}),
+  };
+}
+
+/**
+ * What the Doctor and the card's first paint may know. With the opt-in on that
+ * is the rows. With it off it is only which server this is, from the ping, so a
+ * non-Navidrome station still gets its one line: no login, no player list.
+ */
+export async function passiveRealPathStatus(): Promise<RealPathStatus> {
+  if (realPathOptedIn()) return realPathStatus();
+  const native = await nativeServer();
+  if (!native.usable) return stoppedAt(native);
+  return { state: 'not-read', players: [], switched: [], server: native.server };
+}
+
+/**
+ * A few random tracks checked against the MUSIC_LIBRARY_PATH mount, for the
+ * Doctor. Null when the sample could not be read. Stateless, as findLibraryFile()
+ * is, so a run can't change what the mixer gets next.
+ */
+export async function sampleLocalPaths(): Promise<LocalPathSample | null> {
+  try {
+    const songs = await getRandomSongs({ size: SAMPLE_SIZE });
+    const sample: LocalPathSample = { sampled: songs.length, missed: [], unproved: [], unread: [] };
+    for (const song of songs) {
+      const state = localFileState(song);
+      if (state === 'none') sample.missed.push(String(song.path));
+      if (state === 'unproved') sample.unproved.push(String(song.path));
+      if (state === 'unread') sample.unread.push(String(song.path));
+    }
+    return sample;
+  } catch {
+    return null;
+  }
 }
 
 // The automatic pass (scheduler + boot) logs a change of outcome, not every
@@ -182,11 +264,12 @@ let lastAutoOutcome = '';
 
 export async function autoEnableRealPath(log: (line: string) => void): Promise<RealPathStatus> {
   const st = await realPathStatus({ enable: true });
-  const outcome = st.state === 'refused' || st.state === 'unavailable' ? `${st.state}:${st.reason}` : st.state;
+  const outcome = st.reason ? `${st.state}:${st.reason}` : st.state;
   if (st.switched.length) {
     const names = st.players.filter(p => st.switched.includes(p.id)).map(p => `${p.client} [${p.userAgent}]`);
     log(`Navidrome: switched Report Real Path on for ${names.join(', ')}`);
-  } else if (outcome !== lastAutoOutcome && (st.state === 'refused' || st.state === 'unavailable')) {
+  }
+  if (st.reason && outcome !== lastAutoOutcome) {
     log(`Navidrome: could not keep Report Real Path on (${st.reason}); see the Doctor for the manual step`);
   }
   lastAutoOutcome = outcome;

@@ -229,7 +229,7 @@ router.post('/personas/community/:slug/install', requireAdmin, async (req, res) 
       return res.status(result.status).json({ error: result.error });
     }
     queue.log('scheduler', `[personas] community "${slug}" installed via admin UI as "${cp.displayName}"`);
-    res.json({ personas: result.personas, persona: result.persona });
+    res.json({ personas: result.personas, persona: result.persona, ...(result.managed ? { managed: result.managed } : {}) });
   } catch (err: any) {
     queue.log('error', `POST /personas/community/${slug}/install failed: ${err.message}`);
     res.status(400).json({ error: err.message });
@@ -295,6 +295,7 @@ router.post(
         persona: outcome.persona,
         voice: outcome.voice,
         jingles: outcome.jingles,
+        ...(outcome.managed ? { managed: outcome.managed } : {}),
       });
     } catch (err: any) {
       queue.log('error', `POST /personas/import failed: ${err.message}`);

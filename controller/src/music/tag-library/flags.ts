@@ -6,6 +6,7 @@ import * as subsonic from '../subsonic.js';
 import * as db from '../library-db.js';
 import * as embeddings from '../embeddings.js';
 import { adoptAndPrune } from '../id-rotation.js';
+import { albumEraKey, applyWalkForcedYear, eraWalkFields, libraryOwnerContext, liveEraOverrides, type EraOverride, type EraOverrideLookup } from '../era-review.js';
 import { loadSecretsIntoEnv } from '../../setup/secrets.js';
 import { loadNavidromeConfig } from '../../setup/config.js';
 import { reportProgress, reportCatalogueReady } from '../tagger-progress.js';
@@ -37,6 +38,9 @@ interface CliFlags {
   reEnrich: boolean;
   skipEnrich: boolean;
   upgrade: boolean;
+  // With --upgrade: re-decide only the blind rows measured since (#2281,
+  // db.blindTaggedIds), instead of the rows with a stale prompt or model.
+  upgradeBlind: boolean;
   skipAnalyze: boolean;
   reAnalyze: boolean;
   reconcileOnly: boolean;
@@ -75,6 +79,7 @@ export function parseFlags(): CliFlags {
     // db.staleTaggedIds excludes source='manual' — operator tags are ground
     // truth and never go stale.
     upgrade: args.includes('--upgrade'),
+    upgradeBlind: args.includes('--upgrade-blind'),
     skipAnalyze: args.includes('--skip-analyze'),
     reAnalyze: args.includes('--re-analyze'),
     // Walk Navidrome, prune rows for tracks it no longer contains, then exit —
@@ -87,18 +92,6 @@ export function parseFlags(): CliFlags {
     noVocal: args.includes('--no-vocal'),
     rescan: args.includes('--rescan'),
   };
-}
-
-// The album tag's year, but only when it actually says something (#1418).
-function informativeAlbumYear(song: {
-  albumEraUntrusted?: boolean | null;
-  albumOriginalYear?: number | null;
-  year?: number | null;
-}): number | null {
-  if (song.albumEraUntrusted) return null;
-  const ord = song.albumOriginalYear ?? null;
-  if (ord == null) return null;
-  return ord === (song.year ?? null) ? null : ord;
 }
 
 // The file facts a Subsonic child carries, for the library status exports:
@@ -134,7 +127,19 @@ export async function walkNavidrome(
   // cleared together after the walk behind a mass hold. id -> the walked size
   // (the size signal) or null (the change-time signal).
   const candidates = new Map<string, number | null>();
+  // Operator era records, each album's read as the walk reaches it
+  // (era-review.liveEraOverrides): a decision replaces the walk's stored
+  // verdict for its album, a kind replaces the title's suggestion, and a
+  // one-year decision reaches tracks added since. Never a snapshot from before
+  // the run: a decision removed mid-run must not be written back.
+  const rawDb = db.getDb();
+  const eraOverrides: EraOverrideLookup = rawDb ? liveEraOverrides(rawDb) : new Map<string, EraOverride>();
+  // The library as it stood before this walk (its artist credits, its sorting
+  // folders), so a DJ's own compilation is never taken for a label's
+  // (album-kind.labelOwner).
+  const ownerCtx = rawDb ? libraryOwnerContext(rawDb, { fresh: true }) : undefined;
   for await (const song of subsonic.iterateAllSongs({ requireComplete: true })) {
+    const eraFields = eraWalkFields(song, eraOverrides, ownerCtx);
     const fileInfo = walkFileInfo(song);
     const fileReplaced = db.upsertTrackMeta(song.id, {
       title: song.title,
@@ -144,18 +149,20 @@ export async function walkNavidrome(
       // an ALBUM/ARTIST blocklist entry match by id rather than by name.
       albumId: song.albumId ?? null,
       artistId: song.artistId ?? null,
+      albumArtistId: song.albumArtistId ?? null,
       year: song.year,
       // Album-level era signals (#842, #1418). The album's originalReleaseDate
-      // is a track's original year only when informative, which needs both:
-      //  - the album is not era-suspect (on a reissue anthology that date is
-      //    the reissue's own, so recording it states the wrong year AND hides
-      //    the track from the MusicBrainz pass, which skips resolved rows);
-      //  - it differs from the file's `year` (equal tells us nothing). NULL is
-      //    behaviour-neutral — resolveEraYear falls through to `year` for a
-      //    trusted album — and keeps the track eligible for a lookup.
-      originalYear: informativeAlbumYear(song),
+      // is a track's original year only when informative, and never on an
+      // album the detector or the operator holds suspect
+      // (era-review.albumTagYear, through eraWalkFields).
+      originalYear: eraFields.originalYear,
       isCompilation: song.albumIsCompilation ?? null,
-      eraUntrusted: song.albumEraUntrusted ?? null,
+      eraUntrusted: eraFields.eraUntrusted,
+      // Why the walk flagged it (audit truth — never rewritten by an
+      // override), and the album artist the override key folds on.
+      eraReason: eraFields.eraReason,
+      albumKind: eraFields.albumKind,
+      albumArtist: eraFields.albumArtist,
       genres: subsonic.songGenres(song),
       duration: song.duration,
       // Always a value: null is how a walk clears a tag that has gone, so a
@@ -164,6 +171,13 @@ export async function walkNavidrome(
       ...fileInfo,
     });
     if (fileReplaced) candidates.set(song.id, fileInfo.fileSize);
+    // A one-year decision (Library → Era) on this album: a track that arrived
+    // after it, or lost its year, gets it as its manual year. A track that
+    // already holds a manual year keeps it (the operator set that one). A
+    // track that left an album's one-year decision for an album without one
+    // gets its own year back (#2319). After the upsert, so the row holds the
+    // album this key names.
+    applyWalkForcedYear(song.id, albumEraKey(eraFields.albumArtist, song.album), eraFields.forcedYear);
     liveIds.add(song.id);
     if (song.albumEraUntrusted && song.albumEraReason) {
       eraReasons.set(song.albumEraReason, (eraReasons.get(song.albumEraReason) ?? 0) + 1);
@@ -191,7 +205,7 @@ export async function walkNavidrome(
   }
   // One line per walk on the change-time signal, whatever it found.
   logEvent('info', walked === 0 ? 'Replaced-file check: skipped (empty walk)'
-    : !fileChanges ? 'Replaced-file check: size only (no change times: the server is not Navidrome, its API refused or timed out, or the station kept the password back; the Doctor says which)'
+    : !fileChanges ? 'Replaced-file check: size only (no change times: the server is not Navidrome or did not answer, its API refused or timed out, or the station kept the password back)'
       : `Replaced-file check: ${fileChanges.changes.length.toLocaleString('en-GB')} change(s) read since `
         + `${fileChanges.since ?? 'the start'}${fileChanges.complete ? '' : ' (partial: the read stopped before its floor, the mark stays)'}`
         + (fileChanges.futureDated ? `, ${fileChanges.futureDated} future-dated file(s) skipped (a wrong clock on the files)` : '')
@@ -217,8 +231,9 @@ export async function walkNavidrome(
     );
   }
   if (!decision.clear && decision.reason === 'accepted' && candidates.size > 0) {
-    db.acceptReplacedFiles(candidates, new Map(fileChanges?.changes.map(c => [c.id, c.updatedAt])));
-    logEvent('info', `${candidates.size.toLocaleString('en-GB')} file(s) accepted as changed: their analysis and stems are kept`);
+    const resent = db.acceptReplacedFiles(candidates, new Map(fileChanges?.changes.map(c => [c.id, c.updatedAt])));
+    logEvent('info', `${candidates.size.toLocaleString('en-GB')} file(s) accepted as changed: their analysis is kept`
+      + (resent ? `; ${resent.toLocaleString('en-GB')} with a new size have their stems separated again` : ''));
   }
   // Only once acted on: a walk that dies before here, or a held clear, asks
   // again from the old mark.

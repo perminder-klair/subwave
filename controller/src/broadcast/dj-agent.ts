@@ -3,6 +3,8 @@
 
 import { z } from 'zod';
 import * as settings from '../settings.js';
+import { episodeUnderSteer, withSteer } from '../music/steer.js';
+import { steerClause } from '../schemas/steer.js';
 import * as session from './session.js';
 import * as picker from '../music/picker.js';
 import { resolveShowPlaylistPool, resolveExcludedPlaylistIds } from '../music/show-playlist.js';
@@ -42,7 +44,7 @@ import {
 } from './dj-agent/breaker.js';
 import { dropEchoedLink, enqueuePick, generatePickLink, trackFields, trimLinkToIntro } from './dj-agent/enqueue.js';
 import { advanceRun, notePickShow, runActive } from './dj-agent/runs.js';
-import { prepareEpisodeContext, showPreparation } from './show-preparation.js';
+import { prepareEpisodeContext, preparationOpening, showPreparation } from './show-preparation.js';
 import { prepareShortlistSearches } from './shortlist-search-preparation.js';
 import { pickSchemaBase, pickSystem, requestSystem, resolveEditorialLeanings, transitionChoiceNudge, type EditorialLeaningsContext } from './dj-agent/schemas.js';
 import { agenticDiscoverySelectionReason, agenticSelectionReason, agenticTrackRef, plainAgenticSelectionReason, resolveAgenticLeaningsUsage, verifiedAgenticReason, type AgenticPickResolution } from './dj-agent/leanings-review.js';
@@ -122,6 +124,7 @@ async function repickFromSeen({ seen, badId, predecessor, showAt = null, playlis
   const why = reason
     ?? `You explored the library and then answered with ${badId ? `the id "${badId}", which matches none of the tracks your tools returned` : 'no usable track id'}. Only ids from the candidates above are real. Choose the best next track from them.`;
   try {
+    const repickSteer = steerClause(settings.activeSteer((showAt ?? new Date()).getTime())?.prompt);
     // djObject records this nested object by reference. Fill it after the
     // structured reply is known so Debug can show the controller-resolved
     // selection beside the raw model response (which may name another track).
@@ -146,15 +149,16 @@ async function repickFromSeen({ seen, badId, predecessor, showAt = null, playlis
       // Both routes see the recent transition ledger (present only while
       // effects are active), so a corrective re-pick chooses a fresh transition
       // for its new track instead of settling into one effect.
+      // A salvage pick is still under the operator's steer, like the call it repairs.
       prompt: shortlistRepick
-        ? shortlistPickPrompt([...seen.values()], selectionContext, { showOnAir: !!settings.resolveActiveShow(showAt ?? undefined) }) + `\n\n${why}`
+        ? shortlistPickPrompt([...seen.values()], selectionContext, { showOnAir: !!settings.resolveActiveShow(showAt ?? undefined) }) + `\n\n${why}${repickSteer}`
         : JSON.stringify({
           ...(Array.isArray(selectionContext.recentTransitions) ? { context: { recentTransitions: selectionContext.recentTransitions } } : {}),
           ...(predecessor ? { predecessor } : {}),
           candidates: [...seen.values()],
         }, null, 2)
           + (predecessor ? `\n\n${SEED_NOT_A_PICK_CLAUSE}` : '')
-          + `\n\n${why}${transitionChoiceNudge(selectionContext.recentTransitions)}`,
+          + `\n\n${why}${transitionChoiceNudge(selectionContext.recentTransitions)}${repickSteer}`,
       schema,
       temperature: 0.5,
       kind: telemetryKind,
@@ -277,7 +281,11 @@ async function steerAwayCandidates<T>(
 // as the DJ rather than a convenient-but-different approximation.
 export async function livePickerScope(queue: any, { audioWaypoint = null, showAt = null, context = null }: { audioWaypoint?: number[] | null; showAt?: Date | null; context?: any } = {}) {
   const preparedContext = context ? await prepareEpisodeContext(context) : null;
-  const episodeSource = preparedContext ? showPreparation.read({ context: preparedContext }).music : null;
+  // A steered playlist sets the prepared episode aside, with its brief.
+  const { episodeSource, context: pickContext } = preparedContext
+    ? episodeUnderSteer(preparedContext, settings.activeSteer((showAt ?? new Date()).getTime()),
+      (c) => showPreparation.read({ context: c }).music)
+    : { episodeSource: null, context: null };
   await library.load();
   // Narrow, long-cached counts (#1723): the dashboard's stats() cost every
   // pick ~4.6 s of blocked thread on a 76k-track library.
@@ -305,7 +313,7 @@ export async function livePickerScope(queue: any, { audioWaypoint = null, showAt
   // pick's look-ahead moment (showAt) so the anchored playlist is the show's
   // that will be on air when the pick plays — same clock as pickSystem's brief
   // and buildTools' locks.
-  const activeShow = settings.resolveActiveShow(showAt ?? undefined);
+  const activeShow = settings.resolvePickShow(showAt ?? new Date());
   const playlistPool = activeShow ? await timePhase('pick.playlistPool', () => resolveShowPlaylistPool(activeShow)) : null;
   const playlistLock = playlistPool && activeShow?.playlistStrict ? playlistPool.ids : null;
   const playlistTracks = playlistPool?.tracks ?? null;
@@ -378,6 +386,7 @@ export async function livePickerScope(queue: any, { audioWaypoint = null, showAt
       show: activeShow,
       playlistTracks,
       episodeTracks: episodeSource?.tracks,
+      episodeAiringStartedAt: episodeSource?.airingStartedAt,
       excludedIds,
       resolvedGenres: genreLock ?? [],
       minTrackSec,
@@ -441,7 +450,7 @@ export async function livePickerScope(queue: any, { audioWaypoint = null, showAt
     listenerFavourites: favourites.length ? favourites : null,
   });
 
-  return { scope, playlistTracks, activeShow, episodeSource, context: preparedContext };
+  return { scope, playlistTracks, activeShow, episodeSource, context: pickContext };
 }
 
 // All controller choices use their already-guarded, fit-ordered subset. Every
@@ -690,7 +699,10 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
     if (avoidClause && ask?.role === 'user') ask.content += avoidClause;
     const run = await pickerAgent.run({
       editorial: ctx?.episodeEditorial ?? '',
-      messages,
+      // The operator's steer joins the ask too, not the system prompt, whose
+      // cached prefix free text would break. Judged at the pick's look-ahead
+      // instant, like the show it follows.
+      messages: withSteer(messages, settings.activeSteer((showAt ?? new Date()).getTime())?.prompt),
       scope,
       showAt,
       telemetry: { agentPickResolution },
@@ -1450,7 +1462,7 @@ async function enqueueSelected(
 // Resolved at `showAt`, the pick's look-ahead clock, like both other paths: a
 // pick made inside the incoming show's window walks the INCOMING show.
 async function pickInOrder(queue, ctx, { wantLink, pickAnchor, showAt = null, eventText }: { wantLink: boolean; pickAnchor?: any; showAt?: Date | null; eventText: string }): Promise<boolean> {
-  const show = settings.resolveActiveShow(showAt ?? undefined);
+  const show = settings.resolvePickShow(showAt ?? new Date());
   if (!isInOrderShow(show)) return false;
   ctx = await prepareEpisodeContext(ctx);
   if (showPreparation.read({ context: ctx }).music) {
@@ -1655,7 +1667,9 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, pickA
     // carrier of concrete candidates. Skipped mid-run/journey (they own the
     // direction) and on strict-playlist shows (deep cuts are almost surely
     // off-playlist, so the call would be spent on an emptyResult).
-    const explore = shouldExplore({ inRun, audioWaypoint, strictPlaylist: ctx?.activeShow?.playlistStrict });
+    const explore = shouldExplore({
+      inRun, audioWaypoint, strictPlaylist: settings.resolvePickShow(showAt ?? new Date())?.playlistStrict,
+    });
     const exploreClause = explore
       ? ' Exploration nudge: include deepCuts in your discovery round this pick — surface something the station has never aired (or hasn\'t in weeks) and give it real consideration when it can fit the moment.'
       : '';
@@ -1799,7 +1813,7 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     // one exception: the model never sees what the route would refuse.
     // requestText lets searchLibrary find what the listener named however the
     // model words its query (#2195).
-    const scope = pickerScope({ recentIds, requestText: text, excludeExplicit: excludesExplicit(settings.resolveActiveShow()) });
+    const scope = pickerScope({ recentIds, requestText: text, excludeExplicit: excludesExplicit(settings.resolvePickShow()) });
     const run = await requestAgent.run({
       messages,
       scope,
@@ -2193,20 +2207,29 @@ export async function runPersonaHandoff(queue: any, ctx: any, deps: HandoffDeps 
   if (!isBoundaryHandoff) session.markHandoffAired();
 
   // Outgoing persona comes from the roll metadata — its clock slot is already
-  // over, so getEffectivePersona() no longer returns it. A final-track handoff
-  // has deliberately NOT rolled the session yet: use the incoming identity it
-  // captured at arm time, rather than reading the still-outgoing live session.
-  // A persona deleted mid-shift → nothing to voice; drop it.
+  // over, so getEffectivePersona() no longer returns it.
+  // A final-track handoff usually runs BEFORE the roll, while `cur` and the
+  // clock still belong to the outgoing show. It can also run after its record
+  // moved onto the incoming session (the wall-clock roll won the race, or a
+  // restart landed past the boundary: session.ts maybeRoll/recover). Either way
+  // its incoming persona and show are the ones captured at arm time, never a
+  // fallback to the live session, which before the roll is the outgoing host
+  // and the show that is ending. A persona deleted mid-shift → nothing to
+  // voice; drop it.
   const personaOut = settings.resolvePersonaById(pending.personaId);
   const cur = session.getSession();
-  const personaIn = (isBoundaryHandoff && settings.resolvePersonaById(pending.incomingPersonaId))
-    || settings.resolvePersonaById(cur?.persona?.id)
-    || settings.getEffectivePersona();
+  const personaIn = isBoundaryHandoff
+    ? settings.resolvePersonaById(pending.incomingPersonaId)
+    : (settings.resolvePersonaById(cur?.persona?.id) || settings.getEffectivePersona());
   if (!personaOut || !personaIn) {
     session.markHandoffAired();
     return;
   }
-  const showIn = (isBoundaryHandoff ? pending.incomingShowName : null) || cur?.show?.name || null;
+  // A null incomingShowName is meaningful (show → autonomous), so it is kept
+  // as null. The ordinary post-roll mic-pass reads the incoming session's show.
+  const showIn = isBoundaryHandoff
+    ? (pending.incomingShowName ?? null)
+    : (cur?.show?.name || null);
   const showOut = pending.showName || null;
   // The armed record keeps a future contextAt for incoming show identity, but
   // speech facts belong to the scheduled boundary. Unknown legacy/malformed
@@ -2214,6 +2237,10 @@ export async function runPersonaHandoff(queue: any, ctx: any, deps: HandoffDeps 
   // look-ahead clock into either half of the handoff.
   const speechContext = isBoundaryHandoff ? boundarySpeechContext(ctx, pending.boundaryAt) : ctx;
   const incomingEditorial = showPreparation.read({ context: ctx }).editorial;
+  // Unsettled but already chosen: the greeting names the subject, with no plan
+  // angle (the plan is still pending). Otherwise a current plan's angle, or
+  // nothing (#2321). The standalone intro reads the same helper.
+  const opening = preparationOpening(isBoundaryHandoff ? session.getBoundaryProgramme() : session.getProgramme(), ctx);
   const promptContext = incomingEditorial
     ? { ...speechContext, episodeEditorial: incomingEditorial }
     : speechContext;
@@ -2252,14 +2279,16 @@ export async function runPersonaHandoff(queue: any, ctx: any, deps: HandoffDeps 
     //    On a programme show the greeting doubles as the episode's intro, so
     //    the producer's angle (planned before this runs — see the call sites)
     //    rides along; the standalone intro is then skipped (programme.ts).
+    //    Only while the plan was written from the preparation now in `ctx`: a
+    //    plan from before the episode's catalogue was ready invents its
+    //    subject, so that greeting goes without an angle (#2321).
     let greeting: string | null = null;
     try {
       greeting = await generateHandoffGreeting({
         personaIn, personaOut, showIn,
         sameHost: isSameHostAcknowledgement,
-        episodeAngle: (isBoundaryHandoff
-          ? session.getBoundaryProgramme()
-          : session.getProgramme())?.plan?.angle || null,
+        episodeAngle: opening.angle,
+        episodeSubject: opening.subject,
         context: promptContext, recap: incomingRecap, recentOpeners,
       });
     } catch (err: any) {

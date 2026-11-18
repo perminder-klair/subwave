@@ -44,14 +44,23 @@ async function readManifest(): Promise<RotationManifest | null> {
   return parsed;
 }
 
+// Each rename is bracketed in the stem cache's usage journal (both names), so
+// the stored cache size follows the move and a walk running meanwhile knows
+// to measure both dirs again (#2317).
 async function moveStemDirs(map: ReadonlyMap<string, string>): Promise<void> {
+  const writes = new stemCache.StemDirWrites();
   for (const [old, neu] of map) {
     try {
       const from = stemCache.dirFor(old);
       const to = stemCache.dirFor(neu);
-      if (existsSync(from) && !existsSync(to)) await rename(from, to);
+      if (existsSync(from) && !existsSync(to)) {
+        await writes.touch(path.basename(from));
+        await writes.touch(path.basename(to));
+        await rename(from, to);
+      }
     } catch { /* best-effort cache: a miss can be recomputed */ }
   }
+  await writes.settle().catch(() => {});
 }
 
 // A complete walk calls this before pruning. No filesystem write is needed to
@@ -91,6 +100,11 @@ export interface RotationApplyResult {
    *  the track half landed but the playlist half is deferred, so the recovery map
    *  is still durable and the caller must NOT run the playlist sync. */
   complete: boolean;
+}
+
+/** A rotation map is still waiting to be applied or acknowledged (the legacy manifest, or the journal). */
+export function rotationPending(): boolean {
+  return existsSync(manifestPath()) || db.pendingIdRotations().size > 0;
 }
 
 // Serialize boot, sentinel and exit callers through one owner. A rejection

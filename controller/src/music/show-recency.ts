@@ -1,7 +1,7 @@
 // No-repeat capacity for scheduled shows: the hard window clamped to the universe
 // a pick may draw from. One module so the agent and pool paths share one policy.
 
-import { effectiveNoRepeatWindow, exhaustiveNoRepeatWindow, trackKey } from './recency.js';
+import { effectiveNoRepeatWindow, episodeNoRepeatWindow, exhaustiveNoRepeatWindow, trackKey } from './recency.js';
 import { applyStrictLocks, type FilterTrack, type VocalMode, type YearRange } from './show-filter.js';
 import { excludesExplicit, withoutExplicit } from './explicit-policy.js';
 import { applyKnownTrackCeiling } from './track-duration.js';
@@ -34,10 +34,17 @@ export type ShowNoRepeatGuard = {
   // The show's own full-rotation window (#1612) rather than a clamped N. The pool
   // picker samples its show-playlist source differently when set; never re-derive.
   exhaustive: boolean;
-  // The airable rotation itself, present exactly when `exhaustive` is. Its
-  // window is measured over THIS set's own air history (hardRecentFor), never
-  // the station's: other shows' plays must not push its tracks out (#1919).
+  // The airable rotation itself: the strict anchor playlist or a prepared
+  // episode's full rotation (both with `exhaustive`), or an episode's current
+  // airing (with `airedSince`, #2320). Its window
+  // is measured over THIS set's own air history (hardRecentFor), never the
+  // station's: other shows' plays must not push its tracks out (#1919).
   rotation?: ShowTrack[];
+  // Count `rotation` only over airings at or after this instant (epoch ms): a
+  // prepared episode without full rotation holds what THIS airing has played
+  // and leaves earlier airings to the soft recency (#2320). Absent = the
+  // rotation's whole history.
+  airedSince?: number;
 };
 
 // When a track last went to air, epoch ms; null = never on record. Infinity =
@@ -134,6 +141,7 @@ export function showNoRepeatGuard(
     show,
     playlistTracks,
     episodeTracks = null,
+    episodeAiringStartedAt = null,
     excludedIds,
     resolvedGenres,
     minTrackSec,
@@ -143,6 +151,10 @@ export function showNoRepeatGuard(
     show: RecencyShow;
     playlistTracks: ShowTrack[] | null;
     episodeTracks?: ShowTrack[] | null;
+    // When the episode's current airing began (the preparation occurrence's
+    // startsAt). Null or absent = unknown, and the episode falls back to the
+    // configured N over the station's plays.
+    episodeAiringStartedAt?: number | null;
     excludedIds: Set<string> | null;
     // Free-text show genres already resolved onto library tags, so capacity and
     // eligibility agree.
@@ -157,8 +169,33 @@ export function showNoRepeatGuard(
   },
 ): ShowNoRepeatGuard {
   if (episodeTracks) {
+    // The episode outranks the anchor playlist, so its own tracks are the
+    // universe here. resolveArtistEpisodeSource has already applied the show's
+    // airable rule to them (excluded playlists, clean show, locks, length), so
+    // they are counted as given.
     const identities = new Set(episodeTracks.map(track => track.title ? `key:${trackKey(track)}` : `id:${track.id}`));
-    return { window: effectiveNoRepeatWindow(configuredN, identities.size), exhaustive: false };
+    // Full rotation over the episode (#2320): the show's switch means "every
+    // track once before a repeat", and during an episode the episode is the set
+    // that can be true of. Gated exactly as the playlist branch below gates it,
+    // so the switch stays a no-op without playlistStrict. Measured over the
+    // episode's OWN airings through `rotation`, as #1919 measures a playlist's.
+    if (show?.playlistStrict && show.playlistExhaust === true) {
+      const window = exhaustiveNoRepeatWindow(identities.size);
+      return window > 0 ? { window, exhaustive: true, rotation: episodeTracks } : { window, exhaustive: false };
+    }
+    // Otherwise no track twice in ONE airing: everything this airing has
+    // played is held, counted over the episode's own airings since it began,
+    // and a repeat across airings is left to the soft recency. The S-2 window
+    // caps it at S-1 held with the on-air and queued tracks, so one always
+    // survives. `noRepeatWindow: 0` still turns the guard off.
+    const window = episodeNoRepeatWindow(configuredN, identities.size) > 0 ? exhaustiveNoRepeatWindow(identities.size) : 0;
+    if (window > 0 && Number.isFinite(episodeAiringStartedAt)) {
+      return { window, exhaustive: false, rotation: episodeTracks, airedSince: episodeAiringStartedAt as number };
+    }
+    // No airing start known: the configured N under the episode's own S-2
+    // headroom, over the station's plays. effectiveNoRepeatWindow's ceiling and
+    // floor turned the guard off for any artist under 40 tracks (#2320).
+    return { window: episodeNoRepeatWindow(configuredN, identities.size), exhaustive: false };
   }
   // A soft anchor can leave the playlist, and an unresolved strict anchor has
   // no playlist lock at runtime. Both still need the library-wide window.
@@ -197,7 +234,7 @@ export function showNoRepeatGuard(
 // break came round again while others had not aired at all.
 export function hardRecentFor(guard: ShowNoRepeatGuard, history: NoRepeatHistory): { ids: Set<string>; keys: Set<string> } {
   return guard.rotation
-    ? rotationHardSet(guard.rotation, history.rotationAirTimes(), guard.window)
+    ? rotationHardSet(guard.rotation, history.rotationAirTimes(), guard.window, guard.airedSince)
     : history.recentlyPlayedByCount(guard.window);
 }
 
@@ -212,12 +249,15 @@ export function rotationHardSet(
   rotation: ShowTrack[],
   airTimeOf: AirTimeOf,
   window: number,
+  // Only airings at or after this instant count (an episode's current airing).
+  // On-air and queued stamp Infinity, so they always count.
+  since: number = -Infinity,
 ): { ids: Set<string>; keys: Set<string> } {
   const ids = new Set<string>();
   const keys = new Set<string>();
   if (!Number.isFinite(window) || window <= 0) return { ids, keys };
   const aired = rotationIdentities(rotation, airTimeOf)
-    .filter(identity => identity.at != null)
+    .filter(identity => identity.at != null && identity.at >= since)
     // Equal stamps compare as equal: Infinity - Infinity is NaN.
     .sort((a, b) => (a.at === b.at ? 0 : (b.at as number) - (a.at as number)));
   for (const identity of aired.slice(0, window + 1)) {

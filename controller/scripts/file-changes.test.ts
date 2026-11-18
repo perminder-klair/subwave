@@ -2,7 +2,7 @@
 // by updated_at, newest first, stopped at the floor (the previous walk's mark
 // less the margin, or on a first walk the library's oldest measurement), a
 // failed deep page kept as a partial answer that does not move the mark, and
-// a server that names itself as something else never asked.
+// a server that names itself as something else, or fails its ping, never asked.
 //
 // Run: npm test -- file-changes
 
@@ -21,6 +21,9 @@ const T0 = Date.parse('2026-10-28T16:00:00Z');
 let SONGS = Array.from({ length: 2_500 }, (_, i) => ({ id: `s${i}`, updatedAt: new Date(T0 - i * HOUR).toISOString() }));
 const BASE_SONGS = SONGS;
 let serverType = 'navidrome';
+let pingDown = false;
+let logins = 0;
+const pingClients: string[] = [];
 let failFromStart: number | null = null;
 // Every page full, for ever: a read that never reaches its floor.
 let endless = false;
@@ -30,10 +33,12 @@ function handler(req: IncomingMessage, res: ServerResponse) {
   const u = new URL(req.url ?? '/', 'http://x');
   res.setHeader('Content-Type', 'application/json');
   if (u.pathname === '/rest/ping' || u.pathname === '/rest/ping.view') {
+    pingClients.push(u.searchParams.get('c') ?? '');
+    if (pingDown) { res.statusCode = 503; res.end('{}'); return; }
     res.end(JSON.stringify({ 'subsonic-response': { status: 'ok', version: '1.16.1', type: serverType, serverVersion: '0.58', openSubsonic: true } }));
     return;
   }
-  if (u.pathname === '/auth/login') { res.end(JSON.stringify({ token: 'tok' })); return; }
+  if (u.pathname === '/auth/login') { logins += 1; res.end(JSON.stringify({ token: 'tok' })); return; }
   if (u.pathname === '/api/song') {
     assert.equal(req.headers['x-nd-authorization'], 'Bearer tok');
     assert.equal(u.searchParams.get('_sort'), 'updated_at');
@@ -72,6 +77,9 @@ const markFile = join(dir, 'navidrome-file-changes.json');
 after(async () => { server.close(); await removeTempDir(dir); });
 beforeEach(async () => {
   serverType = 'navidrome';
+  pingDown = false;
+  logins = 0;
+  pingClients.length = 0;
   failFromStart = null;
   endless = false;
   listCalls.length = 0;
@@ -137,6 +145,19 @@ test('a read that runs out of pages is partial, so the mark stays behind what it
   assert.ok(r);
   assert.equal(listCalls.length, 500, 'bounded');
   assert.equal(r.complete, false);
+});
+
+test('a failed ping ends the read before the login, so the password stays home', async () => {
+  pingDown = true;
+  assert.equal(await fc.changedFiles(new Date(T0 - 10 * HOUR).toISOString()), null);
+  assert.equal(logins, 0);
+  assert.deepEqual(listCalls, []);
+});
+
+test('the walk pings under the station\'s own client name, so it can\'t recreate a sub-wave-admin row', async () => {
+  assert.ok(await fc.changedFiles(new Date(T0 - 10 * HOUR).toISOString()));
+  assert.deepEqual(pingClients, ['sub-wave']);
+  assert.equal(logins, 1, 'a server that has just answered still gets its one login');
 });
 
 test('a failed first page, or another server, is no answer at all', async () => {

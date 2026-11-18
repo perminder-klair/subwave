@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { resolveActiveStationDir } from './stations/resolve.js';
 import { migrateNavidromeProfiles } from './stations/navidrome-migration.js';
-import { envEnum, envFloat, envInt, envStr, envUrl } from './util/env.js';
+import { envBool, envEnum, envFloat, envInt, envStr, envUrl } from './util/env.js';
 
 // Shared state ROOT. Compose passes STATE_DIR=/var/sub-wave; native dev falls
 // back to the repo-local state/ dir.
@@ -91,6 +91,19 @@ export const config = {
     // single-flight (one line-protocol worker cannot multiplex).
     concurrency: envInt('ANALYZE_CONCURRENCY', 1, { min: 1, max: 8 }),
     requestTimeoutMs: envInt('ANALYZE_REQUEST_TIMEOUT_MS', 120_000),
+    // A request carrying the whole-file facets (loudness v2, edges) reads the
+    // whole file, so it gets its own deadline. Keep it 60 s above the
+    // analyzer's ANALYZE_WHOLE_FILE_TIMEOUT_S (30-7200 s, default 900) so the
+    // analyzer reports its own timeout first; hence 90 s to 7260 s.
+    wholeFileTimeoutMs: envInt('ANALYZE_WHOLE_FILE_TIMEOUT_MS', 960_000, { min: 90_000, max: 7_260_000 }),
+    // In-flight jobs for a pass that plans ONLY whole-file facets: the sidecar
+    // runs those in their own lane (no model, one CPU thread each), so they can
+    // go wider than ANALYZE_CONCURRENCY. Capped by the sidecar's own figure.
+    wholeFileConcurrency: envInt('ANALYZE_WHOLE_FILE_CONCURRENCY', 4, { min: 1, max: 32 }),
+    // Opt-in backfill of the whole-file facets on every regular analysis run
+    // (off = upgrade byte-identical). Without it they run only when asked for
+    // (`npm run analyze -- --facets loudness,edges`).
+    wholeFile: envBool('ANALYZE_WHOLE_FILE', false),
     // Shorter deadline for transition renders: they run inside the pair-drain
     // window and must lose the race to the drain's fallback crossfade.
     renderTimeoutMs: envInt('ANALYZE_RENDER_TIMEOUT_MS', 60_000),
@@ -107,6 +120,12 @@ export const config = {
     voice: envStr('KOKORO_VOICE', 'bf_isabella'),   // British female, BBC-ish
     lang: envStr('KOKORO_LANG', ''),
     speed: envFloat('KOKORO_SPEED', TTS_SPEED, { min: 0.1 }),
+    // A shared Kokoro server to render on instead of the local worker (hosted
+    // boxes run one per box). Set => this engine never spawns its Python child
+    // or loads the model; voices, language and speed are unchanged. Empty =>
+    // local worker, as before. See audio/kokoro.ts. A trailing slash is
+    // dropped, since the routes are appended as `${url}/v1/...`.
+    url: envUrl('KOKORO_URL', '').replace(/\/+$/, ''),
   },
   // Chatterbox is opt-in (`--build-arg WITH_CHATTERBOX=1`). isAvailable() does an
   // existsSync on `python`, so an image built without it falls back to Piper.

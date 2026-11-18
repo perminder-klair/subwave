@@ -174,7 +174,8 @@ when a skill or feature they enable needs them.
 **Language models.** [Ollama](https://ollama.com), [Anthropic](https://www.anthropic.com),
 [OpenAI](https://openai.com), [Google Gemini](https://ai.google.dev),
 [DeepSeek](https://www.deepseek.com), [OpenRouter](https://openrouter.ai),
-[Requesty](https://www.requesty.ai), [Vercel AI Gateway](https://vercel.com/ai-gateway),
+[Requesty](https://www.requesty.ai), [Cheaper Inference](https://cheaperinference.com),
+[Vercel AI Gateway](https://vercel.com/ai-gateway),
 and any OpenAI-compatible server.
 
 **Cloud speech.** [OpenAI](https://platform.openai.com/docs/guides/text-to-speech),
@@ -190,7 +191,9 @@ and any OpenAI-compatible server.
 **Search and reference.** [Brave Search](https://brave.com/search/api/),
 [Tavily](https://tavily.com), [DuckDuckGo](https://duckduckgo.com),
 [Keenable](https://keenable.ai), [SearXNG](https://github.com/searxng/searxng),
-[Firecrawl](https://www.firecrawl.dev), and [Wikimedia](https://api.wikimedia.org).
+[Firecrawl](https://www.firecrawl.dev), [Outcrawl](https://outcrawl.ai),
+[Parallel](https://parallel.ai), [SpecStream](https://specstream.ai), and
+[Wikimedia](https://api.wikimedia.org).
 
 **Edge and distribution.** [Cloudflare](https://www.cloudflare.com) for TLS in
 the documented deployment and Workers for the CLI installer,
@@ -207,7 +210,7 @@ the documented deployment and Workers for the CLI installer,
 | `eslint-config-next`, `eslint-config-expo`, `eslint-plugin-react`, `eslint-plugin-better-tailwindcss` | Framework lint rules | MIT |
 | [DefinitelyTyped](https://github.com/DefinitelyTyped/DefinitelyTyped) (`@types/*`) | Type definitions | MIT |
 | `babel-preset-expo` | App build transform | MIT |
-| [patch-package](https://github.com/ds300/patch-package) | Patches to app dependencies (`app/patches/`) | MIT |
+| [patch-package](https://github.com/ds300/patch-package) | Patches to app dependencies (`patches/` in getsubwave/app) | MIT |
 | [Playwright](https://playwright.dev) | Browser checks in `web/scripts/verify-*.py` | Apache-2.0 |
 | [deepsec](https://www.npmjs.com/package/deepsec) | Security scanning (`.deepsec/`) | Apache-2.0 |
 | [GitHub Actions](https://github.com/features/actions): `actions/checkout`, `actions/setup-node`, `actions/upload-artifact`, `actions/download-artifact` | CI | MIT |

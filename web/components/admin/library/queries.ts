@@ -40,6 +40,11 @@ export const libraryKeys = {
   // The curatable genre vocabulary with its consolidation rules (#1577). Unlike
   // `genres`, it excludes Navidrome's own index: only what the mirror holds.
   scenes: () => ['library', 'scenes'] as const,
+  // Era review: the suspect-album listing + summary.
+  era: () => ['library', 'era'] as const,
+  // One album's tracks in the Era tab's year editor; under `era`, so a
+  // decision's invalidation of the listing refreshes it too.
+  eraAlbum: (albumKey: string) => ['library', 'era', 'album', albumKey] as const,
   // What a staged merge would orphan (#1593). Keyed on the merge itself.
   sceneReferences: (from: readonly string[], to: string) =>
     ['library', 'scene-references', [...from].sort().join('\u0000'), to] as const,
@@ -104,6 +109,29 @@ export function applyEraYearEvent(qc: QueryClient, ev: {
     originalYear: ev.originalYear,
     originalYearSource: ev.originalYear == null ? null : 'manual',
   }));
+
+  // The Era tab's per-album track lists show the same year. Without this the
+  // line read its OLD year between the save and the refetch: the typed draft
+  // is cleared on success, so the field fell back to its placeholder (the
+  // album's year) and looked as if that had been saved. A clear is left to the
+  // refetch: the year the lookups give back is not known here.
+  if (ev.originalYear == null) return;
+  const year = ev.originalYear;
+  qc.setQueriesData<{ tracks: EraAlbumTrack[] }>({ queryKey: [...libraryKeys.era(), 'album'] }, prev => (
+    prev?.tracks
+      ? { ...prev, tracks: prev.tracks.map(t => (!trackIds.has(t.id) ? t : {
+          ...t, originalYear: year, originalYearSource: 'manual', yearState: 'resolved',
+        })) }
+      : prev
+  ));
+}
+
+/** The fields of an Era album track line that a year save touches. */
+interface EraAlbumTrack {
+  id: string;
+  originalYear: number | null;
+  originalYearSource: string | null;
+  yearState?: string;
 }
 
 /**

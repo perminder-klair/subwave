@@ -2,7 +2,7 @@ import { prepareEpisodeContext, showPreparation, onPreparationChange, preparatio
 import { autoPlaylistShowKey } from './auto-playlist-show.js';
 // Scheduler: the auto-playlist refresh, the per-minute talk tick over
 // talk-scheduler.ts's slot table (every spoken segment the station produces on
-// its own, plus the unconditional :00 session roll), and the maintenance crons.
+// its own, plus the unconditional station-hour session roll), and the maintenance crons.
 
 import cron, { type ScheduledTask } from 'node-cron';
 import { config } from '../config.js';
@@ -17,12 +17,13 @@ import * as likes from './likes.js';
 import { onCacheChange } from '../settings/store.js';
 import { applyKnownTrackCeiling } from '../music/track-duration.js';
 import * as settings from '../settings.js';
+import { serialSteer } from '../music/steer.js';
 import { jinglePlacement, jingleRotateOwner, rotateJingleDue } from './jingle-rotate.js';
 import { normGenre, genreMatches, genreResolutionWarningOnce, inYearRange, preferEnergy, preferEnergyStrict, preferMood, applyStrictLocks, hasEraBound, eraSpan, type VocalMode } from '../music/show-filter.js';
 import { freshnessBiasedOrder } from '../music/airing.js';
 import { recencyWindowsForLibrary } from '../music/recency.js';
 import { resolveShowPlaylistPool, resolveExcludedPlaylistIds } from '../music/show-playlist.js';
-import { explicitGate } from '../music/explicit-policy.js';
+import { explicitGate, withoutExplicit } from '../music/explicit-policy.js';
 import { allowsMoodPlaylistDiscovery } from '../music/discovery-policy.js';
 import { getFullContext } from '../context.js';
 import { queue } from './queue.js';
@@ -36,6 +37,7 @@ import { autoPlaylistShowLabel, createShowBuildTracker } from './auto-playlist-s
 import { createAutoPlaylistRefresh, type RefreshResult } from './auto-playlist-refresh.js';
 import { coastContents, coastRepeats, HANDOVER_REASON_TEXT, onCoastHandover, type CoastContents, type HandoverReason } from './coast-handover.js';
 import { isIdle } from './stream-idle.js';
+import { noteCoastReloaded, noteCoastWritten } from './off-coast-policy.js';
 import { autoPlaylistRefreshCron, createAutoPlaylistRefreshRunner } from './auto-playlist-maintenance.js';
 import { reloadAutoPlaylist } from './liquidsoap-control.js';
 import * as session from './session.js';
@@ -47,22 +49,26 @@ import { cleanupPauseTalkSilence } from '../audio/wav-silence.js';
 import { warmHeavy } from '../audio/ttsHeavyClient.js';
 import { shouldFire } from './dj-gate.js';
 import { speakClockAllowed, stationIdDaypartStamp } from './clock-policy.js';
-import { talkOnlyBetweenTracks, withTalkAir } from './talk-air.js';
-import { talkTickPlan, type TalkKind, type TalkPlan } from './talk-scheduler.js';
+import { scheduledTalkAir, talkOnlyBetweenTracks, withTalkAir } from './talk-air.js';
+import { mayReplacePendingTalk, type PendingTalk } from './queue/kinds.js';
+import { talkTickPlan, type TalkAir, type TalkKind, type TalkPlan } from './talk-scheduler.js';
 import { djCallsAllowed } from './listeners.js';
 import { autoVoiceAllowed } from './voice-policy.js';
 import { optionalSegmentsAllowed } from './dj-budget.js';
 import { agenticTick, skillCatalog, runCapability } from '../skills/_agent.js';
 import { loadedCapabilities } from '../skills/loader.js';
 import { skillEligible } from '../skills/eligibility.js';
-import { getStationTimezone, onStationTimezoneChange } from '../time.js';
+import { getStationTimezone, onStationTimezoneChange, stationHourKey, stationHourStartProcessMinute, stationUtcOffsetMinutes } from '../time.js';
+import { sessionRollDue, stationPosition, type StationPosition } from './session-roll-policy.js';
 import { withTrace, pruneOldEvents } from '../observability/events.js';
 import * as archives from './archives.js';
 import * as stemCacheStore from '../music/stem-cache.js';
+import * as pickStems from './pick-stems.js';
 import * as stemBlendStore from './stem-blend.js';
 import * as doctor from '../doctor.js';
 import * as backup from '../backup/scheduled.js';
-import { autoEnableRealPath } from '../music/navidrome-players.js';
+import { scheduledTagTick } from './tag-schedule.js';
+import { autoEnableRealPath, realPathOptedIn } from '../music/navidrome-players.js';
 import { onLibraryMountLost, proveLibraryMount } from '../music/library-mount.js';
 
 // take() hard-stops at the target, so TARGET_POOL must exceed the sum of the
@@ -190,7 +196,22 @@ const autoPlaylistPolicyKey = () => JSON.stringify({
 let publishedAutoPlaylistPolicy = autoPlaylistPolicyKey();
 onPreparationChange(() => {
   void refreshAutoPlaylist({ automatic: true }).catch(err => queue.log('error', `Episode fallback refresh failed: ${err.message}`));
+  void replanAfterPreparation().catch(err => queue.log('error', `Programme replan after preparation failed: ${err.message}`));
 });
+
+// A preparation that settles after its episode was left pending (#2321), ready
+// or out of retries, plans now, not at the next pick: the live episode, and an
+// incoming one already armed on the boundary record (prepared at the record's
+// look-ahead moment, as the pick cycle does). Both are idempotent; an unchanged
+// subject buys nothing. `deps` is the plan generator seam for tests.
+export async function replanAfterPreparation(deps: Parameters<typeof programme.ensurePlan>[2] = {}) {
+  const live = await prepareEpisodeContext(await getFullContext());
+  await programme.ensurePlan(live, undefined, deps);
+  const pending = session.pendingHandoff();
+  const at = pending && 'incomingPersonaId' in pending ? session.boundaryHandoffContextAt() : null;
+  if (!at) return;
+  await programme.prepareBoundaryPlan(await prepareEpisodeContext(await getFullContext(at)), deps);
+}
 onCacheChange(() => {
   const key = autoPlaylistPolicyKey();
   if (key === publishedAutoPlaylistPolicy) return;
@@ -288,11 +309,12 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
   // Full rotation (#1612), decided by the same guard the pick paths read, so
   // the coast continues the rotation they are walking instead of sampling round
   // it (#1919). Only `rotation` is read here; the window sizes are the pickers'.
-  const rotation = strictPlaylist
+  // A prepared episode's coast is its own source (below), so the episode's
+  // rotation the pickers walk (#2320) never reaches it.
+  const rotation = strictPlaylist && !episodeSource
     ? showNoRepeatGuard(0, 0, {
         show,
         playlistTracks: playlistPool!.tracks,
-        episodeTracks: episodeSource?.tracks,
         excludedIds,
         resolvedGenres: genreNames,
         minTrackSec: minDurationSec,
@@ -514,6 +536,33 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
   // back empty (see 5).
   if (!pool.length && listenerStarred.length) take('starred', enforce(listenerStarred), TARGET_POOL);
 
+  // Rested fallback (a small library): when every track has aired inside the
+  // recency window, every source above comes back empty and the mixer airs the
+  // emergency loop until someone queues a track by hand. Air the longest-rested
+  // tracks instead, by when each last went to air (queue.rotationAirTimes: the
+  // durable plays index under this process's own, with the on-air track and
+  // everything queued stamped as just spent). A small library is a closed
+  // catalogue, like a full rotation, so it takes the rotation's coast rule
+  // (music/show-recency.ts rotationCoast): the longest-waiting half, never what
+  // is on air or queued, topped up to an hour of audio from the next longest.
+  // Liquidsoap randomizes the file, so the set is what counts, and the most
+  // recent plays stay out of it. Recency is ignored; the clean show, length
+  // ceiling, dedup and artist cap still apply. A strict playlist keeps its own
+  // floor below.
+  if (!pool.length && !strictPlaylist) {
+    try {
+      // Filtered as take() filters, before choosing, so what is chosen can air.
+      const eligible = clean.pass(applyKnownTrackCeiling(await subsonic.getRandomSongs({ size: TARGET_POOL * 2 }), selectionMaxSec));
+      const rested = rotationCoast(shuffle(eligible), queue.rotationAirTimes(), { cap: TARGET_POOL });
+      take('rested', rested, TARGET_POOL, { ignoreRecency: true });
+      if (pool.length) {
+        queue.log('scheduler', `Auto-playlist: every track aired inside the recency window — repeating the ${pool.length} longest-rested (the most recent plays and the on-air track held back) instead of the emergency loop`);
+      }
+    } catch (err) {
+      queue.log('error', `Rested fallback failed: ${err.message}`);
+    }
+  }
+
   }
 
   // A clean show with nothing to air, on every branch above: an episode has no
@@ -534,10 +583,25 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
   }
 
   // Strict playlist: drop every off-playlist track, but never-starve to the
-  // unfiltered pool if not one survived (dead-air guard).
+  // unfiltered pool if not one survived (dead-air guard). That fall-through
+  // airs off-playlist tracks under a strict show's name, so it says so, loudly
+  // (#2213): it happens when every pinned track is held back by another rule
+  // (a clean show, the length limits) while other sources still have tracks.
+  let strictUnenforced = false;
   if (strictPlaylist) {
     const inPl = pool.filter((t: any) => t?.id && playlistPool!.ids.has(t.id));
     if (inPl.length) replacePool(inPl);
+    else if (pool.length) {
+      strictUnenforced = true;
+      // What held the pinned tracks back: the two rules a source applies
+      // before take() (the clean show and the hard maximum length).
+      const pinned = playlistPool!.tracks;
+      const heldBy = [
+        clean.on ? `${pinned.length - withoutExplicit(pinned, true).length} tagged explicit on a clean show` : '',
+        selectionMaxSec ? `${pinned.length - applyKnownTrackCeiling(pinned, selectionMaxSec).length} over the ${selectionMaxSec}s maximum length` : '',
+      ].filter(Boolean).join(', ');
+      queue.log('scheduler', `Auto-playlist: STRICT playlist for show "${show?.name}" left nothing that may air (${pinned.length} pinned${heldBy ? `: ${heldBy}` : ''}) — coasting on ${pool.length} off-playlist track(s) so the station stays on air; the strict lock is NOT enforced until the show's rules let a pinned track through`);
+    }
   }
 
   // Strict music filters on the FINAL pool: enforce() only hard-drops
@@ -617,12 +681,16 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
   // Small IPC file: synchronous atomic commit leaves no policy-change gap
   // between the freshness check and rename. Catalogue work stays asynchronous.
   writeFileAtomicSync(config.liquidsoap.autoPlaylist, lines.join('\n'));
-  coastOnDisk = coastContents(pool, builtAt);
+  const written = coastContents(pool, builtAt);
+  coastOnDisk = written;
+  // What an untracked play is checked against (#2213), stamped with the write.
+  noteCoastWritten(written);
   // Reload over telnet; radio.liq's file watch only re-reads a write this
   // reload never reached. Off air, radio.liq replaces the playlist, dropping a
   // track the old one had already prepared; best-effort, so an unreachable
   // mixer never fails the refresh.
   const reloaded = await reloadAutoPlaylist();
+  noteCoastReloaded(written, reloaded);
   if (!reloaded) queue.log('scheduler', 'Auto-playlist written but the mixer did not confirm the reload — the file watch re-reads it; an off-air playlist is replaced on the next refresh');
 
   // Surface a silently-degraded strict genre and a too-thin strict pool (#629).
@@ -648,7 +716,7 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
       (showGenres.length ? ` genre=${(genreNames.length ? genreNames : showGenres).join(',')}` : '') +
       (eraTag ? ` year=${eraTag}` : '') +
       (showEnergies.length ? ` energy=${showEnergies.join(',')}` : '') +
-      (hasPlaylist ? ` playlist=${playlistTag} (${strictPlaylist ? 'strict' : 'soft'})` : '') +
+      (hasPlaylist ? ` playlist=${playlistTag} (${strictPlaylist ? (strictUnenforced ? 'strict, unenforced' : 'strict') : 'soft'})` : '') +
       (clean.on ? ` clean=${clean.held().length} held back` : '')
     : '';
   queue.log('scheduler',
@@ -708,6 +776,10 @@ export async function rollSessionNow(
   { airHandoff = true, manual: _manual = false, reason = 'session roll' }:
     { airHandoff?: boolean; manual?: boolean; reason?: string } = {},
 ) {
+  // Whoever rolls, the talk tick now knows the station is rolled for this
+  // hour and show, so a takeover route's roll is not repeated on the next tick
+  // (session-roll-policy.ts).
+  markRolledPosition();
   // auto.m3u follows the show too (#1111). Fire-and-forget: holding the audible
   // mic-pass behind Navidrome I/O would duck the outro it must land on. Ahead
   // of the roll (it needs no ctx) so a failed roll can't leave the previous
@@ -864,10 +936,10 @@ async function runSegmentTick() {
   });
 }
 
-// Programme beats. Placement is a STATION-clock fact and station zones sit at
-// :30/:45 offsets, so the talk tick samples the row every 5 minutes and
-// dispatches on programme.dueBeat(); beat flags make repeat ticks no-ops. The
-// intro rides the session-settled hook. Gating lives in programme.ts.
+// Programme beats. Placement is a STATION-clock fact: the talk tick samples
+// the row every fifth station minute and dispatches on programme.dueBeat();
+// beat flags make repeat ticks no-ops. The intro rides the session-settled
+// hook. Gating lives in programme.ts.
 //
 // Gate-free manual runners (/dj/segment). Intro/outro re-mark their beat so the
 // autonomous path doesn't re-open or re-close the show, but only once it aired:
@@ -945,14 +1017,39 @@ export async function runStationId({ atNextTrack = false, automatic = false } = 
 const talkFired: Partial<Record<TalkKind, string | null>> = {};
 const talkLogged: Partial<Record<TalkKind, string | null>> = {};
 
-// The :00 session roll's outcome. The hourly row's window runs to :09, so a
-// postponed check resolves on a tick where no roll happened but still needs the
-// roll's result as a gate (#310). Keyed by hour so it can't gate the next one.
+// The station-hour session roll's outcome. The hourly row's window runs to
+// :09, so a postponed check resolves on a tick where no roll happened but
+// still needs the roll's result as a gate (#310). Keyed by STATION hour, like
+// the roll itself (#2234), so it can't gate the next one; the row's window is
+// on station minutes too (#2254), so it opens on the roll's own :00. A
+// mid-hour roll (a schedule edit, a takeover expiring) replaces the hour's
+// entry.
 type SessionRoll = Awaited<ReturnType<typeof rollSessionNow>>;
 let lastRoll: { hourKey: string; roll: SessionRoll } | null = null;
 
-const hourKey = (now: Date) =>
-  `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}-${now.getHours()}`;
+// Where the station was when the tick last looked, or when anything last
+// rolled: its station hour (with the zone's UTC offset) and its active show.
+// Seeded by startScheduler, not by the first tick (session-roll-policy.ts says
+// why).
+let lastTickHourKey: string | null = null;
+let lastTickUtcOffset = 0;
+let lastTickShowId: string | null = null;
+
+function currentStationPosition(now = new Date()): StationPosition {
+  return stationPosition(stationHourKey(now), stationUtcOffsetMinutes(now), settings.resolveActiveShow(now));
+}
+
+function lastTickPosition(): StationPosition | null {
+  return lastTickHourKey === null
+    ? null
+    : { hourKey: lastTickHourKey, utcOffset: lastTickUtcOffset, showId: lastTickShowId };
+}
+
+function markRolledPosition(position = currentStationPosition()) {
+  lastTickHourKey = position.hourKey;
+  lastTickUtcOffset = position.utcOffset;
+  lastTickShowId = position.showId;
+}
 
 // Whether a row due this minute may fire. The live gates, still owned by their
 // own modules; resolved lazily by the planner for open, unfired rows only.
@@ -1092,20 +1189,25 @@ const TALK_FAILURE_LABEL: Record<TalkKind, (slot: string) => string> = {
 async function talkTick() {
   const now = new Date();
 
-  // :00 is the natural show boundary for STATE. UNCONDITIONAL and deliberately
-  // outside the table — not a talk action, so a muted, empty or over-budget
-  // station must still roll (#1500 finding 3). It is NOT the boundary for the
-  // AIR: airHandoff false leaves the mic-pass for the next track boundary.
-  if (now.getMinutes() === 0) {
+  // A new station hour, or a new active show, is the natural boundary for
+  // STATE. UNCONDITIONAL and deliberately outside the table — not a talk
+  // action, so a muted, empty or over-budget station must still roll (#1500
+  // finding 3). It is NOT the boundary for the AIR: airHandoff false leaves the
+  // mic-pass for the next track boundary. The STATION's hour, where the grid
+  // changes, not the process's (#2234), and judged as "moved since the last
+  // tick" rather than "minute 0" (#2254, session-roll-policy.ts).
+  const position = currentStationPosition(now);
+  if (sessionRollDue(lastTickPosition(), position)) {
+    markRolledPosition(position);
     // rollSessionNow traps each step, but a rejection here must not take the
     // minute every scheduled segment shares — or the process — with it.
     const roll = await rollSessionNow({ airHandoff: false, reason: 'scheduled boundary' }).catch(err => {
       queue.log('error', `Session roll failed: ${err.message}`);
       return null;
     });
-    lastRoll = roll ? { hourKey: hourKey(now), roll } : null;
+    lastRoll = roll ? { hourKey: stationHourKey(now), roll } : null;
   }
-  const rolled = lastRoll?.hourKey === hourKey(now) ? lastRoll.roll : null;
+  const rolled = lastRoll?.hourKey === stationHourKey(now) ? lastRoll.roll : null;
 
   // runTalkSlot traps the segments themselves; this covers the planning.
   let plans: TalkPlan[] = [];
@@ -1113,7 +1215,10 @@ async function talkTick() {
     plans = talkTickPlan({
       now,
       lastTalkBreakAt: queue.getLastTalkBreakAt(),
-      pendingTalk: queue.pendingVoiceTalk(),
+      // A cron fire generating for the boundary has no row and so no
+      // _pendingVoice yet; count it as pending speech, or this tick's rows fire
+      // into a boundary the cron is about to take and the queue declines them.
+      pendingTalk: queue.pendingVoiceTalk() ?? skillCronTalkClaim(),
       eligible: kind => talkEligible(kind, now, rolled),
       externalSlot: kind => (kind === 'programme' ? programme.dueBeat(now) : null),
       // Read once per tick, not per row: the pending-clip hold is only coherent
@@ -1181,31 +1286,7 @@ async function cleanup() {
   } catch (err) {
     queue.log('error', `Archive retention failed: ${err.message}`);
   }
-  // Stem cache sweep — keep the per-track Demucs stem windows inside the
-  // operator's byte budget (feature: stem-blend transitions), evicting by the
-  // music/stem-priority.ts ranking rather than by age. The analysis pass
-  // settles after itself too. Most hours this reads the usage snapshot and
-  // walks nothing (stem-cache.ts); a full walk runs at least once a day, which
-  // is what catches dirs added or removed by hand.
-  try {
-    const { removed, freedBytes, failedDirs, overBudgetBytes, offline } = await stemCacheStore.sweep();
-    if (offline) queue.log('error', offline);
-    if (removed) {
-      queue.log('scheduler',
-        `Stem cache: evicted ${removed} track dir(s) (${Math.round(freedBytes / 1_000_000)} MB freed)`);
-    }
-    // A sweep that couldn't reach the budget is an operator problem, not a
-    // no-op (#1257) — say so every hour it persists. Usual cause: the
-    // controller can't delete what the analyzer wrote (state/stems ownership).
-    if (overBudgetBytes > 0) {
-      const budgetGb = settings.get()?.audio?.stemCacheGb ?? 15;
-      queue.log('error',
-        `Stem cache: still ${(overBudgetBytes / 1024 ** 3).toFixed(1)} GB over its ${budgetGb} GB budget after the sweep` +
-        (failedDirs ? ` — ${failedDirs} dir delete(s) failed; check ownership/permissions on state/stems` : ''));
-    }
-  } catch (err) {
-    queue.log('error', `Stem cache sweep failed: ${err.message}`);
-  }
+  await stemCacheSweepTick();
   // Rendered transition clips are single-use, so anything over an hour old is
   // an orphan — except clips still queued for a seam that hasn't aired, which
   // can legitimately out-age the window.
@@ -1224,6 +1305,38 @@ async function nightlyDoctor() {
     await withTrace({ kind: 'doctor' }, () => doctor.runDoctor());
   } catch (err) {
     queue.log('error', `Nightly health check failed: ${err.message}`);
+  }
+}
+
+// Stem cache sweep — keep the per-track Demucs stem windows inside the
+// operator's byte budget (feature: stem-blend transitions), evicting by the
+// music/stem-priority.ts ranking rather than by age. The analysis pass
+// settles after itself too. Most hours this reads the usage snapshot and
+// walks nothing (stem-cache.ts); a full walk runs at least once a day, which
+// is what catches dirs added or removed by hand. With pick-time stems on, the
+// dirs of tracks still in the queue go last (pick-stems-policy.ts
+// sweepKeepLast); off, there is no set and the order is the ranking alone.
+// Run by the hourly cleanup; exported for scripts/pick-stems.test.ts.
+export async function stemCacheSweepTick() {
+  try {
+    const keepLast = pickStems.sweepKeepLast(queue.upcoming.map(item => item?.track?.id));
+    const { removed, freedBytes, failedDirs, overBudgetBytes, offline } = await stemCacheStore.sweep(undefined, { keepLast });
+    if (offline) queue.log('error', offline);
+    if (removed) {
+      queue.log('scheduler',
+        `Stem cache: evicted ${removed} track dir(s) (${Math.round(freedBytes / 1_000_000)} MB freed)`);
+    }
+    // A sweep that couldn't reach the budget is an operator problem, not a
+    // no-op (#1257) — say so every hour it persists. Usual cause: the
+    // controller can't delete what the analyzer wrote (state/stems ownership).
+    if (overBudgetBytes > 0) {
+      const budgetGb = settings.get()?.audio?.stemCacheGb ?? 15;
+      queue.log('error',
+        `Stem cache: still ${(overBudgetBytes / 1024 ** 3).toFixed(1)} GB over its ${budgetGb} GB budget after the sweep` +
+        (failedDirs ? ` — ${failedDirs} dir delete(s) failed; check ownership/permissions on state/stems` : ''));
+    }
+  } catch (err) {
+    queue.log('error', `Stem cache sweep failed: ${err.message}`);
   }
 }
 
@@ -1285,6 +1398,26 @@ async function scheduledBackupTick() {
 // Rebuilt on every syncSkillCrons() call.
 const skillCronTasks = new Map<string, ScheduledTask>();
 
+// One cron fire at a time once fires are placed between tracks: the skill that
+// owns the boundary and when it claimed it. A cron timer has no row in the slot
+// table, so nothing in the planner makes two of them take turns for the one
+// boundary; this does. A fire checks and sets it in one synchronous step before
+// generation, and talkTick lifts it into the same hold a rendered clip gets
+// (skillCronTalkClaim), so a row is not fired into a boundary the cron is about
+// to take.
+let skillCronTalkInFlight: { kind: string; at: number } | null = null;
+
+// The claim as the planner's pending speech, or null. `queuedAt` is when the
+// claim was TAKEN, not this tick, so the 20-minute pending bound
+// (PENDING_VOICE_MAX_AGE_MS) applies to a claim exactly as it does to a
+// rendered clip: a fire stuck generating stops holding rows once it is older
+// than any clip would be allowed to wait.
+export function skillCronTalkClaim(): PendingTalk | null {
+  return skillCronTalkInFlight
+    ? { kind: skillCronTalkInFlight.kind, queuedAt: skillCronTalkInFlight.at, generating: true }
+    : null;
+}
+
 // Gates injected rather than read live so the rule can be pinned
 // (scripts/skill-cron-gates.test.ts).
 export interface SkillCronGates {
@@ -1307,6 +1440,63 @@ export function skillCronStandDownReason(gates: SkillCronGates): string | null {
 
 export function skillCronAllowed(gates: SkillCronGates): boolean {
   return skillCronStandDownReason(gates) === null;
+}
+
+// Why a cron fire must stand down BEFORE generating once its speech is placed
+// between tracks, or null when it may take the boundary. A cron timer has no
+// row in the slot table, so the planner's pending-clip hold does not cover it:
+// without this, a fire that finishes while a rendered segment waits drops that
+// segment in holdForNextTrack (#2259). State is injected rather than read live
+// so the rule can be pinned here, the same split as the gates above.
+export function skillCronTalkStandDownReason(
+  kind: string,
+  air: TalkAir,
+  generating: string | null,
+  pending: PendingTalk | null,
+  nowMs: number,
+): string | null {
+  if (air !== 'next-track') return null;
+  if (generating) return `skill "${generating}" is generating for the boundary`;
+  if (pending && !mayReplacePendingTalk(kind, pending, nowMs)) {
+    return `${pending.kind} is already waiting for the next track boundary`;
+  }
+  return null;
+}
+
+// The part of a cron fire after its gates: claim the boundary, then speak at
+// the placement the fire read. Exported so the placement can be pinned
+// (scripts/skill-cron-placement.test.ts); syncSkillCrons is its only caller.
+//
+// With the switch ON, between-tracks placement puts the fire in competition
+// with the slot table for the one boundary, and a cron timer has no row to be
+// held by. It claims the boundary synchronously, immediately before generation,
+// so a second fire stands down instead of rendering a clip the queue would
+// decline, and so talkTick can hold its rows while this one generates. It then
+// enters the 'next-track' scope itself, because announce()/announceExchange()
+// read the scope and without it a cron skill airs immediately (#2259).
+//
+// With the switch OFF none of that runs: no claim and NO SCOPE. A scope is also
+// what suppressScheduledSpeechDuringHandoff and the queue's one-boundary rule
+// key on, so entering one for 'immediate' would change a default station's cron
+// speech (dropped during a show handoff) under a switch it never turned on.
+export async function speakSkillCron(kind: string, air: TalkAir, speak: () => Promise<void>): Promise<void> {
+  if (air !== 'next-track') {
+    await speak();
+    return;
+  }
+  const refusal = skillCronTalkStandDownReason(
+    kind, air, skillCronTalkInFlight?.kind ?? null, queue.pendingVoiceTalk(), Date.now(),
+  );
+  if (refusal) {
+    queue.log('scheduler', `[skills] cron "${kind}" stood down — ${refusal}`);
+    return;
+  }
+  skillCronTalkInFlight = { kind, at: Date.now() };
+  try {
+    await withTalkAir(air, speak);
+  } finally {
+    skillCronTalkInFlight = null;
+  }
 }
 
 export function skillCronEligibility(cap: any, enabled: Record<string, boolean | undefined>, host: any, guests: any[], preparationSkill: string | null = null) {
@@ -1335,36 +1525,41 @@ export function syncSkillCrons() {
     }
     const tz = getStationTimezone();
     const task = cron.schedule(expr, async () => {
-      const gated = skillCronStandDownReason({
-        voiceAllowed: autoVoiceAllowed(),      // station voice is off — music only
-        programmeOnAir: programme.onAir(),      // a programme episode owns its talk moments
-        djCallsAllowed: djCallsAllowed(),        // nobody listening
-        optionalSegmentsAllowed: optionalSegmentsAllowed(), // over the daily token budget
-      });
-      if (gated) {
-        queue.log('scheduler', `[skills] cron "${cap.kind}" stood down — ${gated}`);
-        return;
-      }
-      // Same enabled + persona-allowlist rules the autonomous director applies,
-      // logged rather than silent — a stood-down cron leaves no other trace.
-      const now = new Date();
-      const { host, guests } = settings.getOnAirRoster(now);
-      const eligible = skillCronEligibility(
-        cap,
-        settings.get().skills?.enabled || {},
-        host,
-        guests,
-        preparationSkillAt(await getFullContext()),
-      );
-      if (!eligible.allowed) {
-        queue.log('scheduler', `[skills] cron "${cap.kind}" stood down — ${eligible.reason}`);
-        return;
-      }
+      // Placement is read once, at the fire: speakSkillCron's boundary claim
+      // and the scope announce() will see must agree.
+      const air = scheduledTalkAir();
       try {
-        await withTrace({ kind: 'segment' }, async () => {
-          const ctx = await prepareEpisodeContext(await getFullContext());
-          await runCapability(cap.kind, ctx, { automaticHostSpeech: true });
+        const gated = skillCronStandDownReason({
+          voiceAllowed: autoVoiceAllowed(),      // station voice is off — music only
+          programmeOnAir: programme.onAir(),      // a programme episode owns its talk moments
+          djCallsAllowed: djCallsAllowed(),        // nobody listening
+          optionalSegmentsAllowed: optionalSegmentsAllowed(), // over the daily token budget
         });
+        if (gated) {
+          queue.log('scheduler', `[skills] cron "${cap.kind}" stood down — ${gated}`);
+          return;
+        }
+        // Same enabled + persona-allowlist rules the autonomous director applies,
+        // logged rather than silent — a stood-down cron leaves no other trace.
+        const now = new Date();
+        const { host, guests } = settings.getOnAirRoster(now);
+        const eligible = skillCronEligibility(
+          cap,
+          settings.get().skills?.enabled || {},
+          host,
+          guests,
+          preparationSkillAt(await getFullContext()),
+        );
+        if (!eligible.allowed) {
+          queue.log('scheduler', `[skills] cron "${cap.kind}" stood down — ${eligible.reason}`);
+          return;
+        }
+        await speakSkillCron(cap.kind, air, () =>
+          withTrace({ kind: 'segment' }, async () => {
+            const ctx = await prepareEpisodeContext(await getFullContext());
+            await runCapability(cap.kind, ctx, { automaticHostSpeech: true });
+          }),
+        );
       } catch (err: any) {
         queue.log('error', `[skills] cron "${expr}" skill "${cap.kind}" failed: ${err.message}`);
       }
@@ -1393,7 +1588,7 @@ onLibraryMountLost(() => {
 // the operator opted in (musicSource.reportRealPath). On a timer, not once: a
 // new client or user agent gets a fresh row with the flag off. Never throws.
 export async function realPathTick() {
-  if (settings.get().musicSource?.reportRealPath !== true) return;
+  if (!realPathOptedIn()) return;
   try {
     await autoEnableRealPath(line => queue.log('scheduler', line));
   } catch (err) {
@@ -1415,11 +1610,33 @@ async function overrideJanitor() {
   }
 }
 
-export function startScheduler() {
-  refreshAutoPlaylist({ automatic: true }).catch(err => queue.log('error', `Initial playlist failed: ${err.message}`));
+// The same hygiene for a steer that has run out: activeSteer() already ignores it.
+export async function steerJanitor() {
+  try {
+    // In turn with Start and Clear, so it never clears a steer saved meanwhile.
+    await serialSteer(async () => {
+      const steer = settings.get()?.steer;
+      const live = settings.activeSteer();
+      // Opening tracks still waiting go with their steer, including one that ran
+      // out while the controller was down (the load path drops it, not its tracks).
+      await queue.removeOrphanSteerQueued(live ? String(live.startedAt) : null);
+      if (!steer || live) return;
+      await settings.update({ steer: null });
+      queue.log('scheduler', '[steer] ended');
+    });
+  } catch (err) {
+    queue.log('error', `Steer janitor failed: ${err.message}`);
+  }
+}
 
-  const refreshCron = autoPlaylistRefreshCron(config.show.autoQueueRefreshMinutes);
-  cron.schedule(refreshCron, async () => {
+let autoPlaylistRefreshTask: ScheduledTask | null = null;
+
+// (Re)registers the periodic coast refresh. destroy(), not stop(), for the
+// reason syncSkillCrons gives. Returns the expression now in force.
+function scheduleAutoPlaylistRefresh(): string {
+  const expr = autoPlaylistRefreshCron(config.show.autoQueueRefreshMinutes, stationHourStartProcessMinute());
+  autoPlaylistRefreshTask?.destroy();
+  autoPlaylistRefreshTask = cron.schedule(expr, async () => {
     try {
       if (!await autoPlaylistRefresh.refreshScheduled()) {
         queue.log('scheduler', 'Auto-playlist periodic refresh skipped — a fallback build is already active');
@@ -1428,12 +1645,32 @@ export function startScheduler() {
       queue.log('error', `Periodic playlist failed: ${err.message}`);
     }
   });
+  return expr;
+}
+
+export function startScheduler() {
+  refreshAutoPlaylist({ automatic: true }).catch(err => queue.log('error', `Initial playlist failed: ${err.message}`));
+
+  // The tick's baseline: the hour and show the station booted into. Seeded
+  // here, not by the first tick, so a boot just before :00 still rolls at it
+  // and a boot mid-hour does not roll for the hour it found.
+  markRolledPosition();
+
+  // Off the station's :00, which a zone change can move between process :00,
+  // :15, :30 and :45, so the task is re-registered when the zone changes.
+  let refreshCron = scheduleAutoPlaylistRefresh();
+  onStationTimezoneChange(() => {
+    const next = scheduleAutoPlaylistRefresh();
+    if (next !== refreshCron) queue.log('scheduler', `Auto-playlist refresh moved off the station's :00: ${next}`);
+    refreshCron = next;
+  });
 
   // Every spoken segment the station produces on its own, plus the
-  // unconditional :00 session roll: one tick over one slot table (#1500).
+  // unconditional station-hour session roll: one tick over one slot table (#1500).
   cron.schedule('* * * * *', talkTick);
 
   cron.schedule('*/5 * * * *', overrideJanitor);
+  cron.schedule('*/5 * * * *', steerJanitor);
   cron.schedule('2 * * * *', cleanup, { noOverlap: true });
   cron.schedule('17 4 * * *', nightlyDoctor);
 
@@ -1453,6 +1690,12 @@ export function startScheduler() {
   // Off by default; a daily pass because orphans accrue with library churn,
   // and one hour of quarantine skew costs nothing at this cadence.
   cron.schedule('47 4 * * *', stemOrphanPurgeTick, { noOverlap: true });
+
+  // Scheduled tagging (#2282), off by default. Every five minutes at :04, :09 …
+  // :59, clear of the */5 janitors, the :02 cleanup, :23 backup, :41 real-path
+  // tick and the 04:17 / 04:47 nightly jobs; the policy starts the day's run on
+  // the first tick at or after the set time (broadcast/tag-schedule.ts).
+  cron.schedule('4-59/5 * * * *', scheduledTagTick, { noOverlap: true });
 
   syncSkillCrons();
   // Each task bakes the zone in at registration, so a live timezone change has

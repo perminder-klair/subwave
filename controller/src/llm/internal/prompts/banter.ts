@@ -74,7 +74,7 @@ export async function generateBanter({
   // owns the language and spoken-name policy so pure prompt tests cover it.
   const system = banterSystem({ host, guests, show });
 
-  const ctxLines = buildContextLines(context, { contextFields: BANTER_CONTEXT_FIELDS });
+  const ctxLines = buildContextLines(context, { contextFields: BANTER_CONTEXT_FIELDS, steer: true });
   if (current?.title) ctxLines.push(`On air right now: "${current.title}" by ${current.artist || 'unknown'}`);
   if (recap) ctxLines.push(`Already said on air recently (do not repeat these topics or phrasing):\n${recap}`);
   if (recentOpeners?.length) ctxLines.push(`Recent opening words (start the first line differently): ${recentOpeners.join(' | ')}`);

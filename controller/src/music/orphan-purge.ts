@@ -19,6 +19,10 @@
 //   the slot the quarantine is superseded and simply ages out — never merged
 //   over the new copy. A release brings blends back, it does not save the
 //   separation (orphan-purge-pure.ts says why).
+// - Only the SAME AUDIO is released: the stems' tail-meta.json duration must
+//   match the returning row's (sameAudio), or the id may have come back as a
+//   different recording at the same path (#2224). No evidence on either side,
+//   a head-only set included, holds the release, and the entry ages out.
 // - Quarantine age comes from an `.orphaned-at` sidecar written at move time
 //   (the move itself only touches ctime, but writing the sidecars bumps the
 //   dir's mtime, and the stem-priority lesson is that cache mtimes lie). The
@@ -45,9 +49,14 @@
 //   pass off the week only ends at the next manual pass.
 // - Delete failures are counted and reported, never thrown — a purge that
 //   cannot delete on a squashed share must keep running and keep saying so.
-// - Any mutation marks the usage snapshot stale (stem-cache's cached walk
-//   totals), so the next sweep re-measures instead of trusting those bytes,
-//   while the budget field keeps a flagged figure and its confirm.
+// - The moves keep the usage snapshot (stem-cache's cached walk totals) true:
+//   each moved dir is opened in the usage journal before its move and
+//   measured before and after (stemCache.StemDirWrites), and the totals move
+//   by exactly that, so the next read needs no walk of the cache. A walk that
+//   lands during the moves re-measures the dirs the journal names, and the
+//   pass settles against what that walk stored (music/stem-usage-policy.ts,
+//   #2317). Deletes from the quarantine change nothing there, since the
+//   quarantine is outside the total.
 // - One confirmed pass at a time (the cron, a manual confirm): a second one
 //   is refused while the first runs, so two never interleave their moves and
 //   each report is what its own pass did. A release that lands on a live slot
@@ -72,6 +81,8 @@ import {
   planOrphanPurge,
   planQuarantinePurge,
   QUARANTINE_DIR,
+  sameAudio,
+  TAIL_META,
   type QuarantineEntry,
 } from './orphan-purge-pure.js';
 
@@ -96,6 +107,10 @@ export interface PurgeReport {
   agingCount: number;
   /** Quarantines whose id is back in the library while the live slot is taken. */
   supersededCount: number;
+  /** Quarantines whose id is back with the live slot free, held because the
+   *  stems are not proven to be the returning audio: a duration that differs,
+   *  or none to compare (a head-only set). They age out like any other. */
+  mismatchedCount: number;
   /** Cache dirs skipped as in-flight (written within IN_FLIGHT_MS). */
   inFlight: number;
   /** Moves/deletes that failed this pass (permissions, squashed roots). */
@@ -153,6 +168,27 @@ async function readFileSafe(file: string): Promise<string> {
   return readFile(file, 'utf8');
 }
 
+// The decoded duration the stems were cut from, as the analyzer recorded it in
+// tail-meta.json. Unread or absent (a head-only set): undefined, which
+// sameAudio reads as no evidence.
+async function stemsDurationSec(entryDir: string): Promise<unknown> {
+  try {
+    return (JSON.parse(await readFileSafe(path.join(entryDir, TAIL_META))) as { duration_sec?: unknown } | null)?.duration_sec;
+  } catch {
+    return undefined;
+  }
+}
+
+// The returning row's duration. A library that cannot answer gives null, and
+// the release it was asked for is held.
+function storedDurationSec(id: string): number | null {
+  try {
+    return db.getTrack(id)?.durationSec ?? null;
+  } catch {
+    return null;
+  }
+}
+
 async function listDirs(dir: string): Promise<string[]> {
   try {
     const entries = await readdir(dir, { withFileTypes: true });
@@ -169,8 +205,8 @@ async function listDirs(dir: string): Promise<string[]> {
 // would keep a stems_at with nothing behind it, and absence alone never brings
 // a track back into the backfill. A journal that cannot be read throws, so the
 // pass stops rather than reading that as "nothing is rotating".
-function libraryIds(knownIds: Iterable<string>): Set<string> {
-  return new Set([...knownIds, ...db.pendingIdRotations().keys()]);
+function libraryIds(knownIds: Iterable<string>, rotating = db.pendingIdRotations()): Set<string> {
+  return new Set([...knownIds, ...rotating.keys()]);
 }
 
 async function readsAsStems(dir: string): Promise<boolean> {
@@ -242,6 +278,9 @@ export async function runOrphanPurge(opts: {
   resolveNames?: (ids: string[]) => Promise<ReadonlyMap<string, OrphanTrackName>>;
   /** The automatic pass: refuse a plan above AUTO_MAX_SHARE of the cache. */
   automatic?: boolean;
+  /** The duration in seconds of the library row with this id, for a release's
+   *  sameAudio check. The library DB by default; tests inject it. */
+  rowDurationSec?: (id: string) => number | null;
 }): Promise<PurgeReport> {
   if (!opts.confirm) return purgePass(opts);
   if (confirmedPassRunning) {
@@ -263,13 +302,14 @@ export function purgeSummary(r: PurgeReport): string {
   return `quarantined ${r.quarantined}, released ${r.released.length}, deleted ${r.deletedCount}`
     + ` (${Math.round(r.freedBytes / 1_000_000)} MB freed)`
     + failed
+    + (r.mismatchedCount ? `, ${r.mismatchedCount} back in the library but held (not proven the same audio)` : '')
     + (r.inFlight ? `, ${r.inFlight} in-flight dir(s) skipped` : '');
 }
 
 function emptyReport(dryRun: boolean): PurgeReport {
   return {
     dryRun, keptCount: 0, quarantined: 0, quarantinedNames: [], released: [],
-    deletedCount: 0, deletedNames: [], agingCount: 0, supersededCount: 0, inFlight: 0, failed: 0,
+    deletedCount: 0, deletedNames: [], agingCount: 0, supersededCount: 0, mismatchedCount: 0, inFlight: 0, failed: 0,
     quarantineEntries: 0, freedBytes: 0,
   };
 }
@@ -293,7 +333,8 @@ async function purgePass(opts: Parameters<typeof runOrphanPurge>[0]): Promise<Pu
   if (opts.knownIds.length === 0) {
     return { ...empty, refused: true, reason: 'empty library id set: refusing (a closed or half-loaded database must never quarantine the cache)' };
   }
-  const known = libraryIds(opts.knownIds);
+  const rotating = db.pendingIdRotations();
+  const known = libraryIds(opts.knownIds, rotating);
   const inFlightMs = opts.inFlightMs ?? IN_FLIGHT_MS;
   const report: PurgeReport = { ...empty };
 
@@ -327,6 +368,7 @@ async function purgePass(opts: Parameters<typeof runOrphanPurge>[0]): Promise<Pu
   // ---- quarantine walk -----------------------------------------------------
   // In parallel like the root walk: a dry run reads every entry on each Stems
   // page open, and a network share holds thousands of them.
+  const rowDurationSec = opts.rowDurationSec ?? storedDurationSec;
   const quEntries: QuarantineEntry[] = await mapPool(await listDirs(qu), stemCache.SCAN_CONCURRENCY, async (name) => {
     const entryDir = path.join(qu, name);
     const liveSlotFree = !(await stat(path.join(root, name)).then(() => true, () => false));
@@ -338,7 +380,15 @@ async function purgePass(opts: Parameters<typeof runOrphanPurge>[0]): Promise<Pu
       if (opts.confirm) await stampQuarantine(entryDir, now).catch(() => {});
       ageMs = 0;
     }
-    return { name, known: known.has(name), ageMs, liveSlotFree };
+    const isKnown = known.has(name);
+    // Only a release asks whether the audio is the same, so only an entry that
+    // could be released reads its evidence. An old id still rotating has no row
+    // of its own: adoption moved it to the new id first, and that row is the
+    // same file.
+    const same = isKnown && liveSlotFree
+      ? sameAudio(await stemsDurationSec(entryDir), rowDurationSec(rotating.get(name) ?? name))
+      : false;
+    return { name, known: isKnown, ageMs, liveSlotFree, sameAudio: same };
   });
   report.quarantineEntries = quEntries.length;
   const qplan = planQuarantinePurge(quEntries, { confirm: opts.confirm, ...(opts.graceMs !== undefined ? { graceMs: opts.graceMs } : {}) });
@@ -352,11 +402,18 @@ async function purgePass(opts: Parameters<typeof runOrphanPurge>[0]): Promise<Pu
   report.deletedNames = held ? [] : toDelete.map(d => d.name).slice(0, 10);
   report.agingCount = qplan.aging.length;
   report.supersededCount = qplan.superseded.length;
+  report.mismatchedCount = qplan.mismatched.length;
 
   if (opts.confirm) {
+    // What the moves add to or take off the cache total, measured the way its
+    // walk measures (the quarantine is outside that total, so a delete from
+    // it changes nothing there). Each dir is opened before its move, so a
+    // sweep or walk that lands during them knows to measure it again.
+    const usage = new stemCache.StemDirWrites();
     // 1. Releases first: an id that is both known now and sitting in the
     //    quarantine gets its copy back rather than being re-quarantined below.
     for (const name of toRelease) {
+      await usage.touch(name);
       try {
         await rename(path.join(qu, name), path.join(root, name));
       } catch { report.failed += 1; continue; }
@@ -401,6 +458,7 @@ async function purgePass(opts: Parameters<typeof runOrphanPurge>[0]): Promise<Pu
           report.freedBytes += stale.freedBytes;
           if (!stale.gone) { report.failed += 1; continue; }
         }
+        await usage.touch(name);
         try {
           await rename(from, to);
         } catch { report.failed += 1; continue; }
@@ -409,6 +467,8 @@ async function purgePass(opts: Parameters<typeof runOrphanPurge>[0]): Promise<Pu
         } catch {
           // Unstamped, the quarantine would have no age to keep it 7 days: undo
           // the move and leave the dir in the cache for the next pass.
+          // Stuck in the quarantine unstamped, it has left the cache total,
+          // which the settle measures either way.
           await rename(to, from).catch(() => {});
           report.failed += 1;
           continue;
@@ -417,11 +477,11 @@ async function purgePass(opts: Parameters<typeof runOrphanPurge>[0]): Promise<Pu
         report.quarantined += 1;
       }
     }
-    if (report.quarantined || report.deletedCount || report.released.length || report.freedBytes) {
-      // The usage snapshot cached the pre-purge totals; mark it so the next
-      // sweep walks again instead of trusting bytes that no longer exist.
-      await stemCache.markUsageStale();
-    }
+    // The usage snapshot cached the pre-purge totals. The moves were measured,
+    // so the totals move by exactly that and the next read needs no walk
+    // (stem-cache.ts, usage snapshot). Deleting aged quarantines alone touches
+    // nothing.
+    await usage.settle();
   } else {
     // Dry run: every count, zero mutations.
     report.quarantined = plan.quarantine.length;

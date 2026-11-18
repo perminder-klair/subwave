@@ -17,8 +17,8 @@ import {
   type StationAuthResult,
 } from './stationAuth';
 
-// The classifier mirrors app/src/lib/station-password.ts, so these mirror
-// app/scripts/station-password.test.ts and app/scripts/api.test.ts.
+// The classifier mirrors getsubwave/app:src/lib/station-password.ts, so these mirror
+// getsubwave/app:scripts/station-password.test.ts and getsubwave/app:scripts/api.test.ts.
 
 // What POST /station-auth has answered since #478.
 const CONTROLLER_PASS = { body: { ok: true } };

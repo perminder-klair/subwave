@@ -6,6 +6,8 @@ import { z } from 'zod';
 import { moodVocab } from '../settings.js';
 import { djObject } from '../llm/sdk.js';
 import { songGenres } from './subsonic.js';
+import type { TaggerAcoustics } from './sound-line.js';
+import { formatEvidence } from './tagger-evidence.js';
 
 export const TagSchema = z.object({
   moods: z.array(z.string()).default([]),
@@ -21,7 +23,15 @@ export const BatchTagSchema = z.object({
 // stamp keys off this number plus the live vocabulary, never the prompt text
 // (#1548): a semantic change is invisible without a bump, a reword costs a full
 // library re-tag with one.
-export const TAGGER_CONTRACT_VERSION = 1;
+//   1  title/artist/album/year/genre only
+//   2  + the Sound:/Last.fm: evidence line, which outranks album reputation (#2281)
+export const TAGGER_CONTRACT_VERSION = 2;
+
+// How the prompts read the evidence line (formatEvidence). Shared so the two
+// prompts can't drift on what outranks what.
+function evidenceGuidance(): string {
+  return `Some tracks carry an evidence line. "Sound:" was measured from that track's own audio: its tempo (a tempo marked "or half-time" may have been read at twice the pulse you hear), its key mode, and whether it is sung or instrumental. "Last.fm:" is what listeners tag the song or its artist with. This is evidence about the track, and it outranks what you know of the album or artist: a slow minor-key song is not "high" energy because the album around it is loud.`;
+}
 
 // Functions, not consts: the mood list is operator-editable and read live.
 // Both prompts describe the RESULT and never the output channel — djObject picks
@@ -40,7 +50,9 @@ A spiritual Punjabi devotional is "spiritual" and "reflective" — not "cultural
 A high-BPM dance track is "energetic" and "workout" — not "celebratory" unless it sounds festive.
 A slow rainy-day instrumental is "calm" and "rainy" — not "evening" just because it's chill.
 
-If you genuinely cannot tell from the title/artist/album, the result is {"moods":[],"energy":"medium"}. Do not invent.`;
+${evidenceGuidance()}
+
+If there is no evidence line and you genuinely cannot tell from the title/artist/album, the result is {"moods":[],"energy":"medium"}. Do not invent.`;
 }
 
 export function taggerBatchSystem(): string {
@@ -65,7 +77,9 @@ A spiritual Punjabi devotional is "spiritual" and "reflective" — not "cultural
 A high-BPM dance track is "energetic" and "workout" — not "celebratory" unless it sounds festive.
 A slow rainy-day instrumental is "calm" and "rainy" — not "evening" just because it's chill.
 
-If you genuinely cannot tell from the title/artist/album for a track, use {"moods":[],"energy":"medium"} for that entry. Do not invent.`;
+${evidenceGuidance()}
+
+If a track has no evidence line and you genuinely cannot tell from the title/artist/album, use {"moods":[],"energy":"medium"} for that entry. Do not invent.`;
 }
 
 export interface TaggableSong {
@@ -76,34 +90,46 @@ export interface TaggableSong {
   // OpenSubsonic multi-value genres alongside the legacy scalar.
   genres?: Array<string | { name?: string }> | null;
   genre?: string | null;
+  // The measured evidence (#2281): the row's acoustics through taggerAcoustics,
+  // which carries tempo, key and vocal evidence and nothing else, and its stored
+  // Last.fm tags. Absent or empty adds no line: the track is tagged from its
+  // metadata alone, blind.
+  acoustics?: TaggerAcoustics | null;
+  lastfmTags?: string[] | null;
 }
 
 export interface TagResult {
   moods: string[];
   energy: 'low' | 'medium' | 'high' | null;
+  // True when the model named moods and none were in the vocabulary, so an
+  // empty `moods` was a miss rather than its "can't tell" answer (#2283).
+  offVocab?: boolean;
 }
 
-function sanitizeTag(parsed: { moods?: unknown; energy?: unknown }): TagResult {
+export function sanitizeTag(parsed: { moods?: unknown; energy?: unknown }): TagResult {
   const vocab = moodVocab();
-  const moods = Array.isArray(parsed.moods)
-    ? (parsed.moods as unknown[])
-        .filter((m): m is string => typeof m === 'string' && vocab.includes(m))
-        .slice(0, 3)
+  const named = Array.isArray(parsed.moods)
+    ? (parsed.moods as unknown[]).filter((m): m is string => typeof m === 'string' && m.trim() !== '')
     : [];
+  const moods = named.filter(m => vocab.includes(m)).slice(0, 3);
   const energy = ['low', 'medium', 'high'].includes(parsed.energy as string)
     ? (parsed.energy as 'low' | 'medium' | 'high')
     : null;
-  return { moods, energy };
+  return named.length > 0 && moods.length === 0 ? { moods, energy, offVocab: true } : { moods, energy };
 }
 
+// One numbered entry: the metadata line, then the evidence line indented under
+// it when there is one.
 function formatSong(song: TaggableSong): string {
-  return (
+  const head =
     `Title: ${song.title || '?'} | ` +
     `Artist: ${song.artist || '?'} | ` +
     `Album: ${song.album || '?'} | ` +
     `Year: ${song.year || '?'} | ` +
-    `Genre: ${songGenres(song).join(', ') || '?'}`
-  );
+    `Genre: ${songGenres(song).join(', ') || '?'}`;
+  const { sound, lastfm } = formatEvidence(song);
+  const evidence = [sound, lastfm].filter(Boolean).join(' | ');
+  return evidence ? `${head}\n   ${evidence}` : head;
 }
 
 // `leg` pins the call to one LLM leg with no cross-leg failover: the dual-LLM
@@ -120,10 +146,12 @@ export async function tagOne(song: TaggableSong, opts: TagOpts = {}): Promise<Ta
     `Album: ${song.album || '?'}\n` +
     `Year: ${song.year || '?'}\n` +
     `Genre: ${songGenres(song).join(', ') || '?'}`;
+  const { sound, lastfm } = formatEvidence(song);
+  const evidence = [sound, lastfm].filter(Boolean).join('\n');
 
   const parsed = await djObject({
     system: taggerSystem(),
-    prompt: userPrompt,
+    prompt: evidence ? `${userPrompt}\n${evidence}` : userPrompt,
     schema: TagSchema,
     temperature: 0.2,
     kind: 'tag-library',
