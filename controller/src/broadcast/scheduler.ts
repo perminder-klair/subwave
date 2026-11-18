@@ -49,6 +49,8 @@ import { cleanupPauseTalkSilence } from '../audio/wav-silence.js';
 import { warmHeavy } from '../audio/ttsHeavyClient.js';
 import { shouldFire } from './dj-gate.js';
 import { speakClockAllowed, stationIdDaypartStamp } from './clock-policy.js';
+import { createStationIdPicker } from './station-ident.js';
+import { VERBATIM_META } from './prompt-memory.js';
 import { scheduledTalkAir, talkOnlyBetweenTracks, withTalkAir } from './talk-air.js';
 import { mayReplacePendingTalk, type PendingTalk } from './queue/kinds.js';
 import { talkTickPlan, type TalkAir, type TalkKind, type TalkPlan } from './talk-scheduler.js';
@@ -973,6 +975,8 @@ export async function runProgrammeOutro() {
 // Station ident. Gate-free runner — the /dj/segment route fires it immediately;
 // the scheduled path passes atNextTrack so it holds for the next track boundary
 // rather than ducking mid-vocal.
+const pickStationId = createStationIdPicker();
+
 export async function runStationId({ atNextTrack = false, automatic = false } = {}) {
   return withTrace({ kind: 'station-id' }, async () => {
     const ctx = await prepareEpisodeContext(await getFullContext());
@@ -981,6 +985,23 @@ export async function runStationId({ atNextTrack = false, automatic = false } = 
       ? session.captureAutomaticHostSpeech(speaker)
       : { persona: speaker, hostSpeech: null };
     speaker = speechOwner.persona;
+    // A verbatim ident is operator-typed words, so it carries the same
+    // `meta.verbatim` stamp as a raw /dj/say: exempt from the stand-in gate and
+    // withheld from every prompt, with its label stripped and text cleaned as that say is.
+    // `noClockClaim` is the one thing the stamp does not give: no daypart was
+    // offered, so the drift guard has nothing to refuse.
+    if (pickStationId.hasLines(speaker)) {
+      const script = pickStationId(speaker)!;
+      const opts = {
+        persona: speaker, daypart: null, noClockClaim: true, hostSpeech: speechOwner.hostSpeech,
+        meta: { personaId: speaker?.id, personaName: speaker?.name, ...VERBATIM_META },
+      };
+      const accepted = atNextTrack
+        ? await queue.announceAtNextTrack(script, 'station-id', opts)
+        : (await queue.announce(script, 'station-id', opts)).accepted;
+      if (accepted && speaker) pickStationId.commit(speaker.id, script);
+      return accepted ? script : null;
+    }
     // A deferred ident can wait across several boundaries, so stamp the daypart
     // offered to the model and let the queue refuse the clip if it changed.
     const daypart = atNextTrack
