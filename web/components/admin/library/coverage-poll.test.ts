@@ -20,8 +20,8 @@ test('a run or an operator count polls', () => {
 test('a controller just restarted (no snapshot yet) is asked again until the figures land', () => {
   const cold = { scanning: false, overview: null };
   assert.equal(coveragePollMs({ taggerRunning: false, data: cold, reads: 1 }), COVERAGE_POLL_MS);
-  assert.equal(coveragePollMs({ taggerRunning: false, data: { scanning: false }, reads: 1 }), COVERAGE_POLL_MS,
-    'an older controller that omits the field reads the same');
+  assert.equal(coveragePollMs({ taggerRunning: false, data: { scanning: false }, reads: 1 }), false,
+    'an older controller never sends the field: nothing is coming, so nothing polls');
   assert.equal(coveragePollMs({ taggerRunning: false, data: cold, reads: COLD_START_MAX_READS }), false,
     'bounded: a library that cannot be read stops asking');
 });

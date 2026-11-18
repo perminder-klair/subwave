@@ -20,6 +20,8 @@ export function coveragePollMs(s: {
   reads: number;
 }): number | false {
   if (s.taggerRunning || s.data?.scanning) return COVERAGE_POLL_MS;
-  if (s.data && s.data.overview == null && s.reads < COLD_START_MAX_READS) return COVERAGE_POLL_MS;
+  // Only a controller that sends the key and has no figures yet: an older one
+  // never sends `overview`, and would otherwise be polled for two minutes.
+  if (s.data && 'overview' in s.data && s.data.overview === null && s.reads < COLD_START_MAX_READS) return COVERAGE_POLL_MS;
   return false;
 }
