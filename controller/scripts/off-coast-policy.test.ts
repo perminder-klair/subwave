@@ -7,12 +7,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { coastContents } from '../src/broadcast/coast-handover.js';
 import {
-  ledgerAfterReload, ledgerAfterWrite, offCoastVerdict, offCoastWarning, REPLACED_COAST_GRACE_MS,
+  ledgerAfterReload, ledgerAfterWrite, MAX_REPLACED_COASTS, offCoastVerdict, offCoastWarning, REPLACED_COAST_GRACE_MS,
   type CoastLedger,
 } from '../src/broadcast/off-coast-policy.js';
 
 const t = (id: string, artist = `Act ${id}`) => ({ id, title: `Song ${id}`, artist });
-const empty: CoastLedger = { current: null, replaced: null, replacedUntil: 0 };
+const empty: CoastLedger = { current: null, replaced: [] };
 const T0 = 1_000_000;
 
 // Two confirmed writes: the old show's file, then the new show's.
@@ -90,6 +90,40 @@ test('two confirmed writes inside one grace keep the file before both: its track
   spaced = ledgerAfterReload(ledgerAfterWrite(spaced, first, T0 + 60_000), first, true);
   spaced = ledgerAfterReload(ledgerAfterWrite(spaced, second, T0 + 60_000 + REPLACED_COAST_GRACE_MS), second, true);
   assert.deepEqual(verdict(spaced, t('old1'), T0 + 60_000 + REPLACED_COAST_GRACE_MS + 1), { warn: true });
+});
+
+test('refreshes a few seconds apart never stretch the grace: a file replaced past it warns, and the ledger stays bounded', () => {
+  // An hour of confirmed writes 3 s apart (an operator saving settings over and
+  // over): each file's grace runs from its own replacement, not the newest write.
+  const first = coastContents([t('first')], T0);
+  let ledger = ledgerAfterReload(ledgerAfterWrite(empty, first, T0), first, true);
+  let now = T0;
+  for (let i = 1; i <= 1200; i++) {
+    now = T0 + i * 3_000;
+    const file = coastContents([t(`f${i}`)], now);
+    ledger = ledgerAfterReload(ledgerAfterWrite(ledger, file, now), file, true);
+    assert.ok(ledger.replaced.length <= MAX_REPLACED_COASTS, `write ${i}: ${ledger.replaced.length} kept`);
+  }
+  // The first write's unknown predecessor and the first file left long ago.
+  assert.deepEqual(verdict(ledger, t('prior'), now + 500), { warn: true });
+  assert.deepEqual(verdict(ledger, t('first'), now + 500), { warn: true });
+  // The files replaced inside the last grace are still the coast's.
+  assert.deepEqual(verdict(ledger, t('f1199'), now + 500), { warn: false, why: 'replaced-coast' });
+  assert.deepEqual(verdict(ledger, t('f1196'), now + 500), { warn: false, why: 'replaced-coast' });
+  assert.deepEqual(verdict(ledger, t('f1190'), now + 500), { warn: true });
+});
+
+test('a chain of unconfirmed reloads keeps at most MAX_REPLACED_COASTS files, the unknown predecessor included', () => {
+  let ledger = empty;
+  let now = T0;
+  for (let i = 0; i <= MAX_REPLACED_COASTS; i++) {
+    now = T0 + i * 60_000;
+    const file = coastContents([t(`u${i}`)], now);
+    ledger = ledgerAfterReload(ledgerAfterWrite(ledger, file, now), file, false);
+  }
+  assert.equal(ledger.replaced.length, MAX_REPLACED_COASTS);
+  assert.deepEqual(verdict(ledger, t('prior'), now + 500), { warn: true });
+  assert.deepEqual(verdict(ledger, t('u0'), now + 500), { warn: false, why: 'replaced-coast' });
 });
 
 test('a stale reload answer never confirms a newer write', () => {

@@ -21,7 +21,9 @@
 //     reload takes to land, or for as long as the mixer has not confirmed the
 //     reload of the newer file (an unconfirmed reload leaves an off-air
 //     playlist on the older file until the next one), and a file replaced
-//     inside that moment, since a show boundary writes twice in a second;
+//     inside that moment, since a show boundary writes twice in a second. Each
+//     replaced file keeps its own grace, counted from its own replacement, so
+//     refreshes a few seconds apart never stretch one into an endless window;
 //   - a match by `title|artist` as well as by id, so a duplicate rip of a
 //     coasted song is the coast's.
 // Jingles, beds and pause-talk never reach the untracked branch: radio.liq
@@ -37,6 +39,10 @@ import type { CoastContents } from './coast-handover.js';
 // coast's: the mixer took it before the reload, and the controller sees its
 // start a now-playing poll later.
 export const REPLACED_COAST_GRACE_MS = 15_000;
+// How many replaced files the ledger keeps. Only a chain of unconfirmed reloads
+// (a mixer that is not answering) keeps a file past its grace, and this bounds
+// it, the first write's unknown predecessor included.
+export const MAX_REPLACED_COASTS = 8;
 
 export interface CoastWrite {
   contents: CoastContents;
@@ -45,15 +51,20 @@ export interface CoastWrite {
   reloaded: boolean | null;
 }
 
+export interface ReplacedCoast {
+  /**
+   * 'unknown' for the file this process's first write replaced: it was another
+   * process's, so any play counts as the coast's until `until`.
+   */
+  contents: CoastContents | 'unknown';
+  /** When a track from it stops counting as the coast's, once the newest reload is confirmed. */
+  until: number;
+}
+
 export interface CoastLedger {
   current: CoastWrite | null;
-  /**
-   * What the mixer may still hold from earlier writes, until `replacedUntil`.
-   * 'unknown' after this process's first write: the file it replaced was
-   * another process's, so any play counts as the coast's until then.
-   */
-  replaced: CoastContents | 'unknown' | null;
-  replacedUntil: number;
+  /** What the mixer may still hold from earlier writes, newest first, at most MAX_REPLACED_COASTS. */
+  replaced: ReplacedCoast[];
 }
 
 export interface OffCoastInput {
@@ -68,9 +79,8 @@ export type OffCoastVerdict =
   | { warn: false; why: 'no-coast' | 'unidentified' | 'handed-over' | 'in-coast' | 'replaced-coast' }
   | { warn: true };
 
-function holds(coast: CoastContents | 'unknown' | null, t: CandidateLike): boolean {
+function holds(coast: CoastContents | 'unknown', t: CandidateLike): boolean {
   if (coast === 'unknown') return true;
-  if (!coast) return false;
   return !!((t.id && coast.ids.has(t.id)) || (t.title && coast.keys.has(trackKey(t))));
 }
 
@@ -79,37 +89,28 @@ export function offCoastVerdict({ play, ledger, handedOverPending, now }: OffCoa
   if (!play || (!play.id && !play.title)) return { warn: false, why: 'unidentified' };
   if (handedOverPending) return { warn: false, why: 'handed-over' };
   if (holds(ledger.current.contents, play)) return { warn: false, why: 'in-coast' };
-  if (now < replacedUntil(ledger) && holds(ledger.replaced, play)) return { warn: false, why: 'replaced-coast' };
+  // An unconfirmed (or still pending) reload keeps every replaced file airable
+  // for as long as it stays unconfirmed.
+  const confirmed = ledger.current.reloaded === true;
+  if (ledger.replaced.some(r => (!confirmed || now < r.until) && holds(r.contents, play))) return { warn: false, why: 'replaced-coast' };
   return { warn: true };
 }
 
-// An unconfirmed (or still pending) reload keeps the replaced file airable for
-// as long as it stays unconfirmed.
-function replacedUntil(ledger: CoastLedger): number {
-  return ledger.current?.reloaded === true ? ledger.replacedUntil : Infinity;
-}
-
-function mergeContents(a: CoastContents | 'unknown' | null, b: CoastContents): CoastContents | 'unknown' {
-  if (a === 'unknown') return a;
-  if (!a) return b;
-  return { ids: new Set([...a.ids, ...b.ids]), keys: new Set([...a.keys, ...b.keys]), builtAt: b.builtAt };
-}
-
-// A new write. The file it replaces joins what the mixer may still hold; files
-// older than that stay in it while the write they were replaced by was never
-// confirmed, since a confirmed reload dropped them, and while their own grace
-// still runs: two writes inside one now-playing poll (a show boundary's two
-// refreshes) leave a track the mixer took before the first reload unseen until
-// after the second.
+// A new write. The file it replaces joins what the mixer may still hold, with a
+// grace from now. Older files stay while their own grace still runs (two writes
+// inside one now-playing poll, a show boundary's two refreshes, leave a track
+// the mixer took before the first reload unseen until after the second), and,
+// with a fresh grace, while the write they were replaced by was never confirmed,
+// since only a confirmed reload dropped them. Never more than MAX_REPLACED_COASTS.
 export function ledgerAfterWrite(ledger: CoastLedger, contents: CoastContents, now: number): CoastLedger {
   const prev = ledger.current;
-  if (!prev) return { current: { contents, writtenAt: now, reloaded: null }, replaced: 'unknown', replacedUntil: now + REPLACED_COAST_GRACE_MS };
-  const keepOlder = (prev.reloaded !== true || now < ledger.replacedUntil) && ledger.replaced;
-  return {
-    current: { contents, writtenAt: now, reloaded: null },
-    replaced: keepOlder ? mergeContents(ledger.replaced, prev.contents) : prev.contents,
-    replacedUntil: now + REPLACED_COAST_GRACE_MS,
-  };
+  const until = now + REPLACED_COAST_GRACE_MS;
+  const current: CoastWrite = { contents, writtenAt: now, reloaded: null };
+  if (!prev) return { current, replaced: [{ contents: 'unknown', until }] };
+  const older = prev.reloaded === true
+    ? ledger.replaced.filter(r => now < r.until)
+    : ledger.replaced.map(r => ({ ...r, until: Math.max(r.until, until) }));
+  return { current, replaced: [{ contents: prev.contents, until }, ...older].slice(0, MAX_REPLACED_COASTS) };
 }
 
 export function ledgerAfterReload(ledger: CoastLedger, contents: CoastContents, reloaded: boolean): CoastLedger {
@@ -127,7 +128,7 @@ export function offCoastWarning(play: CandidateLike, showName: string | null, st
 // Everything above this line stays pure; this is the module's only state. The
 // scheduler writes it beside auto.m3u and the queue reads it, which keeps the
 // queue from importing the scheduler that already imports it.
-let ledger: CoastLedger = { current: null, replaced: null, replacedUntil: 0 };
+let ledger: CoastLedger = { current: null, replaced: [] };
 
 export function noteCoastWritten(contents: CoastContents, now = Date.now()): void {
   ledger = ledgerAfterWrite(ledger, contents, now);
@@ -143,5 +144,5 @@ export function coastLedger(): CoastLedger {
 
 /** Tests only. */
 export function resetCoastLedger(): void {
-  ledger = { current: null, replaced: null, replacedUntil: 0 };
+  ledger = { current: null, replaced: [] };
 }
