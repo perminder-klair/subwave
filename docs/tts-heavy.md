@@ -230,20 +230,44 @@ Remove the line to return to the CPU analyzer. This remains opt-in because the
 GPU overlay must not be enabled by default on CPU-only hosts.
 
 That swaps the `analyzer` service to the `subwave-analyzer-cuda` image (heavy +
-cu124 torch wheels) and hands it the GPU. Requirements: the NVIDIA driver +
+torch/torchaudio 2.7.1 cu128 wheels, including RTX 50-series Blackwell support)
+and hands it the GPU. Those wheels start at Turing (RTX 20-series, GTX
+16-series). For an older card, a GTX 10-series for example, add the tag named
+for its architecture to `.env`, which picks the cu124 build (torch 2.6.0):
+
+```dotenv
+ANALYZER_CUDA_TAG=pascal
+```
+
+[The tag table](internals/infrastructure.md#aio-cuda-tags) lists every card's
+tag. Leave it unset on a newer card: the overlay then follows
+`SUBWAVE_VERSION` like every other image. See the [PyTorch 2.7 release notes](https://pytorch.org/blog/pytorch-2-7/).
+Requirements: the NVIDIA driver +
 [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
 — nothing else; the CUDA runtime rides inside the image. The worker picks the
-device itself (`ANALYZE_DEVICE=auto`): if the GPU isn't actually visible it logs
-a warning and falls back to CPU rather than failing the pass. `ANALYZER_HEAVY`
+device itself (`ANALYZE_DEVICE=auto`): it runs one small test op on the card
+first, and if the GPU isn't visible, or the image has no kernels for it (a
+GTX 10-series card on the cu128 build reports "no kernel image"), it logs a
+warning naming the card and the image tag that suits it, then falls back to
+CPU rather than failing the pass. An explicit `ANALYZE_DEVICE=cuda` falls back
+the same way. CPU still runs CLAP and Demucs, but Demucs on CPU is slow (tens of
+seconds a track), so treat that warning as something to fix. `ANALYZER_HEAVY`
 is irrelevant while the overlay is applied — the image is overridden outright.
 
 Running the **all-in-one** container instead? It has no `analyzer` service to
-swap, so there's no overlay: pull the `subwave-aio-cuda` tag (the heavy AIO built
-on the same cu124 wheels) and hand the container the GPU directly. Steps for
-Unraid, including the driver plugin and the extra parameters, are in
+swap, so there's no overlay: pull `subwave-aio-cuda` at the tag named for your
+card's architecture ([the tag table](internals/infrastructure.md#aio-cuda-tags);
+`:latest` needs Turing or newer) and hand the container the GPU directly. Steps
+for Unraid, including the driver plugin and extra parameters, are in
 [unraid.md](unraid.md#acoustic-analysis-default-on--expressive-voices-opt-in);
 anywhere else it's `--gpus all` on your `docker run`. Everything below about
 device selection and VRAM applies there unchanged.
+
+For in-container analyzer maintenance, `pip` now targets the analyzer venv in
+both images. For example, `docker exec subwave pip list` on an AIO container
+named `subwave`, or `docker exec sub-wave-analyzer pip list` on the split stack.
+The AIO keeps system `python3` first on PATH; to run Python with analyzer
+packages, use `/opt/analyzer/venv/bin/python` explicitly.
 
 Sharing the card with a local TTS or LLM? The worker plays nice: after ~5
 minutes with no CLAP/Demucs use it drops its models out of VRAM and reloads
@@ -303,9 +327,19 @@ The default is `1`, preserving the existing single-flight pass. Values `2`–`4`
 are sensible starting points for a remote GPU, with a supported maximum of `8`.
 Each sidecar worker is an independent Python process and may load its own CLAP
 and Demucs models, so raising the value increases CPU, RAM and VRAM use as well
-as network and Navidrome/source-server demand. A mismatch is safe but effective
-parallelism is limited by the smaller usable side. This is an operator tuning
-trade-off, not a guaranteed speedup.
+as network and Navidrome/source-server demand. For the analysis pass a mismatch
+is safe, and effective parallelism is limited by the smaller usable side. With
+pick-time stems on (Settings → Stems), the pool size also decides whether a
+stem-blend render may run while a separation holds a worker: at 2 or more it
+goes ahead, expecting a free member. The controller takes the smaller of its
+own value and the one the sidecar reports on `/health` (`analyze_concurrency`),
+so a controller set higher than its sidecar no longer sends a render to wait
+behind the separation. An analyzer image from before that field reports
+nothing, and there the controller's value stands alone: a controller set
+higher costs one render per separation that waits out its budget (up to 60 s,
+holding the track sender) and falls back to the plain crossfade, so keep the
+two equal, or update the analyzer. This is an operator tuning trade-off, not a
+guaranteed speedup.
 
 A same-path state mount is therefore **recommended for throughput, but required
 only for stem caching**. Stem rendering writes into `state/stems/`; a remote
@@ -318,7 +352,10 @@ So, on the GPU host:
 services:
   analyzer:
     # -heavy is CLAP + Demucs on the CPU, and is amd64-only. For the GPU, swap
-    # in subwave-analyzer-cuda and add the `deploy:` block below.
+    # in subwave-analyzer-cuda and add the `deploy:` block below. :latest
+    # needs Turing (RTX 20-series) or newer; an older card takes the tag named
+    # for its architecture, such as subwave-analyzer-cuda:pascal for a GTX
+    # 10-series (docs/internals/infrastructure.md#aio-cuda-tags).
     image: ghcr.io/perminder-klair/subwave-analyzer-heavy:latest
     restart: unless-stopped
     ports:
@@ -462,8 +499,8 @@ CHATTERBOX_REFERENCE_WAV=/var/sub-wave/voices/house.wav
 ```
 
 Then `docker compose --profile tts-heavy up -d`. A persona's own voice always
-wins; this only fills the gap. The all-in-one image reads the same variable for
-its in-process Chatterbox — before #1591 the sidecar was the odd one out, and
+wins; this only fills the gap. An in-process Chatterbox (a controller image built
+with `WITH_CHATTERBOX=1`) reads the same variable — before #1591 the sidecar was the odd one out, and
 setting this with `--profile tts-heavy` did nothing.
 
 ### Let an idle engine go (memory back while the station is quiet)

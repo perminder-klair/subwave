@@ -37,6 +37,7 @@ async function scenario() {
     shows: [outShow, inShow],
     schedule: overdue ? Object.fromEntries(Array.from({ length: 7 }, (_, day) => [day, Array(24).fill(outShow.id)])) : schedule,
     djTalkOnlyBetweenTracks: betweenTracks,
+    djBehaviour: { holdDuckBetweenSpeakers: true },
   } as never);
   function getContext(at = new Date()) {
     return {
@@ -93,6 +94,10 @@ async function scenario() {
     if (text === 'Final track intro' && (mode === 'pending-publication' || mode === 'pending-bed-publication')) await waiting;
     writes.push(text);
     return { voiceId: 'stub', clipMs: 1, aired: Promise.resolve(null) };
+  };
+  queue._airExchange = async (_target, clips) => {
+    for (const clip of clips) writes.push(clip.text);
+    return clips.map(() => ({ voiceId: 'stub', clipMs: 1, aired: Promise.resolve(null) }));
   };
   queue.autoLink = false;
   // Fixed iteration bounds work even if a fixture later freezes Date.now.

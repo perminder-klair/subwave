@@ -10,6 +10,7 @@ import {
   llmCfg, ollamaBaseUrl, loccaEmbedBaseUrl, chatBaseUrl, credentialSig, pinnedApiKey, OPENROUTER_APP_HEADERS,
 } from './registry.js';
 import { embeddingSharesChatCredential } from './capabilities.js';
+import { EMBEDDING_PROVIDER_IDS, llmProviderEntry, openaiCompatibleGateway } from '../../../schemas/providers.js';
 
 // Separate from the registry's language-model cache — the signature is prefixed
 // `embed|` so there's no key overlap, and keeping it local avoids exporting a
@@ -60,31 +61,17 @@ function embeddingCfg(overrides: Partial<EmbeddingCfg> = {}): EmbeddingCfg {
   };
 }
 
+// The catalogue's embedding.defaultModel (schemas/providers.ts). Anthropic has
+// no first-party embedding API and resolves via openai; anything else without
+// embeddings gets the homelab default, which its builder then refuses.
 function defaultEmbeddingModelFor(provider: string): string {
-  switch (provider) {
-    case 'openai':
-    case 'openai-compatible':
-      return 'text-embedding-3-small';
-    case 'google':
-      return 'text-embedding-004';
-    case 'openrouter':
-      // OpenRouter proxies many embedding backends; default to the OpenAI model
-      // since it's the most widely available and OpenAI-compatible (#522).
-      return 'openai/text-embedding-3-small';
-    case 'requesty':
-      // Requesty is OpenAI-compatible and uses provider/model naming, so the
-      // OpenAI embedding model is the safe default — same as openrouter.
-      return 'openai/text-embedding-3-small';
-    case 'anthropic':
-      // No first-party Anthropic embedding API. We resolve via openai.
-      return 'text-embedding-3-small';
-    case 'locca':
-      // Local llama.cpp embedding server — the homelab default model.
-      return 'nomic-embed-text';
-    case 'ollama':
-    default:
-      return 'nomic-embed-text';
-  }
+  if (provider === 'anthropic') return 'text-embedding-3-small';
+  return llmProviderEntry(provider)?.embedding?.defaultModel ?? 'nomic-embed-text';
+}
+
+// "a, b, or c", for an error that names every embedding provider.
+function orList(ids: readonly string[]): string {
+  return ids.length > 1 ? `${ids.slice(0, -1).join(', ')}, or ${ids[ids.length - 1]}` : ids.join('');
 }
 
 function defaultEmbeddingDimFor(model: string): number {
@@ -236,24 +223,24 @@ export function buildEmbeddingModel(cfg: EmbeddingCfg) {
       });
       return provider.textEmbeddingModel(id);
     }
-    case 'requesty': {
-      // Requesty exposes an OpenAI-compatible embeddings endpoint
-      // (POST https://router.requesty.ai/v1/embeddings), so it routes through
-      // the same createOpenAI transport as openrouter — just a fixed base URL.
-      // A real key is required — a missing one 401s with the 'unauthorized'
-      // message.
-      const provider = createOpenAI({
-        baseURL: 'https://router.requesty.ai/v1',
-        apiKey: pinnedApiKey(cfg) || 'unused',
-        name: 'requesty',
-      });
-      return provider.textEmbeddingModel(id);
-    }
     case 'ollama': {
       const provider = createOllama({ baseURL: ollamaBaseUrl(cfg as any) });
       return provider.textEmbeddingModel(id);
     }
-    default:
+    default: {
+      // A fixed-endpoint OpenAI-compatible gateway with embeddings serves them
+      // at {base}/embeddings, through the same createOpenAI transport as
+      // openrouter. A real key is required — a missing one 401s with the
+      // 'unauthorized' message.
+      const gw = openaiCompatibleGateway(cfg.provider);
+      if (gw?.embedding) {
+        const provider = createOpenAI({
+          baseURL: gw.openaiCompatible.baseUrl,
+          apiKey: pinnedApiKey(cfg) || 'unused',
+          name: gw.id,
+        });
+        return provider.textEmbeddingModel(id);
+      }
       // deepseek / gateway (and any future chat-only provider) have no embeddings
       // endpoint. Previously these fell through to the ollama branch, silently
       // pointed at a local Ollama, and failed with a misleading "can't reach
@@ -264,8 +251,9 @@ export function buildEmbeddingModel(cfg: EmbeddingCfg) {
       throw new Error(
         `Provider "${cfg.provider}" has no text-embedding support. Pick an ` +
           `embedding-capable provider in Settings → Library tagger → Embedding ` +
-          `(ollama, openai, google, openrouter, requesty, locca, or openai-compatible).`,
+          `(${orList(EMBEDDING_PROVIDER_IDS)}).`,
       );
+    }
   }
 }
 
@@ -274,8 +262,9 @@ export function embeddingModel() {
   const id = cfg.model || defaultEmbeddingModelFor(cfg.provider);
   const headerSig = Object.entries(cfg.headers || {}).sort(([a], [b]) => a.localeCompare(b));
   // Credentials key the cache by fingerprint only. pinnedApiKey covers the
-  // builders that read their env var at construction (openrouter, requesty), so
-  // a key saved through the secrets form takes effect without a restart.
+  // builders that read their env var at construction (openrouter and the
+  // fixed-endpoint gateways), so a key saved through the secrets form takes
+  // effect without a restart.
   const sig = `embed|${cfg.provider}|${id}|k${credentialSig(pinnedApiKey(cfg))}|${cfg.ollamaUrl}|${cfg.baseUrl}|h${credentialSig(headerSig.length ? JSON.stringify(headerSig) : '')}`;
 
   const cached = embedCache.get(sig);

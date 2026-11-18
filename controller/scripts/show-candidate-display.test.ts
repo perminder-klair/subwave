@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-const displayModulePath = '../../web/components/admin/shows/' + 'candidate-diagnostic.js';
-const display = await import(displayModulePath).catch(() => null);
+import { displayedMatchingTracks } from '../../web/components/admin/shows/candidate-diagnostic.js';
 
 test('strict diagnostics display the effective playlist pool instead of library-wide matches', () => {
   const report = {
@@ -12,7 +11,7 @@ test('strict diagnostics display the effective playlist pool instead of library-
     warnings: [],
   };
 
-  assert.equal(display?.displayedMatchingTracks?.(report), 0);
+  assert.equal(displayedMatchingTracks(report), 0);
 });
 
 test('soft diagnostics keep the filter-fit count visible', () => {
@@ -23,5 +22,5 @@ test('soft diagnostics keep the filter-fit count visible', () => {
     warnings: [],
   };
 
-  assert.equal(display?.displayedMatchingTracks?.(report), 2);
+  assert.equal(displayedMatchingTracks(report), 2);
 });

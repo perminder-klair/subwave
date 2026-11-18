@@ -7,18 +7,11 @@
 // unknown case must degrade to '' so an un-analysed track builds a prompt
 // byte-identical to the pre-change one.
 //
-// Run: `npm test -- track-feel` (tsx scripts/track-feel.test.ts).
+// Run: `npm test -- track-feel`.
 
+import test from 'node:test';
 import assert from 'node:assert/strict';
 import { trackFeel, trackFeelSuffix } from '../src/llm/internal/prompts/track-feel.js';
-
-let failures = 0;
-function test(name: string, fn: () => void | Promise<void>) {
-  return Promise.resolve()
-    .then(fn)
-    .then(() => console.log(`  ✓ ${name}`))
-    .catch((err) => { failures++; console.error(`  ✗ ${name}\n      ${err?.message || err}`); });
-}
 
 await test('the reported track reads high-energy from its audio moods', () => {
   // Arctic Monkeys — "Balaclava", 143.6 BPM. The DJ introduced this with
@@ -77,9 +70,3 @@ await test('labels outside the vocabulary degrade rather than guess', () => {
 await test('matching is case-insensitive', () => {
   assert.equal(trackFeel({ audioMoods: ['Workout', 'FESTIVAL'] }), 'high-energy');
 });
-
-if (failures) {
-  console.error(`\n${failures} test(s) failed`);
-  process.exit(1);
-}
-console.log('\ntrack-feel: all tests passed');

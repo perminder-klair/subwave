@@ -5,6 +5,7 @@ import express from 'express';
 import { config } from './config.js';
 import { envIssues } from './util/env.js';
 import * as settings from './settings.js';
+import { logCompatDetection } from './routes/settings/core.js';
 import * as blocklist from './music/blocklist.js';
 import * as jingles from './broadcast/jingles.js';
 import * as sfx from './broadcast/sfx.js';
@@ -13,11 +14,15 @@ import { queue } from './broadcast/queue.js';
 import * as session from './broadcast/session.js';
 import * as remoteTts from './audio/remoteTts.js';
 import * as kokoro from './audio/kokoro.js';
+import { hostedMaxBitrate, isHosted } from './setup/hosted.js';
 import * as chatterbox from './audio/chatterbox.js';
 import * as pocketTts from './audio/pocketTts.js';
 import { getFullContext } from './context.js';
 import { loadCuriosityLedger } from './skills/curiosity.js';
-import { startScheduler, flushPendingAutoPlaylist } from './broadcast/scheduler.js';
+import { startScheduler, flushPendingAutoPlaylist, refreshAutoPlaylist } from './broadcast/scheduler.js';
+import { showKeyAt } from './broadcast/show-boundary.js';
+import { resumeIntoAnotherShow } from './broadcast/resume-show.js';
+import { autoPlaylistReady, skipTrack } from './broadcast/liquidsoap-control.js';
 import * as geminiTts from './audio/gemini.js';
 import * as geminiLibrary from './audio/gemini-library.js';
 import { startListenerMonitor } from './broadcast/listeners.js';
@@ -46,10 +51,14 @@ import { router as listenersRoutes } from './routes/listeners.js';
 import { router as webhooksRoutes } from './routes/webhooks.js';
 import { router as scrobbleRoutes } from './routes/scrobble.js';
 import { router as likesRoutes } from './routes/likes.js';
+import { router as lyricsRoutes } from './routes/lyrics.js';
 import { router as personasRoutes } from './routes/personas.js';
 import { router as showsRoutes } from './routes/shows.js';
+import { router as steerRoutes } from './routes/steer.js';
 import { router as communityRoutes } from './routes/community.js';
 import { router as backupRoutes } from './routes/backup.js';
+import { router as stemsRoutes } from './routes/stems.js';
+import { router as stemCacheRoutes } from './routes/stem-cache.js';
 import { router as stationsRoutes } from './routes/stations.js';
 import { router as audienceRoutes } from './routes/audience.js';
 import { router as systemRoutes } from './routes/system.js';
@@ -57,6 +66,7 @@ import { router as generateRoutes } from './routes/generate.js';
 import { router as doctorRoutes } from './routes/doctor.js';
 import { router as connectRoutes } from './routes/connect.js';
 import { router as mcpRoutes } from './routes/mcp.js';
+import { router as nowPlayingFileRoutes } from './routes/now-playing-file.js';
 import { loadSecretsIntoEnv } from './setup/secrets.js';
 import { loadNavidromeConfig } from './setup/config.js';
 import { getSetupStatus } from './setup/firstRun.js';
@@ -128,10 +138,14 @@ app.use(listenersRoutes);
 app.use(webhooksRoutes);
 app.use(scrobbleRoutes);
 app.use(likesRoutes);
+app.use(lyricsRoutes);
 app.use(personasRoutes);
 app.use(showsRoutes);
+app.use(steerRoutes);
 app.use(communityRoutes);
 app.use(backupRoutes);
+app.use(stemsRoutes);
+app.use(stemCacheRoutes);
 app.use(stationsRoutes);
 app.use(audienceRoutes);
 app.use(systemRoutes);
@@ -139,6 +153,7 @@ app.use(generateRoutes);
 app.use(doctorRoutes);
 app.use(connectRoutes);
 app.use(mcpRoutes);
+app.use(nowPlayingFileRoutes);
 app.use((_req, res) => res.status(404).json({ error: 'Not found' }));
 app.use(httpErrorHandler);
 
@@ -150,6 +165,14 @@ app.listen(config.server.port, async (err?: Error) => {
     process.exit(1);
   }
   console.log(`SUB/WAVE controller on :${config.server.port}`);
+
+  // Hosted mode reads its env on use (setup/hosted.ts), so read it once here:
+  // a malformed SUBWAVE_HOSTED or SUBWAVE_MAX_BITRATE is then in envIssues for
+  // the booth-log repeat below, and the plan is on record at boot.
+  if (isHosted()) {
+    const ceiling = hostedMaxBitrate();
+    console.log(`[hosted] SUB/WAVE Cloud station${ceiling ? `; streams capped at ${ceiling} kbps` : ''}`);
+  }
 
   // Malformed env vars already fell back and warned on stdout; repeat them into
   // the booth log, which is the surface an operator actually reads.
@@ -187,10 +210,25 @@ app.listen(config.server.port, async (err?: Error) => {
   try {
     await settings.load();
     const s = settings.get();
-    await settings.ensureLiquidsoapSettingsFile();
+    const { rewroteMountFiles } = await settings.ensureLiquidsoapSettingsFile();
+    // A ceiling change (or a hand edit) reached the mount files at boot; the
+    // running mixer still has the old ones until it restarts.
+    if (rewroteMountFiles.length) {
+      const line = `[settings] stream mounts updated to match the saved settings${hostedMaxBitrate() ? ` and this station's ${hostedMaxBitrate()} kbps ceiling` : ''} (${rewroteMountFiles.join(', ')}); they take effect when the mixer next restarts`;
+      console.log(line);
+      queue.log('scheduler', line);
+    }
     console.log(
       `[settings] loaded. jingleRatio=${s.jingleRatio} crossfadeDuration=${s.crossfadeDuration} location=${s.weather.locationName} onAir=${settings.resolveOnAirLocation(s)}`,
     );
+    // The one upgrade that changes behaviour without being asked (#1687), so it
+    // is said where the operator reads, every boot until a save records it.
+    // Detect what an `auto` openai-compatible connection is talking to before
+    // the first pick, and say what was found where the operator reads.
+    void logCompatDetection();
+    if (settings.migratedFromCandidatePool()) {
+      queue.log('picker', 'Candidate Pool is retired: this station now selects tracks with Track Shortlist, its replacement. Review Settings → Music selection; saving any setting records the choice and retires this note.');
+    }
   } catch (err) {
     console.error('[settings] load failed:', err.message);
   }
@@ -223,6 +261,17 @@ app.listen(config.server.port, async (err?: Error) => {
     console.error('[id-rotation] boot apply failed (will retry next boot):', err.message);
   }
 
+  // Hearts whose file came back under a new id (a re-import) follow it. Never
+  // fatal: a miss leaves the heart where it was, for the next boot or tag run.
+  // Not awaited: a planned move asks Navidrome first (music/heart-follow.ts), and
+  // a server still starting must not hold the boot behind its timeout. Nothing
+  // else in the boot depends on where a heart sits.
+  void import('./music/heart-follow.js')
+    .then(({ followMovedHearts }) => followMovedHearts())
+    .catch((err: unknown) => {
+      console.error('[likes] following moved hearts failed (will retry):', err instanceof Error ? err.message : err);
+    });
+
   // Start the remote-TTS /health probe loop now that settings are loaded — its
   // URL lives in settings (not env), so it can't self-start at import time the
   // way the env-configured tts-heavy probe does. Best-effort; never fatal.
@@ -230,6 +279,13 @@ app.listen(config.server.port, async (err?: Error) => {
     remoteTts.start();
   } catch (err: any) {
     console.error('[remote] tts probe start failed:', err.message);
+  }
+  // The shared Kokoro server's probe (KOKORO_URL; no-op without it), so the
+  // first DJ link already knows whether it can render there.
+  try {
+    kokoro.start();
+  } catch (err: any) {
+    console.error('[kokoro] shared server probe start failed:', err.message);
   }
 
   // Resume today's LLM token tally from the durable event log. Must run ONCE and
@@ -308,7 +364,16 @@ app.listen(config.server.port, async (err?: Error) => {
   // every restart (#1256). Bounded internally, so never a boot hang.
   await startListenerMonitor();
   queue.startWatcher();
-  await startStreamIdleMonitor(flushPendingAutoPlaylist);
+  await startStreamIdleMonitor(async ({ showChanged }) => {
+    if (!showChanged) return flushPendingAutoPlaylist();
+    await resumeIntoAnotherShow({
+      snapshot: () => queue.snapshotProgramme(showKeyAt(Date.now())),
+      rebuild: () => refreshAutoPlaylist({ automatic: true }),
+      ready: autoPlaylistReady,
+      drop: (stale, { skip }) => queue.dropProgrammeFromEarlierShow(stale, skip ? skipTrack : null),
+      log: line => queue.log('scheduler', line),
+    });
+  });
   startAudienceMonitor().catch(err => console.error('[audience] init failed:', err.message));
   // Up front so the sync readers see data from the first pick.
   await likes.load().catch(err => console.error('[likes] init failed:', err.message));

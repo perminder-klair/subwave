@@ -154,6 +154,7 @@ export function PersonaIdentityCard({
               />
               <div className="field-hint">
                 A private, soft tie-breaker for track selection. It applies to every picker, never changes the presenter&apos;s voice, overrides show rules, or goes on air.
+                Write only what this presenter favours: anything it says to avoid is ignored, so keep exclusions in a show&apos;s filters or a Library → Blocked (never play) rule.
                 <span className="ml-2 text-muted">{musicLeanLen} / {MUSIC_LEAN_MAX}</span>
               </div>
               <div className="field-hint mt-1.5">

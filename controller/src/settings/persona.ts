@@ -18,6 +18,8 @@ import {
   personaToneDirectives,
   takeoverShowId,
 } from './vocab.js';
+import { steerActiveAt, type Steer } from '../schemas/steer.js';
+import { steeredShow } from '../music/steer.js';
 import { DEFAULTS, coerceMaxTrackSeconds, coerceMinTrackLengthSeconds } from './defaults.js';
 import { get, peek } from './store.js';
 
@@ -200,11 +202,19 @@ export function resolveActiveShow(date = new Date(), s = get()) {
   return resolveShowShape(show, s);
 }
 
+// A stored show by id, in the same resolved shape the pick paths read — for
+// operator surfaces about a show that need not be on air (the in-order
+// position peek in routes/shows.ts). null when no such show exists.
+export function resolveShowById(id: string, s = get()) {
+  const show = s?.shows?.find(x => x.id === id);
+  return show ? resolveShowShape(show, s) : null;
+}
+
 // The takeover currently in force, or null (absent, expired, or a target that
 // names nothing real — a dangling or malformed show id). An explicit null
-// target is a valid Default programming takeover. Route/janitor helper.
-export function getScheduleOverride(now = Date.now()) {
-  const s = get();
+// target is a valid Default programming takeover. Route/janitor helper. `s`
+// lets a caller ask about settings it is about to save.
+export function getScheduleOverride(now = Date.now(), s = get()) {
   const ov = s?.scheduleOverride;
   if (!ov) return null;
   if (now >= ov.expiresAt) return null;
@@ -212,6 +222,20 @@ export function getScheduleOverride(now = Date.now()) {
   const pinnedId = takeoverShowId(ov);
   if (!pinnedId || !s.shows?.some(x => x.id === pinnedId)) return null;
   return ov;
+}
+
+// The steer in force at `now`, or null. Look-ahead callers pass the instant
+// their pick will air, as they do for the takeover above.
+export function activeSteer(now = Date.now(), s = get()): Steer | null {
+  return steerActiveAt(s?.steer as Steer | null | undefined, now);
+}
+
+// The show as a PICK path reads it: the active show with a live steer's music
+// overlay. Both halves are judged at the same instant, the pick's look-ahead,
+// so a steer ending at a show boundary cannot colour the next show's first
+// track. Everything that asks which show is on air keeps resolveActiveShow.
+export function resolvePickShow(date = new Date(), s = get()) {
+  return steeredShow(resolveActiveShow(date, s), activeSteer(date.getTime(), s));
 }
 
 // A stored show, resolved to the consumer-facing shape (persona/guests
@@ -263,11 +287,21 @@ function resolveShowShape(show, s) {
     // would make the switch a silent no-op on every pick path — the #779
     // blocklist failure, exactly.
     playlistExhaust: show.playlistExhaust === true,
+    // Play in order: read off the RESOLVED show by the in-order branch in
+    // broadcast/dj-agent.ts, so a missing line here is the #779 no-op again.
+    playlistInOrder: show.playlistInOrder === true,
     // Navidrome playlist blocklist: tracks in these playlists are hard-dropped
     // from the show's candidate pool (resolveExcludedPlaylistIds reads this off
     // the RESOLVED show, so omitting it here silently disabled the whole
     // feature on every pick path — the #779 blocklist no-op).
     excludedPlaylistIds: Array.isArray(show.excludedPlaylistIds) ? show.excludedPlaylistIds.filter((v: unknown) => typeof v === 'string') : [],
+    // A clean show: read off the RESOLVED show by music/explicit-policy.ts, so a
+    // missing line here is the #779 no-op again.
+    excludeExplicit: show.excludeExplicit === true,
+    // Album kinds left out (Library → Era): read off the RESOLVED show by the
+    // same resolveExcludedPlaylistIds, so omitting it here would be the #779
+    // no-op on every pick path.
+    excludedAlbumKinds: Array.isArray(show.excludedAlbumKinds) ? show.excludedAlbumKinds.filter((v: unknown) => typeof v === 'string') : [],
     // Empty string means "fall back to the station-wide default". The route
     // layer is responsible for resolving an empty/stale id against the live
     // theme registry; we just surface what the show declares.
@@ -391,6 +425,37 @@ export function resolveOnAirLocation(s: unknown = peek()) {
   );
 }
 
+// The template renderDjPrompt renders: the active library entry (load() and
+// update() resolve it into djPrompt), else the built-in default.
+export function djPromptTemplate(s: unknown = peek()): string {
+  const stored = s as { djPrompt?: string } | null | undefined;
+  return stored?.djPrompt && stored.djPrompt.trim() ? stored.djPrompt : DEFAULT_DJ_PROMPT_TEMPLATE;
+}
+
+// The on-air location the DJ may name, or '' when it may name none (#2099).
+// The operator's template decides for every prompt, not only the one it
+// renders: the prompt editor tells them to drop {location} if they never want
+// the DJ to name a place, and the location grounding rule that rides every
+// speech prompt would otherwise name it for them. The default template keeps
+// {location}, so a default install names it exactly as before.
+export function spokenOnAirLocation(s: unknown = peek()): string {
+  return djPromptTemplate(s).includes('{location}') ? resolveOnAirLocation(s) : '';
+}
+
+// The live context as a prompt or a skill tool sees it. The weather block's
+// `location` is the station's place (context.ts attributedLocation), so when
+// spokenOnAirLocation() withholds it the place leaves the reading too, while
+// the condition and temperature stay. A station that may name its place gets
+// the same object back, unchanged. Never mutates: the block is the weather
+// cache's own, and the display surfaces (GET /now-playing, the schedule
+// drawer) keep reading the place from it.
+export function spokenContext<T>(context: T, s: unknown = peek()): T {
+  const weather = (context as { weather?: unknown } | null | undefined)?.weather;
+  if (!weather || typeof weather !== 'object' || !('location' in weather) || spokenOnAirLocation(s)) return context;
+  const { location: _withheld, ...reading } = weather as Record<string, unknown>;
+  return { ...context, weather: reading };
+}
+
 // Render the DJ system prompt by substituting {name}, {soul}, {station},
 // {location}, {language}. {name}/{soul} come from the supplied persona; the
 // template is the global djPrompt (falling back to DEFAULT_DJ_PROMPT_TEMPLATE).
@@ -402,9 +467,7 @@ export function renderDjPrompt(persona: unknown, ctx: unknown = {}) {
   const p = persona as { name?: unknown; soul?: unknown; language?: unknown } | null | undefined;
   const station = c.station || peek()?.station || DEFAULTS.station;
   const location = c.location || resolveOnAirLocation();
-  const stored = peek();
-  const tpl =
-    stored?.djPrompt && stored.djPrompt.trim() ? stored.djPrompt : DEFAULT_DJ_PROMPT_TEMPLATE;
+  const tpl = djPromptTemplate();
   // When the template itself closes the soul (the default ends "{soul}."), a
   // soul ending in "." would render ".." — strip that ONE lone period. Only
   // that: an ellipsis ("..." or "…") is intentional trailing-off voice, and
@@ -419,7 +482,7 @@ export function renderDjPrompt(persona: unknown, ctx: unknown = {}) {
     .replaceAll('{name}', (p?.name as string) || 'your host')
     .replaceAll('{soul}', soulText)
     .replaceAll('{station}', station)
-    .replaceAll('{location}', location);
+    .replaceAll('{location}', location as string);
   const tone = personaToneDirectives(persona);
   // Everything this prompt produces IS speech, so the rules apply wholesale.
   const house = houseRulesBlock('follow these in everything you say on air');

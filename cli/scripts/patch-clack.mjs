@@ -17,6 +17,8 @@ const distPath = resolve(here, '..', 'node_modules', '@clack', 'prompts', 'dist'
 const src = readFileSync(distPath, 'utf8');
 
 // The high-level wrappers the CLI uses that read keyboard input.
+// Keep in sync with EXPECTED in check-clack-patch.mjs, which counts one
+// forwarded `input` site per wrapper in the compiled binary.
 const WRAPPERS = ['text', 'password', 'confirm', 'select'];
 
 const ident = '[A-Za-z_$][\\w$]*';

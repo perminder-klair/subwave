@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, m, useReducedMotion } from 'motion/react';
+import { cn } from '@/lib/cn';
 import { selectThinkingTurn, turnClass, turnText } from '@/lib/sessionFeed';
 import BoothBuddy, { type BuddyMood } from '@/components/BoothBuddy';
 import { useLiteMode } from '@/hooks/useLiteMode';
@@ -87,9 +88,10 @@ export interface DjThinkingLineProps {
    *  false. Defaults off (operator opts in). */
   buddyOn?: boolean;
   onOpenBooth?: () => void;
+  className?: string;
 }
 
-export default function DjThinkingLine({ feed, enabled, currentTrackId = null, buddyOn = false, onOpenBooth }: DjThinkingLineProps) {
+export default function DjThinkingLine({ feed, enabled, currentTrackId = null, buddyOn = false, onOpenBooth, className }: DjThinkingLineProps) {
   // The turn relevant to what's ON AIR now — see selectThinkingTurn (#546).
   const latest = useMemo<SessionTurn | null>(
     () => selectThinkingTurn(feed, currentTrackId),
@@ -102,7 +104,7 @@ export default function DjThinkingLine({ feed, enabled, currentTrackId = null, b
   const buddyRef = useRef<HTMLSpanElement>(null);
 
   // MotionConfig reducedMotion="user" only drops transform animations (this
-  // one is opacity+blur), and html.lite's `animation: none` can't reach a
+  // one is opacity-only), and html.lite's `animation: none` can't reach a
   // JS-driven tween, so both need an explicit gate here.
   const reduced = useReducedMotion();
   const { lite } = useLiteMode();
@@ -137,7 +139,10 @@ export default function DjThinkingLine({ feed, enabled, currentTrackId = null, b
       }}
       title="Open booth feed"
       // Full width on phones; the 82% cap is a desktop line-length limit.
-      className="v3-focus mt-[22px] mb-[10px] flex w-full max-w-full cursor-pointer items-start gap-2 font-mono text-[14px] leading-[1.6] text-muted sm:max-w-[82%] sm:text-[15px]"
+      className={cn(
+        'v3-focus mt-[22px] mb-[10px] flex w-full max-w-full cursor-pointer items-start gap-2 font-mono text-[14px] leading-[1.6] text-muted sm:max-w-[82%] sm:text-[15px]',
+        className,
+      )}
     >
       {buddyOn ? (
         <span ref={buddyRef} aria-hidden="true" className="mt-[1px] shrink-0">
@@ -167,9 +172,12 @@ export default function DjThinkingLine({ feed, enabled, currentTrackId = null, b
               : words.map((word, i) => (
                   <m.span
                     key={i}
+                    // Opacity only. A per-word blur was a filter layer on every
+                    // word at once, which WebKit paints on the main thread; an
+                    // inline span can't take a transform either.
                     variants={{
-                      hidden:  { opacity: 0, filter: 'blur(2px)' },
-                      visible: { opacity: 1, filter: 'blur(0px)', transition: { duration: 0.12 } },
+                      hidden:  { opacity: 0 },
+                      visible: { opacity: 1, transition: { duration: 0.12 } },
                     }}
                     aria-hidden="true"
                     // `pre` would suppress every wrap opportunity and overflow

@@ -1,32 +1,50 @@
+# syntax=docker/dockerfile:1
 # SUB/WAVE broadcast image — Icecast2 + Liquidsoap in one container.
 # icecast2 serves listeners on :7702; liquidsoap connects over loopback and
 # exposes telnet on :1234 (internal). broadcast-entrypoint.sh resolves the
 # shared passwords, renders icecast.xml, launches both, and exits if either
 # dies so the restart policy bounces them together.
 #
-# v2.4.5 minimum: 2.4.4's per-pull clock scan let the per-transition DJ effect
+# v2.4.6 minimum. 2.4.4's per-pull clock scan let the per-transition DJ effect
 # chains (~30 operators) peg a core and stall the stream clock at every
-# crossfade ("Latency is too high" → dead-air source resets). 2.4.5 makes
-# clock propagation push-based/O(1).
-# Rebuild only Liquidsoap 2.4.5 with upstream #5257. Keep this stage identical
-# in both Dockerfiles; the shared script pins source and tests the patch.
-FROM ghcr.io/savonet/liquidsoap:ci-debian_trixie-4.14.2@sha256:8ba05311100a0271f2aa544d56b5dec301885bd0e35c21aea203b41125807822 AS liquidsoap-build
-USER opam
-COPY --chown=opam:opam docker/liquidsoap/build.sh docker/liquidsoap/unifier-path-compression.patch docker/liquidsoap/unifier-test.ml /patch/
-RUN sh /patch/build.sh
+# crossfade ("Latency is too high" → dead-air source resets); 2.4.5 made clock
+# propagation push-based/O(1). 2.4.5 in turn grows unifier reference chains
+# without bound on a long-running station (#5257, until now backported here
+# from source), and its `sequence` drops the first partial frame of the
+# incoming source after a `cross` transition (#5296), which put up to 20 ms of
+# beat error on every stem-blend clip seam whose outgoing track ends mid-frame.
+# Stock upstream release, pinned by manifest digest. Keep this stage identical
+# in both Dockerfiles (CI compares the two executables); see docker/liquidsoap/.
+FROM savonet/liquidsoap:v2.4.6@sha256:1d4ecfc1b53851c5f018d1ada430302a0678f789a6e96f6de5264255f679689c AS liquidsoap
 
-FROM savonet/liquidsoap:v2.4.5@sha256:206664046c8cd012151928a6ea903a6ab65c20295b84c0891b33b93fbf5a8f24 AS liquidsoap-patched
-COPY --from=liquidsoap-build /tmp/out/liquidsoap /usr/bin/liquidsoap
-COPY --from=liquidsoap-build /tmp/out/*.txt /usr/share/doc/liquidsoap-subwave/
-USER root
-# Cached OCaml values from the stock executable must not survive the rebuild.
-RUN rm -rf /var/cache/liquidsoap/*
-USER liquidsoap
-RUN liquidsoap --cache-stdlib
-
-FROM liquidsoap-patched AS runtime
+FROM liquidsoap AS runtime
 
 USER root
+
+# Icecast-KH, not Debian's icecast2. The <x-forwarded-for> trusted-proxy list
+# the entrypoint renders, and the listener-auth behaviour it relies on, are KH
+# features: stock Icecast 2.4.4 boots, streams and ignores them, so every
+# listener shows the edge's container IP and loses its country. KH comes from
+# deb-multimedia, which the 2.4.5 base image happened to configure and 2.4.6
+# does not. Pinned to icecast2 alone so the rest of DMO cannot replace Debian
+# packages, the mixer's included: the stock 2.4.6 liquidsoap bundles a static
+# FFmpeg and fdk-aac, but links Debian's libmp3lame0, libopus0, libflac and
+# libvorbis dynamically, and DMO also ships libmp3lame0 (1:3.100-dmo3), so the
+# pin keeps the MP3 encoder on Debian's build. Same for the AIO's CLI ffmpeg.
+ADD --checksum=sha256:8dc6cbb266c701cfe58bd1d2eb9fe2245a1d6341c7110cfbfe3a5a975dcf97ca \
+    https://www.deb-multimedia.org/pool/main/d/deb-multimedia-keyring/deb-multimedia-keyring_2024.9.1_all.deb \
+    /tmp/deb-multimedia-keyring.deb
+RUN dpkg-deb --fsys-tarfile /tmp/deb-multimedia-keyring.deb \
+      | tar -xO ./usr/share/keyrings/deb-multimedia-keyring.pgp \
+      > /usr/share/keyrings/deb-multimedia-keyring.pgp \
+ && echo '11b17f001b376cea4bfdf541bbe4d40fef5391eb0772b9d61d68c2aca21de893  /usr/share/keyrings/deb-multimedia-keyring.pgp' | sha256sum -c - \
+ && rm /tmp/deb-multimedia-keyring.deb \
+ && printf '%s\n' 'Types: deb' 'URIs: https://www.deb-multimedia.org' 'Suites: trixie' \
+        'Components: main' 'Signed-By: /usr/share/keyrings/deb-multimedia-keyring.pgp' \
+        > /etc/apt/sources.list.d/dmo.sources \
+ && printf '%s\n' 'Package: *' 'Pin: origin www.deb-multimedia.org' 'Pin-Priority: 100' '' \
+        'Package: icecast2' 'Pin: origin www.deb-multimedia.org' 'Pin-Priority: 990' \
+        > /etc/apt/preferences.d/dmo-icecast-kh
 
 # sudo: drop privileges to icecast2/liquidsoap. openssl: first-boot secret
 # generation. curl: liquidsoap's HTTPS Subsonic fetch + the entrypoint's
@@ -38,6 +56,7 @@ RUN apt-get update -qq \
         openssl \
         curl \
         ca-certificates \
+ && icecast2 -v 2>&1 | grep -q -- '-kh' \
  && rm -rf /var/lib/apt/lists/*
 
 # Baked config + repo-bundled audio (prod is image-only; dev compose can still

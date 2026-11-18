@@ -49,8 +49,6 @@ for (const [name, mod] of ENGINES) {
       `${name} must reject, not emit an unhandled 'error'`,
     );
 
-    // Still here, so the unhandled 'error' event did not fire.
-    assert.equal(typeof process.pid, 'number');
   });
 }
 

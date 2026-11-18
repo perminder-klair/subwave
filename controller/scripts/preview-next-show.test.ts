@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { after, mock, test } from 'node:test';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const root = mkdtempSync(join(tmpdir(), 'subwave-preview-next-show-'));
 process.env.STATE_DIR = root;
@@ -15,9 +16,9 @@ const { linkPrompt } = await import('../src/llm/internal/prompts/scripts.js');
 mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify({
   current: { temperature_2m: 20, weather_code: 0, is_day: 1 },
 })));
-after(() => {
+after(async () => {
   mock.restoreAll();
-  rmSync(root, { recursive: true, force: true });
+  await removeTempDir(root);
 });
 
 test('preview preference survives cold loads in both directions and defaults on for upgrades', async () => {

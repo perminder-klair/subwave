@@ -1,6 +1,13 @@
 // Crossfades overlap both clip seams. Move X's cue out and Y's cue in by crossSec so each
 // overlap mixes the same musical instant. Short seam crosses require the #1774 mixer buffer
-// wiring. scripts/stem-seam-test.sh, #1774, docs/stem-transitions-research.md.
+// wiring. `cross` buffers whole frames, so its overlap can fall a frame short of crossSec;
+// X and the clip therefore also carry crossSec as `liq_clip_lead`, and radio.liq buffers
+// past it and starts the incoming side exactly crossSec before the outgoing one ends.
+// Y's liq_cue_in itself lands on the next codec frame, up to ~93ms late; the drain
+// probes how late (music/cue-landing.ts) and stamps `liq_clip_cue_late` so the mixer
+// shortens the clip -> Y lead by it (#2003). An MP3 lands early by its encoder delay,
+// so its stamp is negative and lengthens the lead (#2077).
+// scripts/stem-seam-test.sh, #1774, docs/stem-transitions-research.md.
 export const CLIP_SEAM_CROSS_SEC = 0.3;
 
 export interface ClipSeamCues {

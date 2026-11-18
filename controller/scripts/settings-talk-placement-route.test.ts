@@ -40,6 +40,7 @@ async function getSettings() {
       pauseTalkMinSeconds?: number;
       djBehaviour?: {
         releaseYearMentions?: string;
+        holdDuckBetweenSpeakers?: boolean;
         recapLimit?: number;
         recapMinutes?: number;
         recapChars?: number;
@@ -72,6 +73,19 @@ test('GET /settings returns false for the default Talk placement', async () => {
   assert.equal(values.djBehaviour?.recapLimit, 10);
   assert.equal(values.djBehaviour?.recapMinutes, 120);
   assert.equal(values.djBehaviour?.recapChars, 140);
+  assert.equal(values.djBehaviour?.holdDuckBetweenSpeakers, false);
+});
+
+test('the banter duck holds only when opted in, and survives a cold load', async () => {
+  await postSettings({ djBehaviour: { holdDuckBetweenSpeakers: true } });
+  assert.equal((await getSettings()).djBehaviour?.holdDuckBetweenSpeakers, true);
+
+  setCache(null);
+  await settings.load();
+  assert.equal((await getSettings()).djBehaviour?.holdDuckBetweenSpeakers, true);
+
+  await postSettings({ djBehaviour: { holdDuckBetweenSpeakers: false } });
+  assert.equal((await getSettings()).djBehaviour?.holdDuckBetweenSpeakers, false);
 });
 
 test('GET /settings returns saved Talk placement without changing Voice engine', async () => {
@@ -157,7 +171,8 @@ test('DJ behaviour segmented controls expose their visible labels and help text'
   for (const aria of ['talkPlacementAria', 'linkStyleAria']) {
     assert.match(source, new RegExp(`<Label \\{\\.\\.\\.${aria}\\.labelledByProps\\}`));
     assert.match(source, new RegExp(`<Seg\\s+\\{\\.\\.\\.${aria}\\.groupProps\\}`));
-    assert.match(source, new RegExp(`<p \\{\\.\\.\\.${aria}\\.descriptionProps\\}`));
+    // The help text's element is layout; the description wiring is the point.
+    assert.match(source, new RegExp(`<(?:p|div) \\{\\.\\.\\.${aria}\\.descriptionProps\\}`));
   }
 });
 

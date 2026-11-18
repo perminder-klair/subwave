@@ -9,8 +9,10 @@
 // Run: npm test -- speech-label-boundary
 
 import assert from 'node:assert/strict';
+import { weekFor as fullScheduleWeek } from './test-utils/fixtures.js';
+import { chatCompletionResponse } from './test-utils/llm.js';
 import { after, beforeEach, test, type TestContext } from 'node:test';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -28,6 +30,7 @@ const { withTalkAir } = await import('../src/broadcast/talk-air.js');
 
 const realSpeak = (queue as any)._speak;
 const realAirVoice = (queue as any)._airVoice;
+const realAirExchange = (queue as any)._airExchange;
 
 const template = settings.get().personas[0];
 const IRIS = { ...template, id: 'p_iris', name: 'Iris' };
@@ -35,11 +38,7 @@ const LUCIFER = { ...template, id: 'p_lucifer', name: 'Lucifer' };
 const SOLENE = { ...template, id: 'p_solene', name: 'Solène' };
 const SHOW = 's_label';
 
-function week() {
-  const out: Record<number, string[]> = {};
-  for (let day = 0; day < 7; day++) out[day] = Array(24).fill(SHOW);
-  return out;
-}
+function week() { return fullScheduleWeek(SHOW); }
 
 function ctx() {
   return {
@@ -72,18 +71,26 @@ beforeEach(async () => {
     return wav;
   };
   (queue as any)._airVoice = async () => true;
+  (queue as any)._airExchange = async (_channel: string,
+    clips: { wavPath: string; text: string; gainDb: number }[]) =>
+    clips.map((_clip, index) => ({ voiceId: `line-${index}`, clipMs: 100, aired: Promise.resolve(null) }));
   await settings.update({
     personas: [IRIS], activePersonaId: IRIS.id,
     shows: [{ id: SHOW, name: 'Label Show', topic: 'tests', personaId: IRIS.id, energies: ['medium'] }],
     schedule: week(), scheduleOverride: null,
+    djBehaviour: { holdDuckBetweenSpeakers: true },
     tts: { enabled: true },
   } as never);
+  // A mixer that has spoken since it started: the held duck batches an
+  // exchange only once voice markers exist (batchExchangeDelivery).
+  writeFileSync(config.liquidsoap.voicePlayingFile, JSON.stringify({ voiceId: 'earlier', startedAt: Date.now() / 1000 }));
   session.start(ctx());
 });
 
 after(async () => {
   (queue as any)._speak = realSpeak;
   (queue as any)._airVoice = realAirVoice;
+  (queue as any)._airExchange = realAirExchange;
   queue.senderBusy = false;
   await new Promise(resolve => setTimeout(resolve, 1_100));
   rmSync(root, { recursive: true, force: true });
@@ -201,7 +208,7 @@ test('a timed-out clean render is reused at air time without stripping or render
     spoken.push(text);
     return new Promise<string>(resolve => { finish = resolve; });
   };
-  const pending = queue.startIntroRender(item);
+  const pending = queue.startIntroRender(item)!;
   assert.deepEqual(await awaitIntroRender(pending, 5), { status: 'timed-out' });
   const air = queue.airIntro(item);
   finish(wav);
@@ -244,10 +251,11 @@ for (const placement of ['immediate', 'next-track'] as const) {
   test(`Gemini lines receive once-cleaned cast labels and retain each speaker (${placement})`, async (t) => {
     const lines = await geminiExchange(t);
     const aired: { text: string; gain: number }[] = [];
-    (queue as any)._airVoice = async (_channel: string, _path: string, text: string, gain: number) => {
-      aired.push({ text, gain });
-      return { voiceId: `line-${aired.length}`, clipMs: 100, aired: Promise.resolve(null) };
-    };
+    (queue as any)._airExchange = async (_channel: string,
+      clips: { wavPath: string; text: string; gainDb: number }[]) => clips.map(clip => {
+        aired.push({ text: clip.text, gain: clip.gainDb });
+        return { voiceId: `line-${aired.length}`, clipMs: 100, aired: Promise.resolve(null) };
+      });
     const kind = placement === 'next-track' ? 'handoff' : 'banter';
     assert.equal(await withTalkAir(placement, () => queue.announceExchange(lines, kind, { castNames: [SOLENE.name] })), true);
     assert.deepEqual(spoken, cleanedExchange);
@@ -270,16 +278,15 @@ for (const placement of ['immediate', 'next-track'] as const) {
   });
 }
 
-test('the banter runner carries its complete captured cast through generation into delivery', async () => {
+test('the banter runner carries its complete captured cast through generation into delivery', async (t) => {
   const { runBanter } = await import('../src/broadcast/scheduler.js');
   await settings.update({
     personas: [IRIS, LUCIFER, SOLENE],
     shows: [{ id: SHOW, name: 'Label Show', topic: 'tests', personaId: IRIS.id, guestPersonaIds: [LUCIFER.id, SOLENE.id] }],
     llm: { provider: 'openai-compatible', baseUrl: 'http://review.invalid/v1', model: 'test', fallback: { enabled: false } },
   } as never);
-  const realFetch = globalThis.fetch;
   let calls = 0;
-  globalThis.fetch = async (url, init) => {
+  const fetchMock = t.mock.method(globalThis, 'fetch', async (url, init) => {
     if (!String(url).endsWith('/chat/completions')) throw new Error('external network disabled in speech regression');
     calls += 1;
     const request = JSON.parse(String(init?.body));
@@ -287,9 +294,8 @@ test('the banter runner carries its complete captured cast through generation in
     // Change the live cast while the model is in flight. Delivery must keep
     // the prompt's known names and each returned line's original voice.
     await settings.update({ shows: [{ id: SHOW, name: 'Label Show', personaId: IRIS.id }] } as never);
-    return new Response(JSON.stringify({
-      id: 'speech-test', object: 'chat.completion', created: 1, model: 'test',
-      choices: [{ index: 0, finish_reason: 'tool_calls', message: {
+    return chatCompletionResponse({ id: 'speech-test', model: 'test',
+      message: {
         role: 'assistant', content: null,
         tool_calls: [{ id: 'emit-test', type: 'function', function: {
           name: request.tools[0].function.name,
@@ -299,16 +305,15 @@ test('the banter runner carries its complete captured cast through generation in
             { speaker: IRIS.id, text: 'Et la suite.' },
           ] }),
         } }],
-      } }],
-      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-    }), { headers: { 'content-type': 'application/json' } });
-  };
+      },
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
+  });
   try {
     await runBanter();
     assert.equal(calls, 1);
     assert.deepEqual(spoken, ['Bonsoir.', 'Oui.', 'Et la suite.']);
     assert.deepEqual(speakers, [IRIS.id, LUCIFER.id, IRIS.id]);
   } finally {
-    globalThis.fetch = realFetch;
+    fetchMock.mock.restore();
   }
 });

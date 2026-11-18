@@ -1,9 +1,11 @@
 import type { SessionContext, ProgrammeState } from '../src/broadcast/session.js';
 import assert from 'node:assert/strict';
+import { chatCompletionResponse } from './test-utils/llm.js';
 import test, { after } from 'node:test';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const root = await mkdtemp(join(tmpdir(), 'subwave-episode-lifecycle-'));
 process.env.STATE_DIR = root;
@@ -16,19 +18,29 @@ const registry = await import('../src/skills/registry.js');
 const { getFullContext } = await import('../src/context.js');
 const { prepareEpisodeContext, showPreparation } = await import('../src/broadcast/show-preparation.js');
 const { config } = await import('../src/config.js');
-after(() => rm(root, { recursive: true, force: true }));
+after(() => removeTempDir(root));
 await settings.load();
 
 const plan = { angle: 'Episode angle', features: [], introNote: null, outroNote: null };
 const consumed = { intro: true, 'feature:0': true, outro: true };
 const weekFor = (id: string) => Object.fromEntries(Array.from({ length: 7 }, (_, day) => [day, Array(24).fill(id)]));
 
+// One process stands in for a restart here, and a real restart would take
+// start()'s debounced session write down with it. In-process that write lands
+// up to PERSIST_DEBOUNCE_MS later, on the very file recover() is reading, and
+// on a loaded host it landed first and recover() resumed the fresh session.
+// So let it land, then lay down the file the restart would have found.
+async function restartInto(ctx: SessionContext, found: string) {
+  session.start(ctx);
+  await new Promise(resolve => setTimeout(resolve, session.PERSIST_DEBOUNCE_MS + 100));
+  await writeFile(config.session.currentFile, found);
+  return session.recover(ctx);
+}
+
 function fixtureFetch(): Response {
-  return new Response(JSON.stringify({
-    id: 'fixture', object: 'chat.completion', created: 1, model: 'fixture-model',
-    choices: [{ index: 0, message: { role: 'assistant', content: 'Welcome to the prepared episode.' }, finish_reason: 'stop' }],
-    usage: { prompt_tokens: 10, completion_tokens: 8, total_tokens: 18 },
-  }), { headers: { 'content-type': 'application/json' } });
+  return chatCompletionResponse({ id: 'fixture',
+    message: { role: 'assistant', content: 'Welcome to the prepared episode.' },
+    usage: { prompt_tokens: 10, completion_tokens: 8, total_tokens: 18 } });
 }
 
 for (const sameSubject of [false, true]) {
@@ -191,9 +203,7 @@ for (const transition of ['start', 'cancel', 'expiry']) {
       // A restart after end() persisted and before start() committed is a
       // fresh-session recovery on this branch as well as the #1801 branch.
       stored.endedAt = new Date(clock).toISOString();
-      await writeFile(config.session.currentFile, JSON.stringify(stored));
-      session.start(ctx);
-      await session.recover(ctx);
+      await restartInto(ctx, JSON.stringify(stored));
       assert.equal(session.getProgramme()?.status, 'pending');
       assert.equal(session.getProgramme()?.preparationOccurrence, undefined);
       await programme.ensurePlan(ctx, new Date(clock));
@@ -274,9 +284,9 @@ test('an ordinary delayed roll saves outgoing research and recovers it independe
   const incoming = await prepareEpisodeContext(await getFullContext(new Date(clock)));
   await session.maybeRoll(incoming);
   assert.match(session.pendingHandoff()?.episodeEditorial || '', /ALPHA OUTGOING/);
-  assert.match(await readFile(config.session.currentFile, 'utf8'), /ALPHA OUTGOING/);
-  session.start(incoming);
-  await session.recover(incoming);
+  const persisted = await readFile(config.session.currentFile, 'utf8');
+  assert.match(persisted, /ALPHA OUTGOING/);
+  await restartInto(incoming, persisted);
   let signoff = '';
   let greeting = '';
   await runPersonaHandoff({ getDjRecap: () => '', getRecentOpeners: () => [], announceExchange: async () => true }, incoming, {

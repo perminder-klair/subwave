@@ -7,6 +7,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const stateRoot = mkdtempSync(join(tmpdir(), 'subwave-pause-delivery-'));
 process.env.STATE_DIR = stateRoot;
@@ -70,4 +71,4 @@ test('marker parsers fail closed on a missing delivery or unusable clock', () =>
   assert.equal(parsePauseVoiceStarted(JSON.stringify({ deliveryId, startedAt: 0 })), null);
 });
 
-test.after(() => rmSync(stateRoot, { recursive: true, force: true }));
+test.after(() => removeTempDir(stateRoot));

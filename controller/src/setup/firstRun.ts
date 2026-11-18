@@ -9,12 +9,16 @@
 import { hasNavidrome, resolveNavidrome, navidromeEnvLocks } from './navidrome-policy.js';
 import { config, NAVIDROME_ENV_ENABLED } from '../config.js';
 import { loadSetupConfig } from './config.js';
+import { isHosted } from './hosted.js';
 
 export interface SetupStatus {
   needsSetup: boolean;
   setupCompletedAt: string | null;
   // Useful for the wizard's "I see you already have NAVIDROME_URL in env" UX.
   navidromeSource: 'env' | 'setup-config' | 'unset';
+  // Run by SUB/WAVE Cloud (SUBWAVE_HOSTED): the wizard skips the LLM and voice
+  // steps, which the box agent manages (setup/hosted.ts).
+  hosted: boolean;
 }
 
 // Environment configuration only applies to a legacy single-station install.
@@ -30,6 +34,7 @@ export async function getSetupStatus(): Promise<SetupStatus> {
     needsSetup: !filled,
     setupCompletedAt: sc.setupCompletedAt || null,
     navidromeSource: !filled ? 'unset' : envHasNavidrome() ? 'env' : 'setup-config',
+    hosted: isHosted(),
   };
 }
 
@@ -41,5 +46,6 @@ export function getSetupStatusSync(): SetupStatus {
     needsSetup: !filled,
     setupCompletedAt: null,
     navidromeSource: !filled ? 'unset' : envHasNavidrome() ? 'env' : 'setup-config',
+    hosted: isHosted(),
   };
 }

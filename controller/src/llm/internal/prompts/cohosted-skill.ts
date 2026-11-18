@@ -5,6 +5,7 @@
 import { z } from 'zod';
 import * as settings from '../../../settings.js';
 import { soulBrief } from '../core/pure.js';
+import { onAirLocationGrounding } from './grounding.js';
 
 interface CastPersona {
   id: string;
@@ -71,6 +72,7 @@ Rules:
 - Each contribution is 2–5 short sentences. Together they form one coherent discussion: react to each other, differ naturally, and avoid repeated points.
 - Each speaker stays in THEIR OWN character. The host carries the room and the guest co-hosts speak as themselves.
 - ${grounding}
+- ${onAirLocationGrounding()}
 - Plain spoken words only. Do not write speaker labels such as "Name:" inside text; speaker identity travels separately and each line will use that persona's own TTS voice.
 - Everyone speaks ${lang} on air. ${settings.spokenProperNounDirective(host)}${settings.castHouseRulesBlock()}`;
 }

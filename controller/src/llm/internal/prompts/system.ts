@@ -6,6 +6,7 @@ import * as settings from '../../../settings.js';
 import { resolvePersonaVoiceSlot } from '../../../audio/persona-engine.js';
 import { resolveCloudModelForPersona, resolveCloudProviderForPersona } from '../speech/cloud-speech.js';
 import { cloudExpressionCueFamily } from '../core/pure.js';
+import { onAirLocationGrounding } from './grounding.js';
 
 // Paralinguistic tags Chatterbox renders as actual non-verbal sounds. Every
 // other engine (piper, kokoro, cloud) reads `[laugh]` aloud as the word
@@ -14,12 +15,13 @@ import { cloudExpressionCueFamily } from '../core/pure.js';
 const CHATTERBOX_TAG_HINT =
   '\n\nYou may sparingly insert non-verbal cues in square brackets: [laugh], [chuckle], [sigh], [cough]. Use at most two when they genuinely improve delivery. Every cue must immediately precede spoken words; never stack cues, add a closing tag, or end a segment with one.';
 
-// ElevenLabs v3 renders bracketed audio tags as actual expressive cues rather
-// than reading them aloud (issue #696). Gated on the RESOLVED cloud model —
-// only eleven_v3* families support this — so an ElevenLabs persona still on
+// ElevenLabs v3 and v4 render bracketed audio tags as actual expressive cues
+// rather than reading them aloud (issue #696). Gated on the RESOLVED cloud
+// model — only the eleven_v3* and eleven_v4* families support this — so an
+// ElevenLabs persona still on
 // v2 (or a persona whose provider override resolves to eleven_flash_v2_5)
 // never sees the hint. Same structure as CHATTERBOX_TAG_HINT above but a
-// separate constant with v3's own verb-form tag vocabulary (per the
+// separate constant with the v3/v4 verb-form tag vocabulary (per the
 // ElevenLabs prompting guide), so a tweak to one engine's cue list can't
 // silently retune the other. The base DJ prompt template already forbids
 // asterisks and quotes but says nothing about brackets, so no rule loosening
@@ -42,7 +44,7 @@ const FISH_S21_TAG_HINT =
 // else is in the studio when the active show has guests (empty otherwise).
 //
 // `cloudModel` optionally overrides the resolved cloud TTS model for the
-// ElevenLabs v3 tag hint. Left blank, the resolver runs against the passed
+// ElevenLabs tag hint. Left blank, the resolver runs against the passed
 // persona — which is what every current caller wants. Kept as an override so a
 // future caller who already resolved the model (e.g. a preview endpoint) can
 // pass it in without re-resolving, per PR #696 owner review: "thread the
@@ -57,7 +59,7 @@ export function djSystem(
     // The broad on-air location, never the precise weather label — this is the
     // string the DJ speaks as "broadcasting from {location}".
     location: settings.resolveOnAirLocation(s),
-  }) + settings.onAirRosterClause(persona);
+  }) + settings.onAirRosterClause(persona) + '\n\n' + onAirLocationGrounding();
   // Resolved, not raw: a persona on the 'inherit' sentinel has no engine of its
   // own, so asking the slot directly reads "pinned to something that is not
   // chatterbox" and drops the hint on a station whose default IS chatterbox —

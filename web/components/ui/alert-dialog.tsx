@@ -1,11 +1,12 @@
 'use client';
 
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import * as AlertDialog from '@radix-ui/react-alert-dialog';
 import { cn } from '../../lib/cn';
 
 /* V3 AlertDialog — sharp, ink-bordered confirmation modal. The dialog closes
-   itself whether or not `onConfirm` fires.
+   itself whether or not `onConfirm` fires, and fires at most one action per
+   opening (`actionLatch`).
 
    Enter/exit are CSS animations keyed on Radix's `data-state`, not motion:
    `AlertDialog.Content` doesn't compose with motion/asChild, and Radix's
@@ -18,10 +19,18 @@ export interface V3AlertDialogProps {
   onOpenChange: (open: boolean) => void;
   title?: ReactNode;
   description?: ReactNode;
+  /** Block content under the description (lists, notices). Kept out of
+   *  `description`, which renders as a paragraph. */
+  details?: ReactNode;
   confirmLabel?: string;
   cancelLabel?: string;
   danger?: boolean;
   onConfirm?: () => void;
+  /** Optional second action between cancel and confirm, for a choice that is
+   *  not a cancel (e.g. "block, let it finish" beside "block + skip now").
+   *  Closes the dialog like confirm. Absent, the footer is unchanged. */
+  altLabel?: string;
+  onAlt?: () => void;
 }
 
 export function V3AlertDialog({
@@ -29,11 +38,16 @@ export function V3AlertDialog({
   onOpenChange,
   title,
   description,
+  details,
   confirmLabel = 'confirm',
   cancelLabel = 'cancel',
   danger = false,
   onConfirm,
+  altLabel,
+  onAlt,
 }: V3AlertDialogProps) {
+  const [latch] = useState(actionLatch);
+  useEffect(() => { if (open) latch.arm(); }, [open, latch]);
   return (
     <AlertDialog.Root open={open} onOpenChange={onOpenChange}>
       <AlertDialog.Portal>
@@ -52,13 +66,22 @@ export function V3AlertDialog({
             <AlertDialog.Description className="m-0 text-[13px] leading-[1.6] text-ink">
               {description}
             </AlertDialog.Description>
+            {details}
           </div>
           <div className="flex justify-end gap-2 border-t border-ink px-5 py-3">
             <AlertDialog.Cancel className="v3-eyebrow v3-focus cursor-pointer border border-ink bg-transparent px-3.5 py-1.5 text-[10px] text-ink">
               {cancelLabel}
             </AlertDialog.Cancel>
+            {altLabel && (
+              <AlertDialog.Action
+                onClick={latch.once(onAlt)}
+                className="v3-eyebrow v3-focus cursor-pointer border border-ink bg-transparent px-3.5 py-1.5 text-[10px] text-ink"
+              >
+                {altLabel}
+              </AlertDialog.Action>
+            )}
             <AlertDialog.Action
-              onClick={onConfirm}
+              onClick={latch.once(onConfirm)}
               className={cn(
                 'v3-eyebrow v3-focus cursor-pointer border-0 px-3.5 py-1.5 text-[10px] text-white',
                 danger ? 'bg-[#c5302a]' : 'bg-vermilion',
@@ -71,4 +94,23 @@ export function V3AlertDialog({
       </AlertDialog.Portal>
     </AlertDialog.Root>
   );
+}
+
+/**
+ * Lets one action through until re-armed. Radix keeps a closing dialog's
+ * content mounted, buttons live, for the 140ms exit animation, so a
+ * double-click on confirm ran its action twice: a second never-play that 409ed
+ * on the block and skipped anyway, a second skip (#2018). One latch for both
+ * actions, re-armed on every open.
+ */
+export function actionLatch() {
+  let spent = false;
+  return {
+    arm: () => { spent = false; },
+    once: (action?: () => void) => () => {
+      if (spent) return;
+      spent = true;
+      action?.();
+    },
+  };
 }

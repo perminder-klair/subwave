@@ -4,6 +4,7 @@
 // drops station-archive entries, so this is only union + dedupe.
 
 import * as subsonic from './subsonic.js';
+import * as db from './library-db.js';
 import { trackKey } from './recency.js';
 
 export type PlaylistPool = {
@@ -105,7 +106,9 @@ export async function resolvePlaylistMemberSets(ids: string[]): Promise<Map<stri
   const out = new Map<string, Set<string>>();
   for (const id of [...new Set(ids.filter(Boolean))]) {
     try {
-      const songs = await memoFetch(`playlist:${id}`, () => subsonic.getPlaylist(id));
+      // Unfiltered, under its own key: this set is what the blocklist filter
+      // reads, so the filtered fetch would drop the rule's own members.
+      const songs = await memoFetch(`playlist-raw:${id}`, () => subsonic.getPlaylist(id, { includeBlocked: true }));
       out.set(id, new Set((songs || []).map((t: any) => t?.id).filter(Boolean)));
     } catch (err) {
       console.warn(`[show-playlist] rule playlist ${id} failed to resolve: ${(err as Error)?.message}`);
@@ -115,11 +118,15 @@ export async function resolvePlaylistMemberSets(ids: string[]): Promise<Map<stri
 }
 
 // Track ids to suppress before the LLM sees the pool; null when none are excluded.
+// Two sources, one set, so every pick path that already honours an excluded
+// playlist (agent tools, pool picker, coast, journeys, episodes, playlist
+// order) also honours an excluded album KIND (Library → Era, e.g. 'dj-mix').
 export async function resolveExcludedPlaylistIds(show: any): Promise<Set<string> | null> {
   const ids = Array.isArray(show?.excludedPlaylistIds) ? show.excludedPlaylistIds.filter(Boolean) : [];
-  if (!ids.length) return null;
+  const kinds = Array.isArray(show?.excludedAlbumKinds) ? show.excludedAlbumKinds.filter(Boolean) : [];
+  if (!ids.length && !kinds.length) return null;
 
-  const blocked = new Set<string>();
+  const blocked = kinds.length ? excludedKindIds(kinds) : new Set<string>();
   for (const id of ids) {
     try {
       const songs = await memoFetch(`playlist:${id}`, () => subsonic.getPlaylist(id));
@@ -131,4 +138,14 @@ export async function resolveExcludedPlaylistIds(show: any): Promise<Set<string>
     }
   }
   return blocked.size ? blocked : null;
+}
+
+// A library-db failure costs the kind exclusion, never the pick.
+function excludedKindIds(kinds: string[]): Set<string> {
+  try {
+    return db.albumKindTrackIds(kinds);
+  } catch (err) {
+    console.warn(`[show-playlist] excluded album kinds failed to resolve: ${(err as Error)?.message}`);
+    return new Set();
+  }
 }

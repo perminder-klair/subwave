@@ -12,18 +12,18 @@ import type { EngineAvailability } from '../tts/engineMeta';
 import { Play } from 'lucide-react';
 import { Btn, Eyebrow, Metric } from '../ui';
 import { useSectionChrome, useReportDirty } from './section-chrome';
+import { ownsErrorPath } from './form-diff';
 import { Button } from '../../ui/button';
 import { FieldError } from '../../ui/field';
-import type { TransitionEffect, JingleRotateOwner, GeminiSafety } from '../../../lib/schemas.generated';
+import type { TransitionEffect, JingleRotateOwner, JinglePlacement, GeminiSafety, TaggerAutoSettings } from '../../../lib/schemas.generated';
+import { LLM_PROVIDER_CATALOG } from '../../../lib/schemas.generated';
 export type { TransitionEffect } from '../../../lib/schemas.generated';
 
 export const KEY_HINTS: Record<string, string> = {
-  ANTHROPIC_API_KEY: 'sk-ant-...',
-  OPENAI_API_KEY: 'sk-...',
-  GOOGLE_GENERATIVE_AI_API_KEY: 'AIza...',
-  DEEPSEEK_API_KEY: 'sk-...',
-  OPENROUTER_API_KEY: 'sk-or-v1-...',
-  AI_GATEWAY_API_KEY: 'gateway API key',
+  // The LLM providers' key fields, from the provider catalogue.
+  ...Object.fromEntries(
+    LLM_PROVIDER_CATALOG.flatMap(p => (p.envVar && p.keyPlaceholder ? [[p.envVar, p.keyPlaceholder]] : [])),
+  ),
   ELEVENLABS_API_KEY: 'el_...',
   // Fish keys have no documented prefix — point at where to mint one instead.
   FISH_API_KEY: 'key from fish.audio/app/api-keys',
@@ -76,6 +76,7 @@ export interface TtsForm {
   // false = music only: no script is generated at all. Jingles are unaffected
   // (jingleRatio owns those) and manual segment triggers still fire.
   enabled: boolean;
+  voiceLevelling: boolean;
   defaultEngine: string;
   // Operator-chosen rescue voice. When on, this engine AND voice speaks for a
   // persona whose own engine is unavailable or fails mid-render, ahead of the
@@ -138,10 +139,23 @@ export interface LlmFallbackForm {
   repeatPenalty: number;
   providerBaseUrls: Record<string, string>;
   headers: LlmHeaderRow[];
-  compatibleMode: 'local' | 'hosted';
+  // Extra request-body fields (#2296), per leg like headers.
+  bodyParams: { key: string; value: string }[];
+  toolCallBodyParams: { key: string; value: string }[];
+  compatibleMode: 'local' | 'hosted' | 'auto';
   reasoning: boolean;
+  // The level On asks for, per leg (#2296); read only where the leg can express one.
+  reasoningEffort: 'default' | 'low' | 'medium' | 'high';
+  // Per-leg, like the primary's: a swap moves it between the legs.
+  toolChoice: string;
   discoverySteps: number;
   geminiSafety: GeminiSafety;
+}
+
+export interface CompatDetectionView {
+  mode: 'local' | 'hosted' | null;
+  server: string | null;
+  evidence: string;
 }
 
 export interface LlmForm {
@@ -152,12 +166,23 @@ export interface LlmForm {
   repeatPenalty: number;
   providerBaseUrls: Record<string, string>;
   headers: LlmHeaderRow[];
-  compatibleMode: 'local' | 'hosted';
+  bodyParams: { key: string; value: string }[];
+  toolCallBodyParams: { key: string; value: string }[];
+  compatibleMode: 'local' | 'hosted' | 'auto';
   reasoning: boolean;
+  // The level On asks for, per leg (#2296); read only where the leg can express one.
+  reasoningEffort: 'default' | 'low' | 'medium' | 'high';
   toolChoice: string;
   pickerAgent: boolean;
+  trackSelection: 'agentic' | 'shortlist';
+  shortlistPasses: number;
+  shortlistSearchPreparation: boolean;
+  guestMusicalLeanings: boolean;
+  requestMatching: 'agentic' | 'direct';
+  segmentRuntime: 'agentic' | 'direct';
   noRepeatWindow: string;
   artistVarietyWindow: string;
+  genreVarietyWindow: string;
   requestWebResolve: boolean;
   agentTimeoutMs: number;
   pauseWhenEmpty: boolean;
@@ -181,8 +206,16 @@ export interface SearchForm {
 }
 
 export interface EmbeddingEnrichmentForm {
-  lastfmTags: boolean;
+  /** null is auto: on when a Last.fm key is set (lastfm.lastfmEnrichEnabled). */
+  lastfmTags: boolean | null;
+  lastfmTrackTags: boolean;
   lyrics: boolean;
+}
+
+/** Energy from the measured audio (music/propagated-energy.ts); both opt-in. */
+export interface AudioEnergyForm {
+  fillEmpty: boolean;
+  overruleLlm: boolean;
 }
 
 export interface EmbeddingForm {
@@ -198,6 +231,7 @@ export interface EmbeddingForm {
   confidenceThreshold: string;
   maxActiveLearningRounds: string;
   audioFusionWeight: string; // '0' = text-only vote (fusion off)
+  audioEnergy: AudioEnergyForm;
   batchSize: string;         // '5', '10', or '25'
   enrichment: EmbeddingEnrichmentForm;
 }
@@ -249,6 +283,13 @@ export interface LikesForm {
   windowDays: string;
 }
 
+/** The listener Lyrics panel — `settings.lyrics`. */
+export interface LyricsForm {
+  enabled: boolean;
+  /** Look up synced lyrics on LRCLIB for tracks the music server has untimed. */
+  lrclib: boolean;
+}
+
 export interface ArchiveForm {
   enabled: boolean;
   bitrate: string;
@@ -282,6 +323,11 @@ export interface LoudnessForm {
 export interface TransitionsForm {
   pairDrain: boolean;   // hold picks until the successor is known (#749 fix)
   stemBlends: boolean;  // pre-rendered stem-blend seams (needs pairDrain + stem cache)
+  pickTimeStems: boolean;  // separate a held pick's missing stems while it waits (#2197)
+  equalPowerCrossfade: boolean;  // plain crossfade curve: false = linear, true = equal-power (mixer restart)
+  fadeAudibleEnd: boolean;  // cut a fade ending at its audible end (controller cue point, no restart)
+  fadeAudibleEndDb: string; // dB under the track's loudness where a fade stops being audible (15..35)
+  tailFromCurve: boolean;   // read the ending's levels off the whole-file loudness curve (no restart)
   stemCache: boolean;   // settings.audio.stemCache — persist Demucs stems during analysis
   stemCacheGb: string;  // settings.audio.stemCacheGb — byte budget the LRU sweep enforces
   /** settings.transitions.effects — which gestures the DJ may reach for. Always
@@ -330,6 +376,9 @@ export interface DjBehaviourForm {
   showWelcome: boolean;
   previewNextShow: boolean;
   sameHostAcknowledgement: boolean;
+  /** Keep the music ducked for the whole multi-voice exchange instead of
+   *  letting it lift between speakers. */
+  holdDuckBetweenSpeakers: boolean;
   extendedSleeveNotes: boolean;
   releaseYearMentions: 'regular' | 'occasional' | 'rare';
   recapLimit: string;
@@ -343,6 +392,7 @@ export interface DjBehaviourValues {
   showWelcome?: boolean;
   previewNextShow?: boolean;
   sameHostAcknowledgement?: boolean;
+  holdDuckBetweenSpeakers?: boolean;
   extendedSleeveNotes?: boolean;
   releaseYearMentions?: 'regular' | 'occasional' | 'rare';
   recapLimit?: number;
@@ -383,6 +433,7 @@ export interface FormState {
   scrobble: ScrobbleForm;
   privacy: PrivacyForm;
   likes: LikesForm;
+  lyrics: LyricsForm;
   requests: RequestsForm;
 }
 
@@ -398,6 +449,7 @@ export interface JingleEntry {
 export interface SettingsData {
   values?: {
     jingleRatio?: number;
+    jinglePlacement?: JinglePlacement;
     /** Who counts the tracks between jingles (#1619). Absent on an older
      *  controller, which is the same thing as 'mixer'. The union comes from the
      *  mirrored schema rather than being respelled here, so a value added to it
@@ -413,12 +465,26 @@ export interface SettingsData {
      *  the schedule is edited from the Backup panel, beside Export/Restore, and
      *  posts `{ backups }` through the same POST /settings chokepoint. */
     backups?: { cadence?: string; keep?: number };
+    /** Scheduled tagging (#2282), edited on the Library Tagger's Run tab and
+     *  posted as `{ tagger: { auto } }`. Absent on an older controller. */
+    tagger?: { auto?: TaggerAutoSettings };
     transitions?: {
       pairDrain?: boolean;
       stemBlends?: boolean;
+      pickTimeStems?: boolean;
+      equalPowerCrossfade?: boolean;
+      fadeAudibleEnd?: boolean;
+      fadeAudibleEndDb?: number;
+      tailFromCurve?: boolean;
       effects?: Partial<Record<TransitionEffect, boolean>>;
     };
-    audio?: { embeddings?: boolean; vocalActivity?: boolean; stemCache?: boolean; stemCacheGb?: number };
+    audio?: {
+      embeddings?: boolean;
+      vocalActivity?: boolean;
+      stemCache?: boolean;
+      stemCacheGb?: number;
+      analyzeQuietOnly?: boolean;
+    };
     stream?: {
       opusEnabled?: boolean;
       opusBitrate?: number;
@@ -464,6 +530,7 @@ export interface SettingsData {
     };
     tts?: {
       enabled?: boolean;
+      voiceLevelling?: boolean;
       defaultEngine?: string;
       fallback?: Partial<TtsFallbackForm>;
       kokoro?: { voice?: string; lang?: string };
@@ -501,6 +568,7 @@ export interface SettingsData {
       confidenceThreshold?: number;
       maxActiveLearningRounds?: number;
       audioFusionWeight?: number;
+      audioEnergy?: Partial<AudioEnergyForm>;
       batchSize?: number;
       enrichment?: Partial<EmbeddingEnrichmentForm>;
     };
@@ -538,6 +606,10 @@ export interface SettingsData {
       maxTracks?: number;
       windowDays?: number;
     };
+    lyrics?: {
+      enabled?: boolean;
+      lrclib?: boolean;
+    };
   };
   tts?: {
     engines?: string[];
@@ -557,12 +629,25 @@ export interface SettingsData {
   llm?: {
     providers?: string[];
     active?: string;
+    // What an `auto` connection mode resolved to, per leg; null until probed.
+    compatDetection?: {
+      primary?: CompatDetectionView | null;
+      fallback?: CompatDetectionView | null;
+    };
   };
   embedding?: {
     providers?: string[];
   };
   search?: {
     providers?: string[];
+    // Where the key a Keenable search sends comes from; null when it runs keyless.
+    keenableKeySource?: 'settings' | 'env' | null;
+    // Where the key a Firecrawl search sends comes from; null when the slot holds
+    // none, or holds another provider's, which searches refuse.
+    firecrawlKeySource?: 'settings' | 'env' | null;
+    // The keyed providers (Tavily, Brave, Firecrawl, Outcrawl, SpecStream) whose searches would refuse
+    // the key on file, because it is another provider's. Empty with no key.
+    keyRefusedBy?: string[];
   };
   defaults?: {
     search?: Partial<SearchForm>;
@@ -577,6 +662,8 @@ export interface SettingsData {
     embeddingMeta?: { model: string; dim: number } | null;
   };
   tagger?: { running?: boolean };
+  /** The scheduled run's own record (#2282); null when it could not be read. */
+  taggerSchedule?: TaggerScheduleView | null;
   env?: Record<string, unknown>;
   // passSet only — the password value never reaches the browser. Env flags are
   // per-field: url can be env-managed while user/pass come from the wizard.
@@ -589,6 +676,25 @@ export interface SettingsData {
   streamOnAir?: boolean;
   // What timezone '' (Auto) resolves to — the controller's own zone.
   serverTimezone?: string;
+}
+
+/** GET /settings `taggerSchedule`: controller/src/broadcast/tag-schedule.ts
+ *  TagScheduleView. `waiting` is a hold standing today (quiet times, a run
+ *  already going, a Navidrome scan). */
+export interface TaggerScheduleView {
+  lastDay: string | null;
+  startedAt: string | null;
+  outcome: 'running' | 'ok' | 'failed' | 'stopped' | 'held' | 'skipped' | 'missed' | 'interrupted' | null;
+  detail: string | null;
+  at: string | null;
+  runLogId: string | null;
+  /** The baseline the running run's clean finish raises to. */
+  raiseTo: number | null;
+  /** The new-music baseline the schedule compares Navidrome's count with. */
+  walkedCount: number | null;
+  /** When a save last turned the schedule on or moved its time. */
+  armedAt: string | null;
+  waiting: string | null;
 }
 
 export type Patch = Record<string, unknown>;
@@ -606,6 +712,23 @@ export type FormUpdater = (updater: (f: FormState) => FormState) => void;
  * mirror exists to prevent.
  */
 export type SettingsFieldErrors = Record<string, string>;
+
+/**
+ * The red "… now" block that opens a section's main card: what the station is
+ * running right now, from the SAVED config, so an unsaved edit below it never
+ * reads as live. LLM provider, TTS voice and Music selection all lead with one.
+ */
+export function NowBanner({ label, children }: { label: ReactNode; children: ReactNode }) {
+  return (
+    <div className="flex items-start gap-2.5 border border-[var(--accent)] bg-[var(--ink-softer)] p-3">
+      <span className="mt-1 size-1.5 flex-none rounded-full bg-vermilion" />
+      <div className="grid min-w-0 gap-0.5">
+        <span className="text-[11px] font-bold tracking-[0.12em] text-vermilion uppercase">{label}</span>
+        <span className="text-[14px] leading-[1.5] text-muted">{children}</span>
+      </div>
+    </div>
+  );
+}
 
 export interface SectionProps {
   data: SettingsData;
@@ -748,9 +871,9 @@ export function ownedFieldErrors(
   ownedKeys: readonly string[] | undefined,
 ): Array<[string, string]> {
   if (!errors || !ownedKeys?.length) return [];
-  return Object.entries(errors).filter(([path]) =>
-    ownedKeys.some((key) => path === key || path.startsWith(`${key}.`)),
-  );
+  // Through the aliases: a form key can save under another name (the stem
+  // cache lives under `transitions` and saves to `audio.*`).
+  return Object.entries(errors).filter(([path]) => ownsErrorPath(ownedKeys, path));
 }
 
 /** Portal section-owned saves into the sticky bar to retain their closures and field-error scope.
@@ -775,7 +898,9 @@ export function SaveBar({ note, busy, onSave, saveLabel, errors, ownedKeys, dirt
       )}
       <span className="min-w-0 flex-1 text-[12px] leading-[1.5] break-words text-muted">{note}</span>
       <span className="ml-auto flex w-full gap-2 sm:w-auto">
-        <m.span whileTap={{ scale: 0.97 }} className="inline-flex flex-1 sm:flex-none">
+        {/* whileTap makes motion give the span tabIndex 0 unless one is set,
+            which would put a dead Tab stop before Save. */}
+        <m.span whileTap={{ scale: 0.97 }} tabIndex={-1} className="inline-flex flex-1 sm:flex-none">
           <Btn tone="accent" onClick={onSave} disabled={busy} className="w-full sm:w-auto">{saveLabel}</Btn>
         </m.span>
       </span>
@@ -787,9 +912,11 @@ export function SaveBar({ note, busy, onSave, saveLabel, errors, ownedKeys, dirt
 interface KeyStatusProps {
   envVar: string;
   present: boolean;
+  /** Replaces the stock sentence, for a provider where neither "ready to use" nor "not set" fits. */
+  detail?: ReactNode;
 }
 
-export function KeyStatus({ envVar, present }: KeyStatusProps) {
+export function KeyStatus({ envVar, present, detail }: KeyStatusProps) {
   const toneClass = present
     ? 'border-[var(--accent)] text-[color:var(--accent)]'
     : 'border-[var(--danger)] text-[var(--danger)]';
@@ -811,14 +938,14 @@ export function KeyStatus({ envVar, present }: KeyStatusProps) {
           {present ? 'API key found in environment' : 'API key missing'}
         </span>
         <span className="text-[14px] leading-[1.5] text-muted">
-          {present ? (
+          {detail ?? (present ? (
             <>The controller has <code>{envVar}</code> set, so this provider is ready to use.</>
           ) : (
             <>
               <code>{envVar}</code> is not set. Paste the key in the field above and save,
               or set it in <code>.env</code> and restart.
             </>
-          )}
+          ))}
         </span>
       </div>
     </div>

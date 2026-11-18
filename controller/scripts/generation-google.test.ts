@@ -1,20 +1,22 @@
 // Exercise the merged generation guard and Gemini safety channel together
 // through the real Google adapter. All fetches are intercepted.
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test, { after } from 'node:test';
 import { z } from 'zod';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const stateRoot = mkdtempSync(path.join(tmpdir(), 'subwave-generation-google-'));
 process.env.STATE_DIR = stateRoot;
-after(() => rmSync(stateRoot, { recursive: true, force: true }));
+after(() => removeTempDir(stateRoot));
 
 const settings = await import('../src/settings.js');
 const { setCache } = await import('../src/settings/store.js');
 const { djObject } = await import('../src/llm/sdk.js');
 const { recentCalls, generationHealthSnapshot } = await import('../src/llm/log.js');
+const { resetFailoverStickyForTest } = await import('../src/llm/internal/core/failover.js');
 const schema = z.object({ ok: z.boolean() });
 const primaryFlags = { harassment: true, hateSpeech: false, sexuallyExplicit: true, dangerousContent: false };
 const backupFlags = { harassment: false, hateSpeech: true, sexuallyExplicit: false, dangerousContent: true };
@@ -32,6 +34,7 @@ async function withRequests(
   run: (requests: CapturedRequest[]) => Promise<void>,
   onStall?: () => void,
 ) {
+  resetFailoverStickyForTest(); // a previous test's timeout must not mark this primary down
   writeFileSync(path.join(stateRoot, 'settings.json'), JSON.stringify({ llm: {
     provider: 'google', model: 'gemini-2.5-flash', keys: { google: 'test-key' },
     geminiSafety: primaryFlags, requestTimeoutMs: 5000,

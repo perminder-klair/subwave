@@ -33,10 +33,14 @@ export const Ripple = React.memo(function Ripple({
         const animationDelay = `${i * 0.06}s`;
 
         return (
+          // No box-shadow. Through a ring's own opacity and the fade mask it
+          // came to a few percent of black, invisible on dark themes, yet
+          // every breathing ring is its own layer and WebKit blurred a shadow
+          // into each on the CPU whenever a burst began.
           <div
             key={i}
             className={cn(
-              'absolute rounded-full border border-solid shadow-xl',
+              'absolute rounded-full border border-solid',
               active && 'sw-ripple-circle',
             )}
             // eslint-disable-next-line react/forbid-dom-props -- per-circle size/delay/opacity are loop-index-derived; --i is a CSS custom property

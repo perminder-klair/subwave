@@ -3,6 +3,8 @@
 // result, while guest and co-host speech keep their independent ownership.
 
 import assert from 'node:assert/strict';
+import { deferred } from './test-utils/async.js';
+import { weekFor as fullScheduleWeek } from './test-utils/fixtures.js';
 import { after, beforeEach, test } from 'node:test';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -34,11 +36,7 @@ const B = { ...template, id: 'p_b', name: 'Host B', skills: ['host-race'], frequ
 const G = { ...template, id: 'p_guest', name: 'Guest', skills: ['host-race'], frequency: 'aggressive' };
 const SHOW = 's_skill';
 
-function week() {
-  const out: Record<number, string[]> = {};
-  for (let day = 0; day < 7; day++) out[day] = Array(24).fill(SHOW);
-  return out;
-}
+function week() { return fullScheduleWeek(SHOW); }
 
 function show(personaId: string, guests = [G.id]) {
   return { id: SHOW, name: 'Skill Show', topic: 'tests', personaId, guestPersonaIds: guests };
@@ -53,22 +51,19 @@ function ctx() {
   } as any;
 }
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>(done => { resolve = done; });
-  return { promise, resolve };
-}
 
 const realDirectorRun = directorAgent.run;
 const realForcedRun = forcedDirectorAgent.run;
 const realSpeak = (queue as any)._speak;
 const realAirVoice = (queue as any)._airVoice;
+const realAirExchange = (queue as any)._airExchange;
 
 beforeEach(async () => {
   directorAgent.run = realDirectorRun;
   forcedDirectorAgent.run = realForcedRun;
   (queue as any)._speak = async () => '/tmp/scheduled-skill.wav';
   (queue as any)._airVoice = realAirVoice;
+  (queue as any)._airExchange = realAirExchange;
   queue.senderBusy = true;
   queue.upcoming = [];
   queue.current = null;
@@ -81,6 +76,7 @@ beforeEach(async () => {
     skills: { enabled: { 'host-race': true } },
     llm: { pickerAgent: true },
     sfx: { enabled: false },
+    djBehaviour: { holdDuckBetweenSpeakers: true },
   } as never);
   session.start(ctx());
   await loadSkills();
@@ -91,6 +87,7 @@ after(async () => {
   forcedDirectorAgent.run = realForcedRun;
   (queue as any)._speak = realSpeak;
   (queue as any)._airVoice = realAirVoice;
+  (queue as any)._airExchange = realAirExchange;
   queue.senderBusy = false;
   await new Promise(resolve => setTimeout(resolve, 1_100));
   rmSync(root, { recursive: true, force: true });
@@ -166,6 +163,13 @@ test('an eligible guest skill and a co-host exchange survive a host edit', async
     opts?.onQueued?.({ voiceId: `voice-${accepted}`, clipMs: 1_000, estimatedAirInMs: 0 });
     return { voiceId: `voice-${accepted}`, clipMs: 1_000, aired: Promise.resolve(null) };
   };
+  (queue as any)._airExchange = async (_file: string, clips: { onQueued?: (q: any) => void }[]) =>
+    clips.map(clip => {
+      accepted += 1;
+      const voiceId = `voice-${accepted}`;
+      clip.onQueued?.({ voiceId, clipMs: 1_000, estimatedAirInMs: 0 });
+      return { voiceId, clipMs: 1_000, aired: Promise.resolve(null) };
+    });
 
   const guestModel = deferred<any>();
   let guestStarted = false;

@@ -12,10 +12,11 @@
 //      underlying code, and never the URL, which carries the auth token.
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const stateRoot = mkdtempSync(join(tmpdir(), 'subwave-subsonic-socket-'));
 process.env.STATE_DIR = stateRoot;
@@ -61,7 +62,7 @@ test.afterEach(() => {
   console.warn = realWarn;
 });
 
-test.after(() => rmSync(stateRoot, { recursive: true, force: true }));
+test.after(() => removeTempDir(stateRoot));
 
 test('a fast socket failure is retried once and the call succeeds', async () => {
   console.warn = () => {};

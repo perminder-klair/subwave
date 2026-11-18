@@ -20,9 +20,12 @@
 // Run: npm test -- era-year-surfaces
 
 import test from 'node:test';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createTempDir } from './test-utils/temp-dir.js';
 import assert from 'node:assert/strict';
 
-process.env.STATE_DIR ||= '/tmp/subwave-era-year-surfaces';
+process.env.STATE_DIR = createTempDir(join(tmpdir(), 'subwave-era-year-surfaces-'));
 
 const { getAnnotatedUri } = await import('../src/music/subsonic.js');
 const { slim } = await import('../src/llm/internal/tools/picker/slim.js');

@@ -123,6 +123,42 @@ def _write(path, x, codec_args):
     os.remove(wav)
 
 
+
+HEAD_KEYS = ("bpm", "key", "intro_ms", "confidence", "lead_silence_ms", "sections",
+             "pace_curve", "beats", "bars", "key_ranges")
+LOUDNESS_KEYS = ("loudness_lufs", "peak_db")
+TAIL_KEYS = ("tail_silence_ms", "tail_start_ms", "outro")
+
+
+def facet_parity(flat, facets):
+    """Differences between a flat analyze() result and a facet response."""
+    problems = []
+
+    def pick(keys):
+        return {k: flat[k] for k in keys if k in flat}
+
+    for facet, keys in (("head", HEAD_KEYS), ("loudness", LOUDNESS_KEYS), ("tail", TAIL_KEYS)):
+        want = pick(keys)
+        cell = facets.get(facet) or {}
+        data = cell.get("data") or {}
+        if facet == "loudness" and cell.get("status") == "ok" and data.get("loudness_version") == 2:
+            # A complete file's loudness is the whole-file measurement (v2),
+            # which the flat response never makes: check its shape, not parity.
+            whole = {"loudness_lufs", "peak_db", "sample_peak_db", "lra_lu", "loudness_version"}
+            # The same pass's short-term curve rides along (whole + both ends).
+            curve = data.get("loudness_curve")
+            curve_ok = isinstance(curve, dict) and isinstance((curve.get("whole") or {}).get("lufs"), list)
+            if set(data) != whole | {"loudness_curve"} or not curve_ok or \
+                    not all(isinstance(data[k], (int, float)) for k in whole):
+                problems.append(f"whole-file loudness malformed: {data}")
+            continue
+        if cell.get("status") == "ok":
+            if cell.get("data") != want:
+                problems.append(f"{facet} data differs: {sorted(cell.get('data') or {})} vs {sorted(want)}")
+        elif want:
+            problems.append(f"{facet} is {cell.get('status')} ({cell.get('reason')}) but flat has {sorted(want)}")
+    return problems
+
 def build_fixtures(d):
     """name -> (path, analyze kwargs). Every file is generated, never committed."""
     fx = {}
@@ -236,6 +272,23 @@ def main():
             results[name] = aw.analyze(librosa, path=path, embed=False, vocal=False, **kw)
             print(f"  analysed {name}: {sorted(results[name])}")
 
+        # Facet protocol parity: a {"facets": [head, loudness, tail]} request
+        # over the same file must return exactly the flat fields, split by
+        # facet. Exact equality, not tolerance: the same functions run.
+        parity_failures = 0
+        if not a.update:
+            for name in names:
+                path, kw = fixtures[name]
+                got = aw.analyze_facet_request(
+                    librosa, {"path": path, "facets": ["head", "loudness", "tail"], **kw}
+                )["facets"]
+                problems = facet_parity(results[name], got)
+                if problems:
+                    parity_failures += 1
+                    print(f"  ✗ facet parity {name}: " + "; ".join(problems))
+            if parity_failures == 0:
+                print(f"  ✓ facet protocol matches the flat response on all {len(names)} fixtures")
+
         if a.update:
             os.makedirs(os.path.dirname(SNAPSHOT), exist_ok=True)
             doc = {"_runtime": runtime_versions(), "results": results}
@@ -270,6 +323,7 @@ def main():
                     print(f"      … {len(d) - 25} more")
             else:
                 print(f"  ✓ {name}")
+        failures += parity_failures
         if failures:
             print(f"\n{failures} fixture(s) drifted. Snapshot runtime: {snap.get('_runtime')}\n"
                   f"This runtime: {runtime_versions()}")

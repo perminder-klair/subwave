@@ -5,7 +5,6 @@ import {
   InputGroupAddon,
   InputGroupButton,
   InputGroupInput,
-  InputGroupText,
 } from "@/components/ui/input-group";
 import { cn } from "@/lib/cn";
 import { CheckIcon, CopyIcon } from "lucide-react";
@@ -53,15 +52,6 @@ export type SnippetAddonProps = ComponentProps<typeof InputGroupAddon>;
 
 export const SnippetAddon = (props: SnippetAddonProps) => (
   <InputGroupAddon {...props} />
-);
-
-export type SnippetTextProps = ComponentProps<typeof InputGroupText>;
-
-export const SnippetText = ({ className, ...props }: SnippetTextProps) => (
-  <InputGroupText
-    className={cn("pl-2 font-normal text-muted-foreground", className)}
-    {...props}
-  />
 );
 
 export type SnippetInputProps = Omit<

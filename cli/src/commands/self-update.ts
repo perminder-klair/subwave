@@ -5,7 +5,6 @@
 import { spawn } from 'node:child_process';
 import { dirname } from 'node:path';
 import { realpathSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 
 import { banner, header, ok, err, info, muted, pauseForEnter } from '../ui.ts';
 

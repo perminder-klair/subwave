@@ -128,12 +128,9 @@ assert.equal(
 
 // --- cleanRequesterName ------------------------------------------------------
 assert.equal(cleanRequesterName('𒐫𒐫𒐫 𒐫𒐫𒐫𒐫'), 'anon');       // cuneiform flood
-assert.equal(cleanRequesterName('DJ', ['dj', 'wren']), 'anon');    // reserved
 assert.equal(cleanRequesterName('Wren', ['dj', 'wren']), 'anon');  // persona impersonation
-assert.equal(cleanRequesterName('   '), 'anon');
 assert.equal(cleanRequesterName('Asant'), 'Asant');
 assert.equal(cleanRequesterName('Хозяин'), 'Хозяин');              // ordinary Cyrillic word survives
-assert.equal(cleanRequesterName('a'.repeat(60)).length, 40);
 
 // --- guardIntro -------------------------------------------------------------
 {

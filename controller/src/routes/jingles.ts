@@ -6,7 +6,11 @@ import { queue } from '../broadcast/queue.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { audioUpload } from '../middleware/upload.js';
 import { validateBody } from '../middleware/validate.js';
-import { jingleCreateSchema, jingleImportSchema } from '../schemas/imaging.js';
+import { jingleImportSchema } from '../schemas/imaging.js';
+import { jingleCreateBodySchema } from '../schemas/imaging-server.js';
+import type { TtsVoiceSlot } from '../schemas/persona.js';
+import { hostedVoiceSlot } from '../setup/hosted.js';
+import * as settings from '../settings.js';
 import { sendAudioFile } from '../util/audio-response.js';
 import { tagger, startTagger, stopTagger } from '../broadcast/tagger.js';
 
@@ -20,12 +24,15 @@ router.get('/jingles', requireAdmin, async (req, res) => {
   }
 });
 
-router.post('/jingles', requireAdmin, validateBody(jingleCreateSchema), async (req, res) => {
-  const { text } = req.body as { text: string };
+router.post('/jingles', requireAdmin, validateBody(jingleCreateBodySchema), async (req, res) => {
+  const { text, tts: requested } = req.body as { text: string; tts?: TtsVoiceSlot };
+  // Hosted: the persona engine rule (setup/hosted.ts), so a jingle can't pin
+  // an engine the box doesn't run; that slot follows the station default.
+  const { slot: tts, changed } = hostedVoiceSlot(requested, settings.get()?.tts?.defaultEngine);
   try {
-    const created = await jingles.create(text);
+    const created = await jingles.create(text, { tts });
     queue.log('scheduler', `New jingle created: "${text.slice(0, 60)}…"`);
-    res.json(created);
+    res.json(changed ? { ...created, managed: ['tts.engine'] } : created);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -101,6 +108,7 @@ router.post('/tag-library', requireAdmin, (req, res) => {
   const reEnrich = req.body?.reEnrich === true;
   const reAnalyze = req.body?.reAnalyze === true;
   const upgrade = req.body?.upgrade === true;
+  const upgradeBlind = req.body?.upgradeBlind === true;
   // "Re-embed, then continue tagging". Only acted on when reseed is the sole re-*
   // pass, which startTagger enforces.
   const thenTag = req.body?.thenTag === true;
@@ -113,12 +121,15 @@ router.post('/tag-library', requireAdmin, (req, res) => {
     reEnrich,
     reAnalyze,
     upgrade,
+    upgradeBlind,
     thenTag,
     reconcile: stepBool(req.body?.reconcile),
     enrich: stepBool(req.body?.enrich),
     tagMoods: stepBool(req.body?.tagMoods),
     analyze: stepBool(req.body?.analyze),
     vocal: stepBool(req.body?.vocal),
+    confirmReplaced: req.body?.confirmReplaced === true,
+    acceptReplaced: req.body?.acceptReplaced === true,
   });
   res.json({ ok: true, tagger });
 });

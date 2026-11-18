@@ -21,7 +21,8 @@
 // No credentials and no external host.
 
 import assert from 'node:assert/strict';
-import { writeFileSync } from 'node:fs';
+import { chatCompletionResponse } from './test-utils/llm.js';
+import { coldLoadSettings } from './test-utils/settings.js';
 import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -32,12 +33,11 @@ import test from 'node:test';
 const stateRoot = createTempDir(path.join(tmpdir(), 'subwave-llm-headers-'));
 process.env.STATE_DIR = stateRoot;
 
-const { setCache, getRedacted } = await import('../src/settings/store.js');
+const { getRedacted } = await import('../src/settings/store.js');
 const settings = await import('../src/settings.js');
 const { customHeaders, languageModel } = await import('../src/llm/internal/provider/registry.js');
 const { generateText } = await import('ai');
 
-const SETTINGS_PATH = path.join(stateRoot, 'settings.json');
 
 const BASE_LLM = {
   provider: 'openai-compatible',
@@ -46,12 +46,7 @@ const BASE_LLM = {
 };
 
 // Load a hand-written settings.json the way a controller restart would.
-async function coldLoad(llm: Record<string, unknown>) {
-  writeFileSync(SETTINGS_PATH, JSON.stringify({ llm: { ...BASE_LLM, ...llm } }));
-  setCache(null);
-  await settings.load();
-  return settings.get().llm;
-}
+async function coldLoad(llm: Record<string, unknown>) { return (await coldLoadSettings({ llm: { ...BASE_LLM, ...llm } })).llm; }
 
 // One chat/completions call through a stubbed global fetch (debugFetch, the
 // inner transport for every provider, delegates to it), answering with the
@@ -65,14 +60,9 @@ async function headersOnTheWire(cfg: Record<string, unknown>): Promise<Record<st
       ? [...raw.entries()]
       : Object.entries((raw ?? {}) as Record<string, string>);
     for (const [k, v] of entries) if (v != null) seen[String(k).toLowerCase()] = String(v);
-    return new Response(
-      JSON.stringify({
-        id: 'x', object: 'chat.completion', created: 1, model: String(cfg.model),
-        choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
-        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-      }),
-      { status: 200, headers: { 'content-type': 'application/json' } },
-    );
+    return chatCompletionResponse({ model: String(cfg.model),
+      message: { role: 'assistant', content: 'ok' },
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
   }) as typeof fetch;
   try {
     await generateText({ model: languageModel(cfg), prompt: 'hi', maxRetries: 0 });

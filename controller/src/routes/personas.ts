@@ -146,6 +146,48 @@ router.delete('/personas/:id/avatar', requireAdmin, async (req, res) => {
   }
 });
 
+// Removes one persona, persisted immediately (#1950), the same shape as
+// DELETE /shows/:id. Reads the PERSISTED roster, never the panel's local copy,
+// so the operator's unsaved edits to other personas are neither saved nor lost
+// by a delete; the panel splices its own row out on success. One update() does
+// the whole cascade through its post-patch sweep: hosted shows go, with their
+// schedule hours and any takeover pinning one; guest seats are dropped;
+// activePersonaId is re-pointed if it named this persona; the avatar file is
+// collected. 404 is a persona the panel added and never saved, so the local
+// splice is enough. Deleting the last saved persona is refused here with the
+// reason, rather than as the schema's array-size message.
+router.delete('/personas/:id', requireAdmin, async (req, res) => {
+  const id = String(req.params.id);
+
+  await settings.load();
+  const existing = settings.get().personas || [];
+  const target = existing.find((p: any) => p.id === id);
+  if (!target) return res.status(404).json({ error: `no such persona: ${id}` });
+  const personas = existing.filter((p: any) => p.id !== id);
+  if (!personas.length) {
+    return res.status(409).json({
+      error: `“${target.name || id}” is the only saved persona. Save another persona before deleting this one.`,
+    });
+  }
+
+  try {
+    await settings.update({ personas });
+    const next = settings.get();
+    queue.log('scheduler', `[personas] "${id}" deleted via admin UI`);
+    res.json({
+      personas: next.personas,
+      activePersonaId: next.activePersonaId,
+      shows: next.shows,
+      schedule: next.schedule,
+      // GET /schedule's projection, so the panel caches the same shape.
+      scheduleOverride: settings.getScheduleOverride(),
+    });
+  } catch (err: any) {
+    queue.log('error', `DELETE /personas/${id} failed: ${err.message}`);
+    res.status(400).json({ error: err.message });
+  }
+});
+
 // Installs a community persona as an ordinary roster entry, NOT on air
 // (activePersonaId is untouched). A full roster or a duplicate on-air name 409s.
 router.post('/personas/community/:slug/install', requireAdmin, async (req, res) => {
@@ -187,7 +229,7 @@ router.post('/personas/community/:slug/install', requireAdmin, async (req, res) 
       return res.status(result.status).json({ error: result.error });
     }
     queue.log('scheduler', `[personas] community "${slug}" installed via admin UI as "${cp.displayName}"`);
-    res.json({ personas: result.personas, persona: result.persona });
+    res.json({ personas: result.personas, persona: result.persona, ...(result.managed ? { managed: result.managed } : {}) });
   } catch (err: any) {
     queue.log('error', `POST /personas/community/${slug}/install failed: ${err.message}`);
     res.status(400).json({ error: err.message });
@@ -253,6 +295,7 @@ router.post(
         persona: outcome.persona,
         voice: outcome.voice,
         jingles: outcome.jingles,
+        ...(outcome.managed ? { managed: outcome.managed } : {}),
       });
     } catch (err: any) {
       queue.log('error', `POST /personas/import failed: ${err.message}`);

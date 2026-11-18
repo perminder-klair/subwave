@@ -17,6 +17,7 @@
 // config.ts derives its voice dirs there — hence the dynamic import. Same
 // style as scripts/voice-policy.test.ts.
 
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -38,29 +39,21 @@ mkdirSync(LEGACY, { recursive: true });
 
 const lib = await import('../src/audio/voice-library.js');
 
-let failures = 0;
-function check(label: string, fn: () => void | Promise<void>) {
-  return Promise.resolve()
-    .then(fn)
-    .then(() => console.log(`  ok  ${label}`))
-    .catch((err) => { failures++; console.error(`  FAIL ${label}: ${err.message}`); });
-}
-
 // --- voiceWarning: the advisory band, pure ---------------------------------
-await check('voiceWarning flags a clip under the floor', () => {
+await test('voiceWarning flags a clip under the floor', () => {
   assert.equal(lib.voiceWarning(2), 'short');
   assert.equal(lib.voiceWarning(lib.ADVISORY_MIN_SEC - 0.1), 'short');
 });
-await check('voiceWarning flags a clip over the ceiling', () => {
+await test('voiceWarning flags a clip over the ceiling', () => {
   assert.equal(lib.voiceWarning(45), 'long');
   assert.equal(lib.voiceWarning(lib.ADVISORY_MAX_SEC + 0.1), 'long');
 });
-await check('voiceWarning is silent inside the band and at its edges', () => {
+await test('voiceWarning is silent inside the band and at its edges', () => {
   assert.equal(lib.voiceWarning(10), null);
   assert.equal(lib.voiceWarning(lib.ADVISORY_MIN_SEC), null);
   assert.equal(lib.voiceWarning(lib.ADVISORY_MAX_SEC), null);
 });
-await check('voiceWarning treats an unknown duration as no advice, not as bad', () => {
+await test('voiceWarning treats an unknown duration as no advice, not as bad', () => {
   // No ffprobe on a bare-host dev box — unknown must not render a warning.
   assert.equal(lib.voiceWarning(null), null);
   assert.equal(lib.voiceWarning(undefined), null);
@@ -68,17 +61,17 @@ await check('voiceWarning treats an unknown duration as no advice, not as bad', 
 });
 
 // --- voiceFileName: slug + forced .wav -------------------------------------
-await check('voiceFileName slugifies and forces .wav', () => {
+await test('voiceFileName slugifies and forces .wav', () => {
   assert.equal(lib.voiceFileName('Morgan Freeman'), 'morgan-freeman.wav');
   assert.equal(lib.voiceFileName('  Late Night DJ  '), 'late-night-dj.wav');
 });
-await check('voiceFileName strips an audio extension the operator typed', () => {
+await test('voiceFileName strips an audio extension the operator typed', () => {
   // The import modal defaults the name from the filename stem, but an operator
   // typing "morgan.wav" must not get "morgan-wav.wav".
   assert.equal(lib.voiceFileName('morgan.wav'), 'morgan.wav');
   assert.equal(lib.voiceFileName('Morgan.MP3'), 'morgan.wav');
 });
-await check('voiceFileName rejects a name with no slug left', () => {
+await test('voiceFileName rejects a name with no slug left', () => {
   assert.throws(() => lib.voiceFileName('   '), /name is required/i);
   assert.throws(() => lib.voiceFileName('!!!'), /name is required/i);
 });
@@ -90,39 +83,39 @@ writeFileSync(join(LEGACY, 'shared.wav'), 'legacy-loses');
 writeFileSync(join(LEGACY, 'zulu.wav'), 'z');
 writeFileSync(join(VOICES, 'notes.txt'), 'not audio');
 
-await check('scan lists .wav from both dirs, sorted, non-wav excluded', async () => {
+await test('scan lists .wav from both dirs, sorted, non-wav excluded', async () => {
   const files = (await lib.scan()).map(e => e.file);
   assert.deepEqual(files, ['alpha.wav', 'shared.wav', 'zulu.wav']);
 });
-await check('scan dedupes a clash with the canonical dir winning', async () => {
+await test('scan dedupes a clash with the canonical dir winning', async () => {
   const shared = (await lib.scan()).find(e => e.file === 'shared.wav');
   assert.equal(shared?.legacy, false);
   assert.equal(shared?.dir, VOICES);
 });
-await check('scan flags a legacy-only file as legacy', async () => {
+await test('scan flags a legacy-only file as legacy', async () => {
   const zulu = (await lib.scan()).find(e => e.file === 'zulu.wav');
   assert.equal(zulu?.legacy, true);
   assert.equal(zulu?.path, join(LEGACY, 'zulu.wav'));
 });
 
 // --- resolve: the traversal gate -------------------------------------------
-await check('resolve returns the entry for a listed file', async () => {
+await test('resolve returns the entry for a listed file', async () => {
   const e = await lib.resolve('alpha.wav');
   assert.equal(e?.path, join(VOICES, 'alpha.wav'));
 });
-await check('resolve refuses traversal and absolute paths', async () => {
+await test('resolve refuses traversal and absolute paths', async () => {
   for (const bad of ['../alpha.wav', '../../etc/passwd', '/etc/passwd', 'sub/alpha.wav', '..']) {
     assert.equal(await lib.resolve(bad), null, `resolve(${bad}) must be null`);
   }
 });
-await check('resolve refuses an unlisted or non-wav name', async () => {
+await test('resolve refuses an unlisted or non-wav name', async () => {
   assert.equal(await lib.resolve('nope.wav'), null);
   assert.equal(await lib.resolve('notes.txt'), null);
   assert.equal(await lib.resolve(''), null);
 });
 
 // --- duration memo key: invalidates on size AND mtime ----------------------
-await check('durationMemoKey changes when size or mtime changes', () => {
+await test('durationMemoKey changes when size or mtime changes', () => {
   const base = { file: 'a.wav', dir: VOICES, path: join(VOICES, 'a.wav'), legacy: false, size: 10, mtimeMs: 100 };
   const same = lib.durationMemoKey({ ...base });
   assert.equal(lib.durationMemoKey(base), same, 'identical entry must reuse the memo');
@@ -131,7 +124,7 @@ await check('durationMemoKey changes when size or mtime changes', () => {
 });
 
 // --- importVoice: the guards that run before any ffmpeg work ---------------
-await check('importVoice refuses a name that already exists in either dir', async () => {
+await test('importVoice refuses a name that already exists in either dir', async () => {
   await assert.rejects(
     lib.importVoice(Buffer.from('x'), { name: 'alpha', originalName: 'alpha.wav' }),
     /already exists/i,
@@ -142,13 +135,13 @@ await check('importVoice refuses a name that already exists in either dir', asyn
     /already exists/i,
   );
 });
-await check('importVoice refuses a non-audio upload', async () => {
+await test('importVoice refuses a non-audio upload', async () => {
   await assert.rejects(
     lib.importVoice(Buffer.from('x'), { name: 'notes', originalName: 'notes.txt' }),
     /unsupported audio type/i,
   );
 });
-await check('importVoice refuses an empty buffer', async () => {
+await test('importVoice refuses an empty buffer', async () => {
   await assert.rejects(
     lib.importVoice(Buffer.alloc(0), { name: 'empty', originalName: 'empty.wav' }),
     /empty/i,
@@ -156,11 +149,11 @@ await check('importVoice refuses an empty buffer', async () => {
 });
 
 // --- removeVoice -----------------------------------------------------------
-await check('removeVoice deletes a legacy-dir file too', async () => {
+await test('removeVoice deletes a legacy-dir file too', async () => {
   await lib.removeVoice('zulu.wav');
   assert.equal(await lib.resolve('zulu.wav'), null);
 });
-await check('removeVoice refuses an unknown name', async () => {
+await test('removeVoice refuses an unknown name', async () => {
   await assert.rejects(lib.removeVoice('ghost.wav'), /unknown voice/i);
 });
 
@@ -169,12 +162,12 @@ await check('removeVoice refuses an unknown name', async () => {
 // both tts.chatterboxVoices and tts.pocketTtsCustomVoices on every 3s poll.
 const chatterbox = await import('../src/audio/chatterbox.js');
 
-await check('listReferenceVoices returns the same filenames scan() found', async () => {
+await test('listReferenceVoices returns the same filenames scan() found', async () => {
   const scanned = (await lib.scan()).map(e => e.file);
   const listed = await chatterbox.listReferenceVoices();
   assert.deepEqual(listed, scanned);
 });
-await check('listReferenceVoices returns a plain string[] of .wav names', async () => {
+await test('listReferenceVoices returns a plain string[] of .wav names', async () => {
   const listed = await chatterbox.listReferenceVoices();
   assert.ok(Array.isArray(listed));
   for (const v of listed) {
@@ -182,12 +175,12 @@ await check('listReferenceVoices returns a plain string[] of .wav names', async 
     assert.match(v, /\.wav$/i);
   }
 });
-await check('a newly imported voice shows up without a restart', async () => {
+await test('a newly imported voice shows up without a restart', async () => {
   // No ffmpeg needed: a .wav upload is stored through untouched.
   writeFileSync(join(VOICES, 'seed-check.wav'), 'seed');
   assert.ok((await chatterbox.listReferenceVoices()).includes('seed-check.wav'));
 });
-await check('listReferenceVoices never offers a directory named *.wav', async () => {
+await test('listReferenceVoices never offers a directory named *.wav', async () => {
   // The discriminating case for the delegation: the pre-refactor scanner
   // filtered on the extension alone and would hand a DIRECTORY to the picker,
   // where selecting it fails at render time with a confusing worker error.
@@ -197,9 +190,4 @@ await check('listReferenceVoices never offers a directory named *.wav', async ()
   assert.ok(!(await lib.scan()).some(e => e.file === 'bogus.wav'));
 });
 
-rmSync(root, { recursive: true, force: true });
-if (failures) {
-  console.error(`\nvoice-library: ${failures} failure(s)`);
-  process.exit(1);
-}
-console.log('\nvoice-library: all checks passed');
+after(() => rmSync(root, { recursive: true, force: true }));

@@ -1,6 +1,6 @@
 // Match voice IDs against voice-playing.json for the mixer's actual startedAt, not handoff
 // time. Polling latency does not change that timestamp. A missing marker returns null
-// immediately for older mixers. #1382.
+// immediately for unverified mixers; verified overlays wait for the first marker. #1382.
 
 import { existsSync, readFileSync } from 'node:fs';
 import { config } from '../../config.js';
@@ -13,7 +13,8 @@ export interface VoiceMarker {
   filename: string | null;
 }
 
-const POLL_MS = 500;
+export const VOICE_MARKER_POLL_MS = 500;
+const POLL_MS = VOICE_MARKER_POLL_MS;
 // How long a segment waits for its own marker before giving up and reporting an
 // unknown air time. Generous: the normal lag is well under 2s, but a clip
 // handed over while the queue still holds the previous one airs later, and a
@@ -123,7 +124,7 @@ export function resetVoiceMarkers() {
 // #1382 or one that has not spoken since it started — both of which must
 // degrade to instant, handoff-time bookkeeping rather than a 20s stall on every
 // segment.
-function markerFilePresent(): boolean {
+export function markerFilePresent(): boolean {
   return existsSync(config.liquidsoap.voicePlayingFile);
 }
 
@@ -133,13 +134,16 @@ function markerFilePresent(): boolean {
 export function awaitVoiceAir(
   voiceId: string,
   timeoutMs: number = VOICE_AIR_TIMEOUT_MS,
+  { requireMarker = false }: { requireMarker?: boolean } = {},
 ): Promise<number | null> {
   const seen = _recent.get(voiceId);
   if (seen) {
     _recent.delete(voiceId);
     return Promise.resolve(seen.airedAt);
   }
-  if (!markerFilePresent()) return Promise.resolve(null);
+  // Optional overlays have already verified mixer capability. On a fresh
+  // station their first start creates this file, so absence is not a fallback.
+  if (!requireMarker && !markerFilePresent()) return Promise.resolve(null);
   startPoller();
   return new Promise<number | null>(resolve => {
     const timer = setTimeout(() => {

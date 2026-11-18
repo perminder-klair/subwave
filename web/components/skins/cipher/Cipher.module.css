@@ -1,46 +1,64 @@
-/* CIPHER-3 — the rotor machine. Colour lives here as theme tokens (the strict
-   lint forbids inline styles); layout stays in Tailwind on the elements. Two
-   families of variables: the PEN (solid ink when powered, dashed construction
-   lines in standby or off air) and the SIZE of each part, which the desk and
-   phone machines set differently so the parts themselves stay one component. */
+/* CIPHER-3 — the rotor machine, built in Unit SW-9's hardware: a brushed
+   plate, dark top-lit keys, weighted knobs and self-lit display glass. Every
+   depth on it — the chassis's edge, a key's travel, a lamp's socket, a well's
+   wall, a knob's side — recedes along one 30° axis, the isometric kit's
+   (cos 30°, sin 30°), while the plate itself faces the reader so the keys stay
+   typeable. Colour lives here as theme tokens (the strict lint forbids inline
+   styles); layout stays in Tailwind on the elements. Two families of
+   variables: the HARDWARE finish, and the SIZE of each part, which the desk
+   and phone machines set differently so the parts stay one component. */
 
 .root {
-  --faint: color-mix(in oklab, var(--ink) 45%, var(--bg));
-  --ln: 1.5px solid var(--ink);
-  --hl: 1px solid color-mix(in oklab, var(--ink) 50%, var(--bg));
+  /* The plate: metal from the theme's paper, lit from above. */
+  --plate-hi: color-mix(in oklab, var(--bg) 90%, #fff);
+  --plate: color-mix(in oklab, var(--bg) 96%, #000);
+  --plate-lo: color-mix(in oklab, var(--bg) 88%, #000);
+  --line: color-mix(in srgb, var(--ink) 34%, transparent);
+  --plate-txt: var(--ink);
   --txt: var(--ink);
-  --sk: var(--ink);
-  --dash: none;
-  /* Face shading: lit top, shaded side, a deeper well, the key skirts. */
-  --iso-l: color-mix(in oklab, var(--ink) 5%, var(--bg));
-  --iso-r: color-mix(in oklab, var(--ink) 12%, var(--bg));
-  --iso-w: color-mix(in oklab, var(--ink) 18%, var(--bg));
-  --well: color-mix(in oklab, var(--ink) 13%, var(--bg));
-  --skirt: color-mix(in oklab, var(--ink) 32%, var(--bg));
+  /* Keys: the theme's ink as a dark cap (a pale one on a dark theme), its
+     legend in the paper. Every shade of a key — the lit top, the shaded foot,
+     the side seen down the 30° axis — is mixed from the KEY'S OWN FACE toward
+     white or black, never toward the theme's ink: on a dark theme the ink is
+     the pale end, which lit the keys from below and drew each side as pale as
+     its face, so a key lost its depth and its swept body read as a notched
+     rectangle. The knob is the same, from its own face. */
+  --key: color-mix(in oklab, var(--ink) 92%, var(--bg));
+  --key-hi: color-mix(in oklab, var(--key) 92%, #fff);
+  --key-lo: color-mix(in oklab, var(--key) 90%, #000);
+  --edge: color-mix(in oklab, var(--key) 58%, #000);
+  --edge-lo: color-mix(in oklab, var(--key) 44%, #000);
+  --knob: color-mix(in oklab, var(--ink) 88%, var(--bg));
+  --keytext: color-mix(in oklab, var(--bg) 87%, var(--ink));
+  --keytext-dim: color-mix(in srgb, var(--keytext) 55%, transparent);
+  /* Display glass is self-lit hardware: deliberately off-token, as Unit's. */
+  --glass-txt: #f4f0e6;
+  --glass-dim: rgba(244, 240, 230, 0.5);
+  --lamp-txt: rgba(244, 240, 230, 0.55);
 }
+/* Standby and off air: the glass and the lamps go dark. The hardware stays. */
 .dim {
-  --ln: 1.5px dashed var(--faint);
-  --hl: 1px dashed var(--faint);
+  --plate-txt: var(--muted);
   --txt: var(--muted);
-  --sk: var(--faint);
-  --dash: 4 3;
+  --glass-txt: rgba(244, 240, 230, 0.34);
+  --glass-dim: rgba(244, 240, 230, 0.2);
+  --lamp-txt: rgba(244, 240, 230, 0.22);
 }
 
-.ln { border: var(--ln); }
 .txt { color: var(--txt); }
-.isoL { background-color: var(--iso-l); }
 
 /* ── Part sizes ─────────────────────────────────────────────────────── */
 .desk {
-  --legend-top: -7px;
+  --chassis-depth: 16px;
+  --legend-top: -8px;
   --legend-left: 12px;
   --legend-pad: 6px;
   --legend-font: 700 10px/12px var(--mono-font), ui-monospace, monospace;
   --legend-track: 0.22em;
   --rot-col: 124px;
-  --rot-col-gap: 4px;
-  --rot-btn-w: 96px;
-  --rot-btn-h: 32px;
+  --rot-col-gap: 6px;
+  --rot-btn-w: 84px;
+  --rot-btn-h: 26px;
   --rot-h: 88px;
   --rot-win: 70px;
   --rot-ridge: 20px;
@@ -54,25 +72,28 @@
   --lamp: 50px;
   --lamp-cell-w: 104px;
   --lamp-cell-h: 54px;
-  --lamp-drop: 4px;
+  --lamp-drop: 5px;
   --lamp-font: 18px;
   --cap: 58px;
-  --cap-skirt: 65px;
+  --cap-depth: 8px;
   --cap-cell-w: 104px;
   --cap-cell-h: 66px;
-  --cap-push: 7px;
   --cap-font: 20px;
+  /* The gate's ring: r 46 of the knob's 128-unit drawing, across its stroke. */
+  --ring: 93.5px;
+  --ring-w: 1.5px;
 }
 .mob {
-  --legend-top: -6px;
+  --chassis-depth: 10px;
+  --legend-top: -7px;
   --legend-left: 6px;
   --legend-pad: 4px;
   --legend-font: 700 9px/11px var(--mono-font), ui-monospace, monospace;
   --legend-track: 0.18em;
   --rot-col: 82px;
-  --rot-col-gap: 2px;
-  --rot-btn-w: 58px;
-  --rot-btn-h: 34px;
+  --rot-col-gap: 3px;
+  --rot-btn-w: 52px;
+  --rot-btn-h: 30px;
   --rot-h: 56px;
   --rot-win: 42px;
   --rot-ridge: 12px;
@@ -88,97 +109,221 @@
   --lamp-cell-h: 31px;
   --lamp-drop: 3px;
   --lamp-font: 11px;
-  --cap: 33px;
-  --cap-skirt: 38px;
+  /* The cap's side takes room the flat cap didn't: a 33px cap's side met the
+     next cap. The cell, the touch target, keeps its size. */
+  --cap: 30px;
+  --cap-depth: 4px;
   --cap-cell-w: 37px;
   --cap-cell-h: 44px;
-  --cap-push: 5px;
-  --cap-font: 14px;
+  --cap-font: 13px;
+  /* The compact knob draws at 62px with a doubled stroke. */
+  --ring: 46px;
+  --ring-w: 1.45px;
 }
 
-/* ── Panels: a framed bay with its name notched into the top rule ───── */
+/* ── Chassis: a brushed plate on a body with depth ──────────────────── */
+/* The plate is lit from above and brushed; the body's right side and front
+   lip show as parallelograms down the 30° axis, the lip in deeper shade, and
+   the whole machine casts its shadow the same way. The brushing is one 3px
+   tile repeated, not a repeating gradient: WebKit draws a repeating gradient
+   as one gradient with a stop pair per period, ~450 across the plate. */
+.chassis {
+  position: relative;
+  border: 1px solid var(--ink);
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.06) 1px, transparent 1px) 0 0 / 3px 100%,
+    linear-gradient(180deg, var(--plate-hi) 0%, var(--plate) 46%, var(--plate-lo) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.5),
+    calc(var(--chassis-depth) * 1.6) calc(var(--chassis-depth) * 1.1) 34px rgba(0, 0, 0, 0.24);
+}
+.chassis::before,
+.chassis::after {
+  content: '';
+  position: absolute;
+  pointer-events: none;
+  border: 1px solid var(--ink);
+  transform-origin: 0 0;
+}
+.chassis::before {
+  top: -1px;
+  left: calc(100% + 1px);
+  width: calc(var(--chassis-depth) * 0.866);
+  height: calc(100% + 2px);
+  border-left: 0;
+  background: linear-gradient(90deg, color-mix(in oklab, var(--bg) 80%, #000), color-mix(in oklab, var(--bg) 70%, #000));
+  transform: skewY(30deg);
+}
+.chassis::after {
+  top: calc(100% + 1px);
+  left: -1px;
+  width: calc(100% + 2px);
+  height: calc(var(--chassis-depth) * 0.5);
+  border-top: 0;
+  background: linear-gradient(180deg, color-mix(in oklab, var(--bg) 84%, #000), color-mix(in oklab, var(--bg) 74%, #000));
+  transform: skewX(60deg);
+}
+
+/* Corner screws: a domed head, one slot across it. */
+.screw {
+  position: absolute;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background:
+    linear-gradient(45deg, transparent 43%, color-mix(in oklab, var(--ink) 60%, transparent) 43% 57%, transparent 57%),
+    radial-gradient(circle at 35% 30%, var(--plate-hi), color-mix(in oklab, var(--bg) 70%, #000));
+  box-shadow: 0.87px 0.5px 0 rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+/* ── Panels: wells sunk into the plate, a nameplate on each ─────────── */
+/* A well's floor sits down the 30° axis, so of its walls only the top and the
+   left face the reader: an inset band along those two edges. Its floor is the
+   plate in shade, mixed toward black: toward the ink, a dark theme's wells
+   came out paler than the plate and read as raised. */
 .panel {
   position: relative;
-  border: var(--ln);
-  background-color: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--bg) 93%, #000),
+    color-mix(in oklab, var(--bg) 87%, #000)
+  );
+  box-shadow:
+    inset 3.5px 2px 0 rgba(0, 0, 0, 0.07),
+    inset 1px 1px 4px rgba(0, 0, 0, 0.2),
+    0 1px 0 rgba(255, 255, 255, 0.45);
 }
+/* The bay's name on a small plate riveted across the well's top rule: it
+   carries its own metal, so it needn't match the plate behind it. */
 .legend {
   position: absolute;
+  z-index: 1;
   top: var(--legend-top);
   left: var(--legend-left);
-  padding: 0 var(--legend-pad);
-  background-color: var(--iso-l);
+  padding: 1px var(--legend-pad);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: linear-gradient(180deg, var(--plate-hi), var(--plate));
+  box-shadow: 0.87px 0.5px 0 var(--line), 1.73px 1px 0 var(--line);
   font: var(--legend-font);
   letter-spacing: var(--legend-track);
   text-transform: uppercase;
   white-space: nowrap;
-  color: var(--txt);
+  color: var(--plate-txt);
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.45);
 }
-/* The keyboard sits in a darker well. */
-.panel.wellBay { background-color: var(--well); }
-/* Corner screws: a ring with one slot across it. */
-.screw {
-  position: absolute;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  border: var(--hl);
-  background: linear-gradient(45deg, transparent 44%, var(--muted) 44% 56%, transparent 56%);
-}
-.plinth {
-  border: var(--ln);
-  border-top: 0;
-  background-image: repeating-linear-gradient(
-    90deg,
-    color-mix(in oklab, var(--ink) 30%, transparent) 0 1px,
-    transparent 1px 24px
+/* The keyboard sits in a deeper, darker well. */
+.panel.wellBay {
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--bg) 82%, #000),
+    color-mix(in oklab, var(--bg) 74%, #000)
   );
+  box-shadow:
+    inset 6px 3.5px 0 rgba(0, 0, 0, 0.1),
+    inset 1px 2px 8px rgba(0, 0, 0, 0.32),
+    0 1px 0 rgba(255, 255, 255, 0.45);
+}
+/* Display glass: the tape and the lampboard. Inside, the theme's ink and
+   muted give way to the display's own light, which is why the Tailwind colour
+   tokens are restated here and not only --txt. */
+.panel.glassBay {
+  --txt: var(--glass-txt);
+  --color-ink: var(--glass-txt);
+  --color-muted: var(--glass-dim);
+  border: 1px solid #0a0908;
+  background: #0e0d0b;
+  box-shadow:
+    inset 4px 2.3px 0 rgba(0, 0, 0, 0.6),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.03),
+    0 1px 0 rgba(255, 255, 255, 0.45);
+  color: var(--glass-txt);
+}
+.panel.glassBay::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background: linear-gradient(128deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0) 34%);
 }
 
-/* ── Power key ──────────────────────────────────────────────────────── */
-.pen {
-  fill: none;
-  stroke: var(--sk);
-  stroke-dasharray: var(--dash);
-}
-.penFill { fill: var(--iso-w); }
-.penBg { fill: var(--bg); }
-.svgTxt { fill: var(--txt); }
-.svgAcc { stroke: var(--accent); fill: none; }
+/* ── Power key: a weighted knob ─────────────────────────────────────── */
+.svgTxt { fill: var(--plate-txt); stroke: none; }
+.svgTick { stroke: var(--plate-txt); fill: none; }
+.pkO0 { stop-color: color-mix(in oklab, var(--knob) 88%, #fff); }
+.pkO1 { stop-color: color-mix(in oklab, var(--knob) 82%, #000); }
+.pkI0 { stop-color: color-mix(in oklab, var(--knob) 92%, #fff); }
+.pkI1 { stop-color: color-mix(in oklab, var(--knob) 88%, #000); }
+/* The knob's side: a round-capped stroke as wide as the knob, run down the
+   30° axis, is exactly a cylinder's silhouette. */
+.pkSide { stroke: var(--edge-lo); fill: none; }
+.pkShadow { fill: rgba(0, 0, 0, 0.18); stroke: none; }
+/* The face and the cap take their gradient from the fill ATTRIBUTE, so these
+   two set only the stroke: a CSS fill here beats the attribute, and the
+   knob's face went transparent over its side. */
+.pkRim { stroke: var(--ink); }
+.pkKnurl { stroke: rgba(255, 255, 255, 0.08); fill: none; }
+.pkCapEdge { stroke: rgba(0, 0, 0, 0.5); }
+.pkMark { stroke: var(--accent); fill: none; }
+.pkMarkGlow { stroke: var(--accent); fill: none; opacity: 0.35; }
 .keyTurn {
   transform: rotate(-45deg);
   transition: transform 0.35s ease;
 }
 .keyOn { transform: rotate(45deg); }
-/* The gate's ring. Its resting style is the still frame lite and reduced
-   motion get; the ripple is layered on only where motion is welcome. */
+/* The gate's ring, a box under the knob's drawing rather than a circle in it:
+   rippling an SVG circle repainted the knob's gradients every frame for as
+   long as the gate waited, where a box's transform and opacity run on the
+   compositor. Its resting style is the still frame lite and reduced motion
+   get; the ripple is layered on only where motion is welcome. */
 .ring {
-  fill: none;
-  stroke: var(--accent);
-  opacity: 0;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: var(--ring);
+  height: var(--ring);
+  margin: calc(var(--ring) / -2);
+  border: var(--ring-w) solid var(--accent);
+  border-radius: 50%;
+  opacity: 0.8;
+  pointer-events: none;
 }
-.ringOn { opacity: 0.8; }
 @media (prefers-reduced-motion: no-preference) {
-  .ringOn {
-    transform-box: fill-box;
-    transform-origin: center;
-    animation: cipher-ring 1.6s ease-out infinite;
-  }
+  .ring { animation: cipher-ring 1.6s ease-out infinite; }
 }
 @keyframes cipher-ring {
   from { transform: scale(1); opacity: 0.9; }
   to { transform: scale(1.48); opacity: 0; }
 }
 
-/* ── Rotors ─────────────────────────────────────────────────────────── */
+/* ── Rotors: a glass window and a knurled thumbwheel ────────────────── */
 .rotCol {
   width: var(--rot-col);
   gap: var(--rot-col-gap);
 }
+/* The step keys: small dark keys standing proud at 30°. */
 .rotBtn {
   width: var(--rot-btn-w);
   height: var(--rot-btn-h);
-  color: var(--txt);
+  border-radius: 3px;
+  color: var(--keytext);
+  background: linear-gradient(180deg, var(--key-hi), var(--key-lo));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    0.87px 0.5px 0 var(--edge), 1.73px 1px 0 var(--edge), 2.6px 1.5px 0 var(--edge),
+    3px 4px 5px rgba(0, 0, 0, 0.25);
+  transition: transform 70ms, box-shadow 70ms;
+}
+.rotBtn:active {
+  transform: translate(1.73px, 1px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    0.87px 0.5px 0 var(--edge),
+    1px 2px 3px rgba(0, 0, 0, 0.25);
 }
 .rotBody {
   height: var(--rot-h);
@@ -188,18 +333,31 @@
 }
 .rotWin {
   width: var(--rot-win);
-  border: var(--ln);
-  background-color: var(--bg);
+  border: 1px solid #0a0908;
+  border-radius: 3px;
+  background: #0e0d0b;
+  box-shadow:
+    inset 3px 1.7px 0 rgba(0, 0, 0, 0.6),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.03),
+    0 1px 0 rgba(255, 255, 255, 0.45);
+}
+.rotWin::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(128deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0) 40%);
 }
 .rotSmall {
   height: var(--rot-small);
-  font: 600 var(--rot-small) / 1 var(--mono-font), ui-monospace, monospace;
-  color: var(--muted);
+  font: 900 var(--rot-small) / 1 var(--font-doto), var(--mono-font), ui-monospace, monospace;
+  color: var(--glass-dim);
 }
 .rotBig {
   height: var(--rot-big);
-  font: 700 var(--rot-big) / 1 var(--mono-font), ui-monospace, monospace;
-  color: var(--txt);
+  font: 900 var(--rot-big) / 1 var(--font-doto), var(--mono-font), ui-monospace, monospace;
+  color: var(--glass-txt);
+  text-shadow: 0 0 14px rgba(244, 240, 230, 0.35);
 }
 /* The index arrow on the window's left edge. */
 .rotTick {
@@ -209,27 +367,30 @@
   border-left: var(--rot-tick) solid var(--accent);
   border-top: var(--rot-tick-h) solid transparent;
   border-bottom: var(--rot-tick-h) solid transparent;
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--accent) 70%, transparent));
 }
-/* The milled edge: --ridge (px) rides the element, so the ridges move with
-   the position. */
+/* The thumbwheel: lit across its curve, its knurling riding --ridge (px) so
+   the ridges move with the position, its rim showing down the 30° axis. */
 .rotRidge {
   width: var(--rot-ridge);
-  border: var(--ln);
-  background-color: var(--iso-w);
-  background-image: repeating-linear-gradient(
-    to bottom,
-    var(--sk) 0 1px,
-    transparent 1px var(--rot-pitch)
-  );
-  background-position: 0 var(--ridge, 0px);
+  border: 1px solid var(--ink);
+  border-radius: 3px;
+  background-image:
+    repeating-linear-gradient(to bottom, rgba(0, 0, 0, 0.55) 0 1px, transparent 1px var(--rot-pitch)),
+    linear-gradient(90deg, var(--key-lo), var(--key-hi) 45%, var(--key-lo));
+  background-position: 0 var(--ridge, 0px), 0 0;
+  box-shadow:
+    0.87px 0.5px 0 var(--edge), 1.73px 1px 0 var(--edge), 2.6px 1.5px 0 var(--edge),
+    3px 4px 6px rgba(0, 0, 0, 0.25);
 }
 .rotLabel {
   font: 700 var(--rot-label) / 1 var(--mono-font), ui-monospace, monospace;
   letter-spacing: 0.2em;
   text-transform: uppercase;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.45);
 }
 
-/* ── Lampboard ──────────────────────────────────────────────────────── */
+/* ── Lampboard: smoked bulbs behind the glass ───────────────────────── */
 .lampCell {
   position: relative;
   display: flex;
@@ -240,14 +401,19 @@
 }
 .lamp {
   position: relative;
-  width: var(--lamp);
-  height: calc(var(--lamp) + var(--lamp-drop));
+  width: calc(var(--lamp) + var(--lamp-drop) * 0.866);
+  height: calc(var(--lamp) + var(--lamp-drop) * 0.5);
 }
+/* A bulb changes in two opacities, the halo and the fill (which carries its
+   own highlight), and a rim. Each opacity transition holds a compositing
+   layer while it runs, so the fewer of them the less a lampboard of fading
+   bulbs costs WebKit. */
 .lampGlow,
-.lampFill,
-.lampSpec,
+.lampFill {
+  transition: opacity 320ms ease-in;
+}
 .lampRim {
-  transition: opacity 320ms ease-in, color 260ms ease-in, border-color 260ms ease-in;
+  transition: color 260ms ease-in, border-color 260ms ease-in;
 }
 .lampGlow {
   position: absolute;
@@ -258,8 +424,8 @@
   border-radius: 50%;
   background: radial-gradient(
     circle,
-    color-mix(in oklab, var(--accent) 42%, transparent) 0%,
-    color-mix(in oklab, var(--accent) 16%, transparent) 38%,
+    color-mix(in oklab, var(--accent) 48%, transparent) 0%,
+    color-mix(in oklab, var(--accent) 18%, transparent) 38%,
     transparent 70%
   );
   opacity: 0;
@@ -269,21 +435,26 @@
 .lampGlass,
 .lampRim {
   position: absolute;
-  left: 0;
   width: var(--lamp);
   height: var(--lamp);
   border-radius: 50%;
-  border: var(--ln);
 }
+/* The socket the bulb sits in, its depth down the 30° axis. */
 .lampBase {
-  top: var(--lamp-drop);
-  background-color: var(--iso-r);
+  top: calc(var(--lamp-drop) * 0.5);
+  left: calc(var(--lamp-drop) * 0.866);
+  border: 1px solid #000;
+  background: #050404;
 }
 .lampGlass {
   top: 0;
+  left: 0;
   overflow: hidden;
-  background-color: var(--bg);
+  border: 1px solid #000;
+  background: radial-gradient(circle at 34% 28%, #3a3631, #161412 62%, #0b0a09);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
+/* Opaque, so lit it hides the unlit highlight beneath it and shows its own. */
 .lampFill {
   position: absolute;
   inset: 0;
@@ -292,7 +463,7 @@
     color-mix(in oklab, var(--accent) 60%, #fff6e8) 0%,
     var(--accent) 26%,
     var(--accent) 60%,
-    color-mix(in oklab, var(--accent) 70%, var(--ink)) 100%
+    color-mix(in oklab, var(--accent) 70%, #000) 100%
   );
   opacity: 0;
 }
@@ -304,36 +475,37 @@
   height: calc(var(--lamp) * 0.16);
   border-radius: 50%;
   background: #fff;
-  opacity: 0;
+  opacity: 0.12;
   transform: rotate(-30deg);
 }
+.lampFill .lampSpec { opacity: 0.55; }
 .lampRim {
   top: 0;
+  left: 0;
   display: flex;
   align-items: center;
   justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.06);
   font: 700 var(--lamp-font) / 1 var(--mono-font), ui-monospace, monospace;
-  color: var(--txt);
+  color: var(--lamp-txt);
 }
 /* Switch-on is near instant; switch-off fades like a cooling filament. */
 .lampOn { z-index: 2; }
 .lampOn .lampGlow,
 .lampOn .lampFill,
-.lampOn .lampSpec,
 .lampOn .lampRim {
   transition-duration: 40ms;
   transition-timing-function: ease-out;
 }
 .lampOn .lampGlow,
 .lampOn .lampFill { opacity: 1; }
-.lampOn .lampSpec { opacity: 0.55; }
 .lampOn .lampRim {
-  border: 1.5px solid color-mix(in oklab, var(--accent) 70%, var(--ink));
-  color: var(--primary-foreground);
+  border-color: color-mix(in oklab, var(--accent) 60%, #000);
+  color: #fff4ec;
   text-shadow: 0 0 10px color-mix(in oklab, var(--accent) 50%, #fff);
 }
 
-/* ── Keyboard: round caps on a skirt, pushed down while held ────────── */
+/* ── Keyboard: round dark caps, travelling down the 30° axis ────────── */
 .capCell {
   display: flex;
   justify-content: center;
@@ -342,18 +514,31 @@
   touch-action: manipulation;
 }
 .mob .capCell { align-items: flex-start; padding-top: 3px; }
+/* --t is how far down its travel the cap is: 0 up, most of the way while held. */
 .cap {
+  --t: 0;
+  --cdx: calc(var(--cap-depth) * 0.866);
+  --cdy: calc(var(--cap-depth) * 0.5);
   position: relative;
   display: block;
-  width: var(--cap);
-  height: var(--cap-skirt);
+  width: calc(var(--cap) + var(--cdx));
+  height: calc(var(--cap) + var(--cdy));
 }
+[data-down] > .cap { --t: 0.75; }
+/* The cap's side: a pill from the cap's centre out along 30°, so its far end
+   stays on the plate while the near end travels down with the cap. */
 .capSkirt {
   position: absolute;
-  inset: 0;
+  left: 0;
+  top: 0;
+  width: calc(var(--cap) + var(--cap-depth) * (1 - var(--t)));
+  height: var(--cap);
   border-radius: calc(var(--cap) / 2);
-  border: var(--ln);
-  background-color: var(--skirt);
+  transform-origin: calc(var(--cap) / 2) 50%;
+  transform: translate(calc(var(--cdx) * var(--t)), calc(var(--cdy) * var(--t))) rotate(30deg);
+  background: linear-gradient(180deg, var(--edge), var(--edge-lo));
+  box-shadow: 2px 3px 5px rgba(0, 0, 0, 0.3);
+  transition: width 70ms, transform 70ms;
 }
 .capTop {
   position: absolute;
@@ -365,83 +550,140 @@
   align-items: center;
   justify-content: center;
   border-radius: 50%;
-  border: var(--ln);
-  background-color: var(--bg);
+  background: radial-gradient(
+    circle at 50% 22%,
+    color-mix(in oklab, var(--key) 88%, #fff),
+    color-mix(in oklab, var(--key) 84%, #000) 72%
+  );
+  /* The hairline is where the cap's top turns down into its side: without it
+     the two dark tones run together. */
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    inset 0 -2px 4px rgba(0, 0, 0, 0.35),
+    0 0 0 1px rgba(0, 0, 0, 0.55);
   font: 700 var(--cap-font) / 1 var(--mono-font), ui-monospace, monospace;
-  color: var(--txt);
+  color: var(--keytext);
+  transform: translate(calc(var(--cdx) * var(--t)), calc(var(--cdy) * var(--t)));
   transition: transform 70ms;
 }
+/* The desk caps' dished centre. */
 .desk .capTop::before {
   content: '';
   position: absolute;
   inset: 6px;
   border-radius: 50%;
-  border: var(--hl);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.25);
 }
-[data-down] > .cap > .capTop { transform: translateY(var(--cap-push)); }
 
-/* Block keys (MUTE, KEEP, DEL, SEND, SPACE): a face on a skirt, --drop deep.
-   A latched key sits down in its well; a plain one goes down while pressed. */
+/* Block keys (MUTE, KEEP, DEL, SEND, SPACE): a face on a body, --drop deep.
+   The body is the face swept down the 30° axis — a hexagon — and the face
+   travels down that axis: while pressed, or for good while latched. The
+   shadow is a filter because only a filter follows the hexagon; WebKit reruns
+   it on every repaint, which on touch screens (where nothing inside it
+   glides, see the end of this file) is once per press. */
 .block {
+  --t: 0;
+  --dx: calc(var(--drop, 6px) * 0.866);
+  --dy: calc(var(--drop, 6px) * 0.5);
   position: relative;
   border: 0;
   background: transparent;
   padding: 0;
+  filter: drop-shadow(calc(var(--dx) * 0.4 + 1px) calc(var(--dy) * 0.4 + 2px) 3px rgba(0, 0, 0, 0.26));
 }
-.blockSkirt,
+.block:not(:disabled):active,
+.block[data-down],
+.latched { --t: 0.8; }
+.blockSkirt {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(160deg, var(--edge), var(--edge-lo));
+  clip-path: polygon(
+    calc(var(--dx) * var(--t)) calc(var(--dy) * var(--t)),
+    calc(100% - var(--dx) * (1 - var(--t))) calc(var(--dy) * var(--t)),
+    100% var(--dy),
+    100% 100%,
+    var(--dx) 100%,
+    calc(var(--dx) * var(--t)) calc(100% - var(--dy) * (1 - var(--t)))
+  );
+  transition: clip-path 70ms;
+}
 .blockFace {
   position: absolute;
-  inset-inline: 0;
-  border: var(--ln);
-}
-.blockSkirt {
-  top: var(--drop);
-  bottom: 0;
-  background-color: var(--iso-r);
-}
-.blockFace {
+  left: 0;
   top: 0;
-  bottom: var(--drop);
+  right: var(--dx);
+  bottom: var(--dy);
   display: flex;
   align-items: center;
   justify-content: center;
-  background-color: var(--bg);
-  color: var(--txt);
+  border-radius: 3px;
+  background: linear-gradient(180deg, var(--key-hi), var(--key-lo));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 0 0 1px color-mix(in oklab, var(--key) 50%, #000);
+  color: var(--keytext);
+  transform: translate(calc(var(--dx) * var(--t)), calc(var(--dy) * var(--t)));
   transition: transform 70ms;
 }
-.capsSkirt .blockSkirt { background-color: var(--skirt); }
-.block:not(:disabled):active .blockFace,
-.block[data-down] .blockFace,
-.latched .blockFace { transform: translateY(var(--drop)); }
-.lit .blockFace {
-  border: 1.5px solid var(--ink);
-  background-color: var(--accent);
-  color: var(--primary-foreground);
+/* Latched down, as Unit's held keys: darker, shadowed from above. */
+.latched .blockFace {
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--ink) 74%, var(--bg)),
+    color-mix(in oklab, var(--ink) 88%, var(--bg))
+  );
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.6);
+  color: color-mix(in oklab, var(--bg) 96%, #fff);
 }
-.dead .blockFace { color: var(--muted); }
+/* Lit, as Unit's accent key: the face glows, its body in the accent's shade. */
+.lit .blockSkirt { background: linear-gradient(160deg, color-mix(in oklab, var(--accent) 70%, #000), color-mix(in oklab, var(--accent) 55%, #000)); }
+.lit .blockFace {
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--accent) 82%, #fff),
+    color-mix(in oklab, var(--accent) 88%, #000)
+  );
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.3),
+    0 0 18px color-mix(in srgb, var(--accent) 45%, transparent);
+  color: #fff4ec;
+}
+.lit.latched .blockFace {
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--accent) 88%, #000),
+    color-mix(in oklab, var(--accent) 72%, #000)
+  );
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.5), 0 0 14px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.dead .blockFace { color: var(--keytext-dim); }
 
 @media (hover: hover) {
   .capCell:hover .capTop,
   .block:not(:disabled):not(.lit):hover .blockFace,
   .rotBtn:hover {
-    background-color: var(--field);
+    filter: brightness(1.14);
   }
 }
 
-/* ── Tape ───────────────────────────────────────────────────────────── */
-/* Sprocket holes along both edges of the paper tape. */
+/* ── Tape: the display window ───────────────────────────────────────── */
+/* A row of display pixels along both edges, where the paper's sprockets were. */
 .sprockets {
-  background-image: radial-gradient(
-    circle,
-    color-mix(in oklab, var(--ink) 35%, transparent) 1.4px,
-    transparent 1.9px
-  );
+  background-image: radial-gradient(circle, rgba(244, 240, 230, 0.13) 1.2px, transparent 1.7px);
   background-size: 12px 4px;
 }
-/* The character on the beat: accent ink, underlined. */
+/* The title in the dot-matrix face, lit. */
+.glassBay .tapeTitle {
+  font-family: var(--font-doto), var(--mono-font), ui-monospace, monospace;
+  font-weight: 900;
+  letter-spacing: 0;
+  text-shadow: 0 0 18px rgba(244, 240, 230, 0.35);
+}
+/* The character on the beat: accent light, underlined. */
 .hot {
   color: var(--accent);
   box-shadow: inset 0 -0.08em 0 var(--accent);
+  text-shadow: 0 0 14px color-mix(in srgb, var(--accent) 70%, transparent);
 }
 /* The typing head. */
 .caret {
@@ -451,21 +693,26 @@
   margin-left: 0.1em;
   vertical-align: -0.12em;
   background-color: var(--accent);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 60%, transparent);
 }
 .progFill { width: calc(var(--pf, 0) * 100%); }
 .progHead { left: calc(var(--pf, 0) * 100%); }
 
-/* ── The sheet ──────────────────────────────────────────────────────── */
+/* ── The sheet: a dot on every 30° isometric grid point ─────────────── */
 .gridDesk,
 .gridMob {
-  background-image: radial-gradient(
-    circle,
-    color-mix(in oklab, var(--ink) 20%, transparent) 0.9px,
-    transparent 1.4px
-  );
+  background-image:
+    radial-gradient(circle, color-mix(in oklab, var(--ink) 18%, transparent) 0.9px, transparent 1.4px),
+    radial-gradient(circle, color-mix(in oklab, var(--ink) 18%, transparent) 0.9px, transparent 1.4px);
 }
-.gridDesk { background-size: 24px 24px; }
-.gridMob { background-size: 16px 16px; }
+.gridDesk {
+  background-size: 24px 13.856px;
+  background-position: 0 0, 12px 6.928px;
+}
+.gridMob {
+  background-size: 16px 9.238px;
+  background-position: 0 0, 8px 4.619px;
+}
 
 /* Each machine is drawn at a fixed size and scaled to its box by script;
    until the first fit lands it stays hidden, so it never flashes full size. */
@@ -476,6 +723,18 @@
   transform-origin: 0 0;
 }
 .fit:not([data-fit]) { visibility: hidden; }
+/* WebKit composites an element only while an opacity or transform animation
+   runs on it, and a composited element inside a transformed one drags the
+   transformed one onto a layer with it. So every bulb that faded and every
+   key that travelled moved the whole scaled machine on and off a layer of its
+   own, redrawing all of it at the iPad's pixel ratio each time. Pinned to a
+   layer, the machine is drawn once and the moving parts come and go over it.
+   iOS only (no desktop browser passes this check): Chrome can keep a
+   will-change layer at the scale it was first drawn at, which would blur the
+   machine after a window resize. */
+@supports (-webkit-touch-callout: none) {
+  .fit { will-change: transform; }
+}
 /* A phone too short for the whole machine drops the lampboard rather than
    shrinking every key under a fingertip. */
 .mobBody { height: 516px; }
@@ -486,7 +745,6 @@
    glide. Key travel stays: it is feedback, not ambience. */
 :global(html.lite) .lampGlow,
 :global(html.lite) .lampFill,
-:global(html.lite) .lampSpec,
 :global(html.lite) .lampRim,
 :global(html.lite) .keyTurn {
   transition: none;
@@ -494,9 +752,28 @@
 @media (prefers-reduced-motion: reduce) {
   .lampGlow,
   .lampFill,
-  .lampSpec,
   .lampRim,
   .keyTurn {
     transition: none;
   }
+}
+
+/* Touch screens, for the iPad: WebKit (every iOS browser) pays for each of
+   these on the main thread. The keys still travel, as a cut rather than a
+   70ms glide the finger covers anyway: each glide held a compositing layer
+   for its length. A bulb's rim and letter switch off at once, while its light still
+   fades: a colour fade redrew the letter and its glow every frame, for every
+   bulb the sweep or the typing let go. And the tape's title glows tighter:
+   the sweep rewrites its characters 16 times a second, and each rewrite
+   redrew an 18px blur behind the whole line. */
+@media (hover: none) {
+  .rotBtn,
+  .capSkirt,
+  .capTop,
+  .blockSkirt,
+  .blockFace,
+  .lampRim {
+    transition: none;
+  }
+  .glassBay .tapeTitle { text-shadow: 0 0 5px rgba(244, 240, 230, 0.35); }
 }

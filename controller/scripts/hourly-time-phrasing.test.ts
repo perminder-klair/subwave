@@ -3,6 +3,7 @@
 // half picks one. The rounding is pinned by clock-phrase.test.ts; here the
 // clause must never widen past exactly one time the band produced.
 import assert from 'node:assert/strict';
+import { chatCompletionResponse } from './test-utils/llm.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -17,6 +18,7 @@ const { getClockContext } = await import('../src/context.js');
 const { nextHourlyTimeClause } = await import('../src/llm/internal/prompts/scripts.js');
 const settings = await import('../src/settings.js');
 const { generateHourlyTime, buildContextLines } = await import('../src/llm/dj.js');
+const { ANGLES } = await import('../src/llm/internal/prompts/context.js');
 
 const clockAt = (hour: number, minute: number) => ({
   spokenHour: 'six in the evening',
@@ -102,11 +104,9 @@ async function captureHourly(context: unknown, showWelcome = false) {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
       assert.ok(url.startsWith('http://127.0.0.1:9/'), `unexpected external request: ${url}`);
       requests.push(JSON.parse(String(init?.body)));
-      return new Response(JSON.stringify({
-        id: 'chatcmpl-hourly', object: 'chat.completion', created: 1, model: 'fixture-model',
-        choices: [{ index: 0, message: { role: 'assistant', content: 'A fixture time check.' }, finish_reason: 'stop' }],
-        usage: { prompt_tokens: 10, completion_tokens: 8, total_tokens: 18 },
-      }), { status: 200, headers: { 'content-type': 'application/json' } });
+      return chatCompletionResponse({ id: 'chatcmpl-hourly',
+        message: { role: 'assistant', content: 'A fixture time check.' },
+        usage: { prompt_tokens: 10, completion_tokens: 8, total_tokens: 18 } });
     }) as typeof fetch;
     await generateHourlyTime({
       context, showWelcome,
@@ -138,6 +138,13 @@ test('production hourly checks override weather-inviting persona instructions', 
   assert.match(system, /For this hourly time check, do not mention weather or outdoor conditions/);
   assert.ok(system.includes("Reads the weather like he's looked out the window"));
   assert.ok(system.indexOf('For this hourly time check') > system.indexOf("Reads the weather like he's looked out the window"));
+});
+
+// The ban above overrides tone, but a tone that asks for the dark wins anyway
+// (#2056), so no hourly tone may ask for light, dark or weather.
+test('no hourly tone mentions light, dark, night, sky, seasons, weather or the outdoors', () => {
+  const banned = /\b(dark\w*|daylight|twilight|starlight|lights?|sun(light|shine|ny|sets?|rises?|down)?|sky|skies|weather|seasons?|seasonal|(mid|to|over)?night\w*|dusk|dawn|spring|summer|autumn|winter|rain\w*|snow\w*|frost\w*|fog\w*|storm\w*|cloud\w*|windy|moon\w*|outside|outdoors?)\b/i;
+  assert.deepEqual(ANGLES.hourly.filter((tone) => banned.test(tone)), []);
 });
 
 // The same ban applies whether weather is known, unavailable, or missing entirely.

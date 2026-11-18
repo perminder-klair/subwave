@@ -118,3 +118,24 @@ export function stemEvictionOrder<T extends StemCacheDir>(dirs: readonly T[]): T
       a.mtimeMs - b.mtimeMs,
   );
 }
+
+// The dirs of tracks still waiting to air, moved behind every other dir; each
+// group keeps its own order. An overlay on the order above, never a score: the
+// scan never meets it (a queued track that has stems is not a backfill
+// candidate), and a kept dir still goes once nothing else is left over budget.
+// It exists for pick-time stems (broadcast/pick-stems-policy.ts sweepKeepLast):
+// a just-separated track has not aired, so it scores as never-aired, below
+// every dir that has, and on a cache that has turned over to aired tracks it
+// would be the first evicted, before its seam renders. No ids (the feature off)
+// returns the same array, unreordered.
+export function evictQueuedLast<T extends StemCacheDir>(
+  ordered: T[],
+  queued: ReadonlySet<string> | undefined,
+  idOf: (d: T) => string,
+): T[] {
+  if (!queued || queued.size === 0) return ordered;
+  const rest: T[] = [];
+  const kept: T[] = [];
+  for (const d of ordered) (queued.has(idOf(d)) ? kept : rest).push(d);
+  return kept.length ? [...rest, ...kept] : ordered;
+}

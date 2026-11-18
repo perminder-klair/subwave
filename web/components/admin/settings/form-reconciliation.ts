@@ -86,11 +86,84 @@ export interface PendingCloudSave {
   refreshAfter: number;
 }
 
+/** A committed settings write waiting for a read that reflects it. */
+export interface PendingCommittedRead {
+  /** Revision of the write's own authoritative GET, absent when it failed. */
+  refreshedAt?: number;
+  /** When the write committed: without `refreshedAt`, only a later poll counts. */
+  refreshAfter: number;
+}
+
+/** Has `revision` read the committed write? A failed post-write GET leaves the
+ *  cached envelope at revision zero, and a poll that began before the write
+ *  cannot reflect it. */
+export function committedReadReady(write: PendingCommittedRead, revision: number): boolean {
+  return revision > 0 && (write.refreshedAt !== undefined
+    ? revision >= write.refreshedAt
+    : revision > write.refreshAfter);
+}
+
 /** A failed post-save GET leaves the cached envelope at revision zero. */
 export function cloudSaveReadReady(save: PendingCloudSave, revision: number): boolean {
-  return revision > 0 && (save.refreshedAt !== undefined
-    ? revision >= save.refreshedAt
-    : revision > save.refreshAfter);
+  return committedReadReady(save, revision);
+}
+
+/**
+ * The top-level FormState keys POST /settings/llm/swap writes under: both LLM
+ * legs, and the embedding fields it pins when the Library tagger was
+ * inheriting the primary.
+ */
+export const LLM_SWAP_FORM_KEYS = ['llm', 'embedding'] as const;
+
+/**
+ * Adopt a write the SERVER made (the LLM swap) under the top-level `keys`, from
+ * its authoritative read, without waiting for the whole form to be clean.
+ *
+ * The hydration effect holds every new revision back while ANY section is
+ * dirty, so a write the browser did not compose would otherwise leave those
+ * paths showing their pre-write values — and the next ordinary save of that
+ * section would post them straight back over the write. The baseline takes the
+ * server's values outright; the form takes them leaf by leaf wherever the
+ * operator had not edited the leaf, so an edit made while the write was in
+ * flight stays (and stays dirty). An array is one control, as countLeafDiffs
+ * treats it.
+ */
+export function adoptServerPaths(
+  baseline: FormState,
+  current: FormState,
+  server: FormState,
+  keys: readonly string[],
+): { baseline: FormState; form: FormState } {
+  const nextBaseline = JSON.parse(JSON.stringify(baseline)) as Record<string, unknown>;
+  const nextForm = JSON.parse(JSON.stringify(current)) as Record<string, unknown>;
+  const base = baseline as unknown as Record<string, unknown>;
+  const srv = server as unknown as Record<string, unknown>;
+  for (const key of keys) {
+    nextBaseline[key] = clone(srv[key]);
+    const merged = keepEdits(base[key], nextForm[key], srv[key]);
+    if (merged === undefined) delete nextForm[key];
+    else nextForm[key] = merged;
+  }
+  return { baseline: nextBaseline as unknown as FormState, form: nextForm as unknown as FormState };
+}
+
+const isPlain = (v: unknown): v is Record<string, unknown> =>
+  !!v && typeof v === 'object' && !Array.isArray(v);
+const sameJson = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+const clone = <T>(v: T): T => (v === undefined ? v : JSON.parse(JSON.stringify(v)) as T);
+
+/** `server` wherever `current` still equals `base`; the operator's value elsewhere. */
+function keepEdits(base: unknown, current: unknown, server: unknown): unknown {
+  if (sameJson(current, base)) return clone(server);
+  if (isPlain(base) && isPlain(current) && isPlain(server)) {
+    const out: Record<string, unknown> = {};
+    for (const key of new Set([...Object.keys(current), ...Object.keys(server)])) {
+      const v = keepEdits(base[key], current[key], server[key]);
+      if (v !== undefined) out[key] = v;
+    }
+    return out;
+  }
+  return current;
 }
 
 /** Reconcile a committed cloud save with the redacted authoritative read. */

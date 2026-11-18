@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { useEffect } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import { useAdminQuery, type AdminFetch } from '../../lib/admin-query';
 import { dashKeys, fetchMusicStarved } from './dash/queries';
@@ -16,9 +17,13 @@ import { dashKeys, fetchMusicStarved } from './dash/queries';
 export default function MusicStarvedBanner({
   adminFetch,
   suppressed = false,
+  onStatus,
 }: {
   adminFetch: AdminFetch;
   suppressed?: boolean;
+  // Lets the shell's DJ Doc badge react to a starve even while this banner
+  // stands down for the Navidrome one.
+  onStatus?: (starved: boolean) => void;
 }) {
   const starvedQuery = useAdminQuery({
     key: dashKeys.musicStarved(),
@@ -28,6 +33,10 @@ export default function MusicStarvedBanner({
     request: fetchMusicStarved,
   });
   const starved = starvedQuery.data ?? false;
+
+  useEffect(() => {
+    onStatus?.(starved);
+  }, [onStatus, starved]);
 
   if (!starved || suppressed) return null;
 

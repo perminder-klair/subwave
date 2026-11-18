@@ -11,13 +11,15 @@ over the wire: the worker reads tracks from a stream URL or a path on the
 shared /var/sub-wave volume.
 
 Endpoints:
-  GET  /health   → {ok, engines, analyze_loaded, analyze_audio_capable, analyze_vocal_capable}
+  GET  /health   → {ok, engines, analyze_loaded, analyze_audio_capable, analyze_vocal_capable,
+                     analyze_facets_capable, …}
   POST /analyze  → {ok, bpm, key, intro_ms, confidence, ...}
 """
 
 import asyncio
 import json
 import logging
+import math
 import os
 import time
 from contextlib import asynccontextmanager
@@ -36,15 +38,17 @@ ANALYZE_SECONDS = os.environ.get("ANALYZE_SECONDS", "").strip() or "40"
 ANALYZER_HF_HOME = os.environ.get("ANALYZER_HF_HOME", "/opt/analyzer/hf-cache")
 
 
-def _bounded_int_env(name: str, default: int, minimum: int, maximum: int) -> int:
+def _bounded_env(name: str, default, minimum, maximum, parse, kind: str):
+    """A bounded number from the environment: unset is the default, and a
+    malformed or out-of-range value warns and falls back, never clamps."""
     raw = os.environ.get(name, "").strip()
     if not raw:
         return default
     try:
-        value = int(raw)
+        value = parse(raw)
     except ValueError:
         logging.getLogger("analyzer").warning(
-            f"{name}={raw!r} is not a whole number; using {default}"
+            f"{name}={raw!r} is not {kind}; using {default}"
         )
         return default
     if value < minimum or value > maximum:
@@ -55,15 +59,43 @@ def _bounded_int_env(name: str, default: int, minimum: int, maximum: int) -> int
     return value
 
 
+def _bounded_int_env(name: str, default: int, minimum: int, maximum: int) -> int:
+    return _bounded_env(name, default, minimum, maximum, int, "a whole number")
+
+
+def _finite_float(raw: str) -> float:
+    value = float(raw)
+    if not math.isfinite(value):
+        raise ValueError(raw)
+    return value
+
+
+def _bounded_float_env(name: str, default: float, minimum: float, maximum: float) -> float:
+    return _bounded_env(name, default, minimum, maximum, _finite_float, "a finite number")
+
+
 ANALYZE_CONCURRENCY = _bounded_int_env("ANALYZE_CONCURRENCY", 1, 1, 8)
+
+# Whole-file facet requests (loudness v2, edges) in flight. Each is a one-shot
+# worker process running one ffmpeg decode on ONE CPU thread with no model, so
+# it runs outside the analyze pool (whose workers hold CLAP/Demucs) and can go
+# much wider: a library's first whole-file pass reads every file once. The
+# controller sends up to its own ANALYZE_WHOLE_FILE_CONCURRENCY; this caps
+# what this host accepts.
+WHOLE_FILE_CONCURRENCY = _bounded_int_env("ANALYZE_WHOLE_FILE_CONCURRENCY", 4, 1, 32)
+# Wall-clock bound for one file, seconds: the worker's own bound and parse
+# (30-7200, warn-and-fall-back), and this reading is what it is handed. A long
+# DJ mix streamed from the music server is the slow case.
+WHOLE_FILE_TIMEOUT_S = _bounded_float_env("ANALYZE_WHOLE_FILE_TIMEOUT_S", 900.0, 30.0, 7200.0)
+WHOLE_FILE_FACETS = ("loudness", "edges")
 
 # Idle worker recycle (#1204 follow-up). The worker's own idle release drops
 # the CLAP/Demucs singletons, but ~1GB of librosa/numba/torch scratch stays
 # resident — restarting the worker is the only full reclaim. After this many
-# seconds with no HEAVY use (lean bpm/key traffic doesn't count, same clock as
-# the worker's release) the shim terminates it and run() respawns. Default
-# sits above the worker's largest release window so the cheap release always
-# fires first; 0 disables.
+# seconds without a request of any kind (a lean bpm/key pass holds ~500MB of
+# that scratch too) the shim terminates it and run() respawns. Default sits
+# above the worker's largest release window so the cheap release always fires
+# first; 0 disables.
 _RECYCLE_ENV = os.environ.get("ANALYZE_RECYCLE_IDLE_S", "").strip()
 try:
     RECYCLE_IDLE_S = float(_RECYCLE_ENV) if _RECYCLE_ENV else 3600.0
@@ -123,12 +155,20 @@ class StdioWorker:
         # Ready message minus the `ready` flag — per-engine capability
         # metadata. Cleared on every restart cycle.
         self.ready_meta: dict[str, Any] = {}
-        # Heavy-use bookkeeping for /health residency + the idle recycle.
+        # Heavy-use bookkeeping for /health residency. The idle recycle has its
+        # own clock, last_use, below.
         # last_heavy = monotonic time of the last completed model-using
         # request (None = none since this spawn); models_resident is
         # best-effort — set on a heavy completion, cleared when the worker's
         # idle-release log line goes by (_pump_stderr) or the worker restarts.
         self.last_heavy: float | None = None
+        # Monotonic time of the last completed request of any kind. The recycle
+        # clock: a lean bpm/key pass loads no models but still leaves ~500MB of
+        # librosa/numba scratch resident, and only a respawn returns it. Every
+        # op counts, render-transition included, so a worker serving stem
+        # blends is not recycled between them (its respawn re-pays the torch
+        # import, which would land on a live transition render).
+        self.last_use: float | None = None
         self.models_resident = False
         self.recycles = 0
         # Capabilities the worker advertised at ready but LOST when the model
@@ -213,9 +253,10 @@ class StdioWorker:
         await self._set_ready(False)
         self.proc = None
         self.ready_meta = {}
-        # A fresh worker holds no models; clearing last_heavy also stands the
-        # recycle loop down until the next heavy request.
+        # A fresh worker holds no models; clearing the clocks also stands the
+        # recycle loop down until the next request.
         self.last_heavy = None
+        self.last_use = None
         self.models_resident = False
 
     def _terminate(self) -> None:
@@ -259,13 +300,15 @@ class StdioWorker:
         self._note_capability_loss(msg)
         log.info(f"[{self.name}] ready {self.ready_meta or ''}".rstrip())
         # With an env flag on, the worker pre-warms that model BEFORE ready —
-        # count it as resident (and heavy use, so the recycle clock runs)
-        # unless the capability probe says the load failed.
+        # count it as resident and as heavy use for /health, unless the
+        # capability probe says the load failed. It is use for the recycle clock
+        # too: a pre-warmed worker that never serves a request still holds the
+        # weights and their scratch, and must give them back after the window.
         if (EMBED_DEFAULT and self.ready_meta.get("audio_embedding_capable")) or (
             VOCAL_DEFAULT and self.ready_meta.get("vocal_activity_capable")
         ):
             self.models_resident = True
-            self.last_heavy = time.monotonic()
+            self.last_heavy = self.last_use = time.monotonic()
         await self._set_ready(True)
 
     async def _await_message(self) -> dict[str, Any]:
@@ -343,10 +386,30 @@ class StdioWorker:
             return True
         if payload.get("op"):
             return False
+        facets = payload.get("facets")
+        if isinstance(facets, list):
+            # A facet request loads exactly the models its facets name.
+            return any(f in ("clap", "vocal", "stems") for f in facets)
         return bool(
             payload.get("embed") or payload.get("vocal") or payload.get("stems_dir")
             or EMBED_DEFAULT or VOCAL_DEFAULT
         )
+
+    @staticmethod
+    def _used_models(msg: dict[str, Any]) -> bool:
+        """Whether a response proves model use (flat or facet shape)."""
+        if any(k in msg for k in ("audio_embedding", "vocal_ranges", "stems_cached")):
+            return True
+        facets = msg.get("facets")
+        if isinstance(facets, dict):
+            return any(
+                # Failed model facets reached a loaded model too, including
+                # a stems cache publication error after successful separation.
+                # Missing/failed model loads answer unavailable instead.
+                isinstance(facets.get(f), dict) and facets[f].get("status") in ("ok", "failed")
+                for f in ("clap", "vocal", "stems")
+            )
+        return False
 
     async def request(self, payload: dict[str, Any]) -> dict[str, Any]:
         async with self.lock:
@@ -361,6 +424,7 @@ class StdioWorker:
             self.proc.stdin.write((req + "\n").encode())
             await self.proc.stdin.drain()
             msg = await self._await_message()
+            self.last_use = time.monotonic()
             self._note_capability_loss(msg)
             # Stamp heavy use from what actually came back, not what was
             # asked: an analyze whose CLAP load failed still answers ok=true
@@ -368,14 +432,19 @@ class StdioWorker:
             # not read as "models resident".
             if self._wants_models(payload) and (
                 (payload.get("texts") is not None and msg.get("ok"))
-                or any(k in msg for k in ("audio_embedding", "vocal_ranges", "stems_cached"))
+                or self._used_models(msg)
             ):
                 self.last_heavy = time.monotonic()
                 self.models_resident = True
             return msg
 
+    def _idle_expired(self, idle_s: float) -> bool:
+        """Has this worker been used, and then left alone for `idle_s`? A worker
+        that has served nothing since it spawned has nothing to reclaim."""
+        return self.last_use is not None and time.monotonic() - self.last_use >= idle_s
+
     async def recycle_loop(self, idle_s: float) -> None:
-        """Terminate the worker after `idle_s` seconds without heavy use so
+        """Terminate the worker after `idle_s` seconds without a request so
         run() respawns it fresh — the full-memory counterpart to the worker's
         own model release. A pool reservation wins over recycling; once recycle
         claims the worker, new requests route to another available member — or,
@@ -385,9 +454,7 @@ class StdioWorker:
         holding the request lock across the respawn used to buy."""
         while True:
             await asyncio.sleep(60)
-            if not self.ready or self.last_heavy is None:
-                continue
-            if time.monotonic() - self.last_heavy < idle_s:
+            if not self.ready or not self._idle_expired(idle_s):
                 continue
             # A pool reservation is made without yielding, as is this recycling
             # claim. Whichever happens first wins: admitted work completes on
@@ -397,12 +464,12 @@ class StdioWorker:
             await self._set_recycling(True)
             try:
                 async with self.lock:
-                    # Re-check under the lock: a heavy request may have completed
+                    # Re-check under the lock: a request may have completed
                     # while we waited to acquire it.
-                    if self.last_heavy is None or time.monotonic() - self.last_heavy < idle_s:
+                    if not self._idle_expired(idle_s):
                         continue
                     log.info(
-                        f"[{self.name}] idle {int(idle_s)}s without heavy use — recycling worker "
+                        f"[{self.name}] idle {int(idle_s)}s — recycling worker "
                         "for a full memory reclaim (re-pays imports on next request)"
                     )
                     self.recycles += 1
@@ -577,6 +644,48 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="subwave-analyzer", lifespan=lifespan)
 
 
+# Created lazily inside the running loop (an asyncio primitive must not be
+# bound to an import-time loop).
+_whole_file_sem: asyncio.Semaphore | None = None
+
+
+def _whole_file_semaphore() -> asyncio.Semaphore:
+    global _whole_file_sem
+    if _whole_file_sem is None:
+        _whole_file_sem = asyncio.Semaphore(WHOLE_FILE_CONCURRENCY)
+    return _whole_file_sem
+
+
+async def run_whole_file_once(payload: dict[str, Any]) -> dict[str, Any]:
+    """One whole-file facet request in a one-shot worker process
+    (`analyze_worker.py --whole-file`), bounded by its own semaphore so a bulk
+    pass never queues behind CLAP/Demucs jobs. Answers like the pool does."""
+    async with _whole_file_semaphore():
+        proc = await asyncio.create_subprocess_exec(
+            ANALYZE_PYTHON, ANALYZE_WORKER, "--whole-file",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env={**os.environ, "ANALYZE_WHOLE_FILE_TIMEOUT_S": str(WHOLE_FILE_TIMEOUT_S)},
+        )
+        try:
+            out, err = await asyncio.wait_for(
+                proc.communicate((json.dumps(payload) + "\n").encode()), timeout=WHOLE_FILE_TIMEOUT_S + 30
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return {"ok": False, "error": f"whole-file pass timed out after {WHOLE_FILE_TIMEOUT_S:.0f}s"}
+    try:
+        return json.loads((out or b"").decode("utf-8", "replace").strip().splitlines()[-1])
+    except Exception:  # noqa: BLE001 — a worker that printed nothing usable
+        # A stream URL carries the music server's credentials. The one-shot
+        # worker writes its stderr through its own redact_urls (analyze_worker
+        # RedactingStream), the one redaction rule, so its tail can be quoted.
+        tail = (err or b"").decode("utf-8", "replace").strip()[-300:]
+        return {"ok": False, "error": f"whole-file worker gave no result: {tail or 'no output'}"}
+
+
 @app.get("/health")
 async def health():
     # `engines` lists engines *currently ready*, not the static set — the
@@ -586,6 +695,7 @@ async def health():
     ready = analyzer_pool.ready_workers
     ready_engines: list[str] = ["analyze"] if ready else []
     heavy_times = [worker.last_heavy for worker in ready if worker.last_heavy is not None]
+    use_times = [worker.last_use for worker in ready if worker.last_use is not None]
     return {
         "ok": True,
         "engines": ready_engines,
@@ -622,6 +732,29 @@ async def health():
         "analyze_text_capable": analyzer_pool.capability(
             "text_embedding_capable", "audio_embedding"
         ),
+        # Per-facet requests ({"facets": [...]}) — a worker-version signal:
+        # older workers never emit the key, so this stays None and the
+        # controller keeps sending flat requests to them.
+        "analyze_facets_capable": analyzer_pool.capability("facets_capable", "facets"),
+        # Whole-file facets (loudness v2 over the whole file, silence edges and
+        # the decoded length): needs ffmpeg in the worker image. None on older
+        # workers, which never emit the key.
+        "analyze_whole_file_capable": analyzer_pool.capability("whole_file_capable", "whole_file"),
+        # Whole-file loudness answers carry the short-term loudness curve
+        # (`loudness_curve`). None on older workers, which never emit the key.
+        "analyze_loudness_curve_capable": analyzer_pool.capability("loudness_curve_capable", "whole_file"),
+        # Tail answers carry the tail's short-term loudness curve (tail v3).
+        # None on older workers, which never emit the key.
+        "analyze_tail_loudness_curve_capable": analyzer_pool.capability(
+            "tail_loudness_curve_capable", "tail_loudness_curve"
+        ),
+        # How many whole-file requests this host runs at once (its own lane).
+        "analyze_whole_file_concurrency": WHOLE_FILE_CONCURRENCY,
+        # How many analysis workers this pool holds (ANALYZE_CONCURRENCY). The
+        # controller's blend render reads it to tell whether a spare member can
+        # serve it while a pick-time separation holds one (#2253), and uses the
+        # smaller of this and its own setting.
+        "analyze_concurrency": ANALYZE_CONCURRENCY,
         # Best-effort residency (#1204): whether CLAP/Demucs are believed
         # loaded right now — lets an operator confirm the idle release
         # without grepping logs. None while the worker is down.
@@ -632,6 +765,13 @@ async def health():
         # heavy request on any ready member (null when none has run).
         "analyze_heavy_idle_s": (
             round(time.monotonic() - max(heavy_times), 1) if heavy_times else None
+        ),
+        # The recycle clock, which is not the heavy one: seconds since the most
+        # recent request of any kind on any ready member (null when none has
+        # run since its worker spawned). What analyze_worker_recycles counts
+        # down from.
+        "analyze_idle_s": (
+            round(time.monotonic() - max(use_times), 1) if use_times else None
         ),
         "analyze_worker_recycles": sum(worker.recycles for worker in analyzer_workers),
     }
@@ -662,6 +802,32 @@ class AnalyzeRequest(BaseModel):
     # CLAP backfill for a track whose baseline analysis is already current.
     # Skips every non-embedding feature in the worker.
     embedding_only: bool = False
+    # Per-facet request: compute ONLY these facets (head, loudness, tail,
+    # clap, vocal, stems, edges) and answer {"facets": {...}, "source": {...}}.
+    # Absent = the flat response above, unchanged. embed / vocal /
+    # embedding_only are ignored when this is set: the facets say it all.
+    facets: list[str] | None = None
+    # Facet requests only: a tail measured without the vocal/stems facets also
+    # carries the outro's vocal ranges (Demucs on the tail window only).
+    tail_vocals: bool = False
+    # Facet requests only: the music server's stream URL the whole-file facets
+    # (loudness v2, edges) read when `path` is a capped copy. Never fetched
+    # here; the worker's ffmpeg streams it.
+    stream_url: str | None = None
+    # Facet requests only: where the music stops ({end_ms, duration_ms}, from
+    # the stored edges), so the tail window ends there instead of at the end
+    # of the file. Passed through as is; the worker validates it.
+    tail_window: dict[str, Any] | None = None
+    # Facet requests only: which windows the `stems` facet separates ("head",
+    # "tail"). Absent = both. Pick-time stems asks for the tail alone when the
+    # head is cached (#2253); a worker that predates the field separates both.
+    # Untyped here: the worker's parse_stems_windows judges it, and a malformed
+    # value separates both windows there rather than a 422 refusing the request.
+    stems_windows: Any = None
+    # With stems_dir: the library's size for the file, which the worker stamps
+    # on the stem windows it writes (#2238). Untyped like stems_windows: the
+    # worker judges it, and a bad value stamps unknown rather than a 422.
+    source_size: Any = None
 
 
 @app.post("/analyze")
@@ -694,11 +860,33 @@ async def analyze(req: AnalyzeRequest):
         payload["stems_dir"] = req.stems_dir
     if req.stems_require_marker is not None:
         payload["stems_require_marker"] = req.stems_require_marker
+    if req.stems_dir is not None and req.source_size is not None:
+        payload["source_size"] = req.source_size
     if req.embedding_only:
         payload["embedding_only"] = True
-    msg = await analyzer_pool.request(payload)
+    # A placed tail window (flat and facet requests alike) and the stream URL
+    # the worker reads it from when the staged copy cannot prove it reaches it.
+    if req.tail_window is not None:
+        payload["tail_window"] = req.tail_window
+        if req.stream_url and "url" not in payload:
+            payload["stream_url"] = req.stream_url
+    facets = getattr(req, "facets", None)
+    if facets is not None:
+        payload["facets"] = facets
+        if req.tail_vocals:
+            payload["tail_vocals"] = True
+        if req.stream_url and "url" not in payload:
+            payload["stream_url"] = req.stream_url
+        if req.stems_windows is not None:
+            payload["stems_windows"] = req.stems_windows
+    if facets and all(f in WHOLE_FILE_FACETS for f in facets):
+        msg = await run_whole_file_once(payload)
+    else:
+        msg = await analyzer_pool.request(payload)
     if not msg.get("ok"):
         raise HTTPException(500, msg.get("error") or "analyze failed")
+    if facets is not None:
+        return {"ok": True, "facets": msg.get("facets") or {}, "source": msg.get("source")}
     out: dict[str, Any] = {
         "ok": True,
         "bpm": msg.get("bpm"),
@@ -711,7 +899,9 @@ async def analyze(req: AnalyzeRequest):
     for k in (
         "loudness_lufs", "peak_db", "sections", "vocal_ranges",
         "pace_curve", "beats", "bars", "key_ranges", "outro", "stems_cached",
-        "lead_silence_ms", "tail_silence_ms", "tail_start_ms",
+        "tail_stems_landed",
+        "lead_silence_ms", "tail_silence_ms", "tail_start_ms", "tail_window",
+        "tail_curve_unavailable",
     ):
         if k in msg:
             out[k] = msg[k]

@@ -90,14 +90,15 @@ const res = spawnSync(
   // caches. That justification is WRONG for this package and was checked rather
   // than assumed: node's runner gives each test FILE its own process (verified —
   // two files, two PIDs), so neither `process.env` nor module state is shared
-  // between them. No current web test needs this flag; the controller's do,
-  // because those share a temp state dir and a library DB on disk.
+  // between them. No current web test needs this flag. The controller's runner
+  // shares the default and offers `--jobs`; the header of
+  // controller/scripts/run-tests.ts says why that is safe there.
   //
   // It is passed anyway, for two honest reasons: the filesystem is still shared
   // (every file runs with cwd at the web root, so a future test writing a fixture
   // or temp path can collide), and serial execution keeps output deterministic
-  // and matches the posture `CLAUDE.md` documents for both packages. If a web
-  // test ever needs real parallelism, this is the line to revisit — with the
+  // and matches the serial default `CLAUDE.md` documents for both packages. If a
+  // web test ever needs real parallelism, this is the line to revisit — with the
   // measurement above in hand rather than a guess.
   ['--test', '--test-concurrency=1', ...files],
   {

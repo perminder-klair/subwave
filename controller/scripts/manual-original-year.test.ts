@@ -4,9 +4,10 @@
 
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const stateDir = mkdtempSync(join(tmpdir(), 'subwave-manual-era-'));
 process.env.STATE_DIR = stateDir;
@@ -18,9 +19,9 @@ const { resolveEraYear } = await import('../src/music/show-filter.js');
 await db.open({ embeddingDim: 768, adoptStoredDim: true });
 await library.load();
 
-after(() => {
+after(async () => {
   db.close?.();
-  rmSync(stateDir, { recursive: true, force: true });
+  await removeTempDir(stateDir);
 });
 
 // One reissue-anthology track, shaped like the report: a 1964 Stax single on a

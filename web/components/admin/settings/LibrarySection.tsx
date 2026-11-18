@@ -12,40 +12,21 @@ import {
 } from '../../ui/select';
 import { Card, Btn, Seg } from '../ui';
 import { Advanced } from './section-chrome';
-import { EmbeddingProviderSelector } from '../embedding/EmbeddingProviderSelector';
+import { ProviderPicker } from '../llm/ProviderPicker';
 import { ModelCombobox } from '../llm/ModelCombobox';
-import { LLM_ENV_VARS, llmProviderLabel } from '../llm/providerMeta';
+import { EMBED_MODEL_SUGGESTIONS, LLM_ENV_VARS, llmProviderLabel } from '../llm/providerMeta';
+import { EMBEDDING_PROVIDER_IDS } from '../../../lib/schemas.generated';
 import { cn } from '../../../lib/cn';
 import { HeaderRowsEditor } from './LlmSection';
+import { effectiveCompatMode } from './compat-mode';
+import { scrobbleReadiness } from './ScrobbleSection';
+import { lastfmTagsChoice, lastfmTagsEnabled, lastfmTagsFromChoice, lastfmTrackTagsBlocker } from './lastfm-track-tags';
 import {
-  SectionHeader, SaveBar, KeyStatus,
+  SectionHeader, SaveBar, KeyStatus, KeyTestResult, NowBanner,
   headerMap,
   type SectionProps,
 } from './shared';
-
-// Ollama wants the short tag, not an HF/locca repo id (those 404). dim is
-// shown so an already-tagged library can be matched.
-const EMBED_MODEL_SUGGESTIONS: Record<string, { id: string; dim: number }[]> = {
-  ollama: [
-    { id: 'nomic-embed-text', dim: 768 },
-    { id: 'mxbai-embed-large', dim: 1024 },
-    { id: 'bge-m3', dim: 1024 },
-    { id: 'all-minilm', dim: 384 },
-  ],
-  openai: [
-    { id: 'text-embedding-3-small', dim: 1536 },
-    { id: 'text-embedding-3-large', dim: 3072 },
-  ],
-  google: [{ id: 'text-embedding-004', dim: 768 }],
-  openrouter: [
-    { id: 'openai/text-embedding-3-small', dim: 1536 },
-    { id: 'openai/text-embedding-3-large', dim: 3072 },
-  ],
-  requesty: [
-    { id: 'openai/text-embedding-3-small', dim: 1536 },
-    { id: 'openai/text-embedding-3-large', dim: 3072 },
-  ],
-};
+import { useHosted } from '../HostedContext';
 
 const LLM_BATCH_SIZES = [5, 10, 25] as const;
 
@@ -55,9 +36,36 @@ interface LibrarySectionProps extends SectionProps {
 }
 
 export function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, refresh, fieldErrors }: LibrarySectionProps) {
+  // Hosted (SUB/WAVE Cloud): the embedding route is the box agent's; the
+  // controller drops changes to it on save (setup/hosted.ts).
+  const { hosted } = useHosted();
   const e = form.embedding;
+  const lfKeySet = scrobbleReadiness(form, data).lfApiKeySet;
+  const trackTagsBlocker = lastfmTrackTagsBlocker(lfKeySet, e.enrichment.lastfmTags);
   const [embeddingKeyInput, setEmbeddingKeyInput] = useState('');
   const [compatEmbedKeyInput, setCompatEmbedKeyInput] = useState('');
+  // Discogs token: the original-year fallback. Component-local like the key
+  // boxes above, saved to state/secrets.env with the rest of the section.
+  const [discogsInput, setDiscogsInput] = useState('');
+  const [discogsTest, setDiscogsTest] = useState<{ ok: boolean; message: string; latencyMs: number } | null>(null);
+  const [discogsTesting, setDiscogsTesting] = useState(false);
+  const discogsSet = !!data.env?.['DISCOGS_TOKEN'];
+  const testDiscogs = async () => {
+    setDiscogsTesting(true);
+    setDiscogsTest(null);
+    try {
+      const r = await adminResponse(adminFetch, '/settings/secrets/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: 'DISCOGS_TOKEN', value: discogsInput.trim() }),
+      });
+      setDiscogsTest(await r.json());
+    } catch (err) {
+      setDiscogsTest({ ok: false, message: errorMessage(err), latencyMs: 0 });
+    } finally {
+      setDiscogsTesting(false);
+    }
+  };
 
   useEffect(() => { setEmbeddingKeyInput(''); setCompatEmbedKeyInput(''); }, [form.embedding.provider]);
 
@@ -100,9 +108,11 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
         audioFusionWeight: Number.isFinite(parseFloat(e.audioFusionWeight))
           ? parseFloat(e.audioFusionWeight)
           : 0.5,
+        audioEnergy: { fillEmpty: e.audioEnergy.fillEmpty, overruleLlm: e.audioEnergy.overruleLlm },
         batchSize: parseInt(e.batchSize, 10) || 25,
         enrichment: {
           lastfmTags: e.enrichment.lastfmTags,
+          lastfmTrackTags: e.enrichment.lastfmTrackTags,
           lyrics: e.enrichment.lyrics,
         },
         // Write only when typed; getRedacted()'s 'set' sentinel is ignored
@@ -122,17 +132,22 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
       const ok = await saveKey('EMBEDDING_API_KEY', embeddingKeyInput);
       if (ok) { notify.ok('API key saved'); setEmbeddingKeyInput(''); refresh(); }
     }
+    if (discogsInput.trim()) {
+      const ok = await saveKey('DISCOGS_TOKEN', discogsInput);
+      if (ok) { notify.ok('Discogs token saved'); setDiscogsInput(''); setDiscogsTest(null); refresh(); }
+    }
   };
 
   const savedEmbedding = data.values?.embedding || {};
   const llmProvider = data.values?.llm?.provider || 'ollama';
+  // The chat connection's mode as in force, `auto` resolved to its detection.
+  const llmCompatMode = effectiveCompatMode(form.llm.compatibleMode, data.llm?.compatDetection?.primary);
   const effectiveProvider = e.provider || llmProvider;
   const embedSuggestions = EMBED_MODEL_SUGGESTIONS[effectiveProvider] ?? [];
 
   // Embedding-capable subset, not the full LLM list: deepseek, gateway and
   // anthropic have no embeddings endpoint (#493, #522).
-  const embedProviders = data.embedding?.providers ||
-    ['ollama', 'openai-compatible', 'locca', 'openrouter', 'openai', 'google', 'requesty'];
+  const embedProviders = data.embedding?.providers || [...EMBEDDING_PROVIDER_IDS];
   // Keep a stale explicit choice visible so the Select isn't blank.
   const providers = e.provider && !embedProviders.includes(e.provider)
     ? [e.provider, ...embedProviders]
@@ -332,6 +347,15 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
         </div>
       </Card>
 
+      {hosted ? (
+      <Card title="Embedding server" sub="where embeddings come from">
+        <NowBanner label={<>Embeddings · Managed by SUB/WAVE Cloud</>}>
+          Your library’s embeddings come through SUB/WAVE Cloud, so the provider,
+          model and endpoint are set for you and can’t be changed here. Turn the
+          tagger on or off and tune it below.
+        </NowBanner>
+      </Card>
+      ) : (
       <Card title="Embedding server" sub="where embeddings come from">
         <div className="grid gap-[18px]">
           {canEmbed && effectiveModel && (
@@ -351,11 +375,14 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
           )}
           <div className="field">
             <Label>Provider</Label>
-            <EmbeddingProviderSelector
+            <ProviderPicker
               // A blank stored provider resolves to the DJ's provider, so the
               // grid always shows an explicit selection (no "Follow LLM" card).
               value={effectiveProvider}
+              // The embedding-capable ids, possibly with a stale explicit choice
+              // prepended.
               providerIds={providers}
+              label="Embedding provider"
               env={data.env}
               onChange={v =>
                 setForm(f => ({ ...f, embedding: { ...f.embedding, provider: v } }))
@@ -485,7 +512,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
                 className="max-w-[360px]"
               />
               <div className="field-hint">
-                {effectiveProvider === 'openai-compatible' && form.llm.compatibleMode === 'hosted'
+                {effectiveProvider === 'openai-compatible' && llmCompatMode === 'hosted'
                   ? <>Leave blank to use the chat service&apos;s embedding endpoint. For Azure, enter a different resource URL ending in <code>/openai/v1</code> only when embeddings live on another resource. Enter the embedding deployment name above. </>
                   : <>Embeddings need a <strong>dedicated</strong> server when a local chat server cannot embed. </>}
                 {effectiveProvider === 'locca' ? (
@@ -495,7 +522,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
                     with <code>locca embed nomic</code>. Override only for a
                     non-default port or remote host.
                   </>
-                ) : form.llm.compatibleMode === 'hosted' ? null : (
+                ) : llmCompatMode === 'hosted' ? null : (
                   <>
                     Leave blank only if this server itself does embeddings;
                     otherwise run a separate embedding server (
@@ -620,6 +647,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
           </div>
         </div>
       </Card>
+      )}
 
 
       <Advanced note="seed count, propagation thresholds and enrichment">
@@ -754,6 +782,67 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
             </div>
           </div>
 
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
+            <div>
+              <div className="text-[13px] font-bold">Fill missing energy from the audio</div>
+              <div className="mt-0.5 max-w-[480px] text-[14px] leading-[1.5] text-muted">
+                Some tagging models answer a track&apos;s moods but leave its energy
+                out, and a show with strict filters then drops that track. With this
+                on, a tagged track with no energy gets one from its measured sound:
+                high, medium or low. An energy that is already there is never
+                changed, and nor are your own tags. Runs at the end of every tagging
+                run and analysis pass.
+              </div>
+            </div>
+            <Seg
+              accent
+              value={e.audioEnergy.fillEmpty ? 'on' : 'off'}
+              options={[
+                { id: 'off', label: 'Off' },
+                { id: 'on', label: 'On' },
+              ]}
+              onChange={v =>
+                setForm(f => ({
+                  ...f,
+                  embedding: {
+                    ...f.embedding,
+                    audioEnergy: { ...f.embedding.audioEnergy, fillEmpty: v === 'on' },
+                  },
+                }))
+              }
+            />
+          </div>
+
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
+            <div>
+              <div className="text-[13px] font-bold">Correct the AI’s energy where the audio is clear</div>
+              <div className="mt-0.5 max-w-[480px] text-[14px] leading-[1.5] text-muted">
+                Replaces an energy the AI gave only where the measured sound
+                strongly says otherwise, for example a loud, driving track the AI
+                called low. Ambiguous tracks keep the AI’s answer, and your own tags
+                are never touched. Runs at the end of every tagging run and analysis
+                pass.
+              </div>
+            </div>
+            <Seg
+              accent
+              value={e.audioEnergy.overruleLlm ? 'on' : 'off'}
+              options={[
+                { id: 'off', label: 'Off' },
+                { id: 'on', label: 'On' },
+              ]}
+              onChange={v =>
+                setForm(f => ({
+                  ...f,
+                  embedding: {
+                    ...f.embedding,
+                    audioEnergy: { ...f.embedding.audioEnergy, overruleLlm: v === 'on' },
+                  },
+                }))
+              }
+            />
+          </div>
+
           <div className="field">
             <Label>Active-learning rounds</Label>
             <Input
@@ -785,17 +874,27 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
             <div>
               <div className="text-[13px] font-bold">Last.fm tags</div>
               <div className="mt-0.5 max-w-[480px] text-[14px] leading-[1.5] text-muted">
-                With a Last.fm API key configured (Scrobbling), crowd tags come
-                straight from the Last.fm API and work on vanilla Navidrome.
-                Without a key it falls back to Navidrome&apos;s{' '}
+                With a Last.fm API key configured (Listeners → Last.fm), crowd
+                tags come straight from the Last.fm API and work on vanilla
+                Navidrome.
+                Auto fetches them when a key is set and skips them when none is.
+                On without a key falls back to Navidrome&apos;s{' '}
                 <code>getArtistInfo2</code>, which only surfaces tags on a custom
-                Navidrome, so leave off unless you have a key or that setup.
+                Navidrome, so leave it on Auto unless you have that setup.
               </div>
+              {e.enrichment.lastfmTags === null && (
+                <div className="mt-1 max-w-[480px] text-[13px] leading-[1.5] text-ink">
+                  {lastfmTagsEnabled(null, lfKeySet)
+                    ? 'Auto is on: a Last.fm key is set.'
+                    : 'Auto is off: no Last.fm key is set.'}
+                </div>
+              )}
             </div>
             <Seg
               accent
-              value={e.enrichment.lastfmTags ? 'on' : 'off'}
+              value={lastfmTagsChoice(e.enrichment.lastfmTags)}
               options={[
+                { id: 'auto', label: 'Auto' },
                 { id: 'off', label: 'Off' },
                 { id: 'on', label: 'On' },
               ]}
@@ -804,11 +903,48 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
                   ...f,
                   embedding: {
                     ...f.embedding,
-                    enrichment: { ...f.embedding.enrichment, lastfmTags: v === 'on' },
+                    enrichment: { ...f.embedding.enrichment, lastfmTags: lastfmTagsFromChoice(v) },
                   },
                 }))
               }
             />
+          </div>
+
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
+            <div>
+              <div className="text-[13px] font-bold">Last.fm track tags</div>
+              <div className="mt-0.5 max-w-[480px] text-[14px] leading-[1.5] text-muted">
+                Last.fm tags above describe the artist, so every song by an act
+                gets the same list. This adds each song&apos;s own tags ahead of
+                them, so two songs by one artist can read differently. It needs
+                one Last.fm call per track, about 50 minutes on a 10,000-track
+                library, on the next tagging run and resuming on the runs after
+                it, then re-embeds the tracks that changed.
+              </div>
+            </div>
+            {trackTagsBlocker ? (
+              <div className="text-[10px] font-bold tracking-[0.18em] text-muted uppercase">
+                {trackTagsBlocker}
+              </div>
+            ) : (
+              <Seg
+                accent
+                value={e.enrichment.lastfmTrackTags ? 'on' : 'off'}
+                options={[
+                  { id: 'off', label: 'Off' },
+                  { id: 'on', label: 'On' },
+                ]}
+                onChange={v =>
+                  setForm(f => ({
+                    ...f,
+                    embedding: {
+                      ...f.embedding,
+                      enrichment: { ...f.embedding.enrichment, lastfmTrackTags: v === 'on' },
+                    },
+                  }))
+                }
+              />
+            )}
           </div>
 
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
@@ -839,6 +975,34 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
               }
             />
           </div>
+
+          <div className="field">
+            <Label>Discogs token (original years)</Label>
+            <div className="flex flex-wrap items-center gap-2">
+              <Input
+                type="password"
+                autoComplete="off"
+                value={discogsInput}
+                placeholder={discogsSet ? '•••••• (token saved)' : 'DISCOGS_TOKEN — or set it in .env'}
+                onChange={(ev: ChangeEvent<HTMLInputElement>) => { setDiscogsInput(ev.target.value); setDiscogsTest(null); }}
+                className="max-w-[360px]"
+              />
+              <Btn sm onClick={testDiscogs} disabled={discogsTesting || (!discogsInput.trim() && !discogsSet)}>
+                {discogsTesting ? 'Testing…' : 'Test token'}
+              </Btn>
+            </div>
+            <div className="field-hint">
+              Optional. Reissues and compilations carry the reissue&rsquo;s year, so
+              era-bounded shows ask MusicBrainz for each song&rsquo;s original year.
+              With a token, Discogs is asked when MusicBrainz has none. Create one
+              under Discogs &rarr; Settings &rarr; Developers (free). Stored in{' '}
+              <code>state/secrets.env</code>. Tracks already marked &ldquo;not
+              found&rdquo; are asked again only by{' '}
+              <code>npm run analyze -- --facets year --where unmeasurable:not-found</code>.
+            </div>
+            {discogsTest && <KeyTestResult result={discogsTest} />}
+          </div>
+          {discogsSet && <KeyStatus envVar="DISCOGS_TOKEN" present />}
         </div>
       </Card>
       </Advanced>
@@ -857,7 +1021,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
         // Both key boxes are component-local, so the panel's FormState diff
         // can't see them; without this a pasted key looks clean and the save
         // button unmounts.
-        dirty={!!(embeddingKeyInput.trim() || compatEmbedKeyInput.trim())}
+        dirty={!!(embeddingKeyInput.trim() || compatEmbedKeyInput.trim() || discogsInput.trim())}
       />
     </>
   );

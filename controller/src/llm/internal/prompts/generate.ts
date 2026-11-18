@@ -6,6 +6,7 @@ import { FREQUENCIES, SCRIPT_LENGTHS, moodVocab, SHOW_ENERGY, SHOW_TOPIC_MAX, SO
 import { THEME_TOKENS } from '../../../theme-tokens.js';
 import { djObject } from '../strategy/object.js';
 import { buildContextLines } from './context.js';
+import { onAirLocationGrounding } from './grounding.js';
 
 // ---------------------------------------------------------------------------
 // Persona
@@ -200,7 +201,7 @@ export async function generateSaySuggestions(context: any, nowPlaying?: any): Pr
   ].join('\n');
 
   const out = await djObject({
-    system: SAY_SUGGESTIONS_SYSTEM,
+    system: SAY_SUGGESTIONS_SYSTEM + '\n\n' + onAirLocationGrounding(),
     prompt,
     schema: SAY_SUGGESTIONS_SCHEMA,
     temperature: 0.9,

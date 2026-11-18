@@ -13,7 +13,10 @@ import { createHash } from 'node:crypto';
 import { config } from '../../../config.js';
 import * as settings from '../../../settings.js';
 import { recordRawRequest, rawDebugEnabled } from '../telemetry/raw-debug.js';
-import { capabilitiesFor, appliedRepeatPenalty, appliedNumCtx, thinkingMandatoryModel } from './capabilities.js';
+import { capabilitiesFor, appliedRepeatPenalty, appliedNumCtx, thinkingMandatoryModel, openRouterReasoningEffort } from './capabilities.js';
+import { openaiCompatibleGateway } from '../../../schemas/providers.js';
+import { resolveCompatibleMode } from './compat-detect.js';
+import { llmBodyParamsBody, llmToolCallOverrides } from '../../../settings/compat-params.js';
 
 // Built clients, keyed by a signature covering every field captured at
 // construction, so a settings edit is picked up with no explicit invalidation.
@@ -44,7 +47,9 @@ export function llmCfg() {
   // The stored `apiKey` slot is legacy (always '' after settings.load()); the
   // active key is resolved per-provider from settings.llm.keys (#657). Empty →
   // the provider cases below fall through to their env var.
-  return { ...llm, apiKey: settings.llmKeyFor(llm.provider) };
+  // `auto` resolves to the detected mode here, so every downstream reader
+  // (capabilities, the client builder, its cache signature) sees local|hosted.
+  return resolveCompatibleMode({ ...llm, apiKey: settings.llmKeyFor(llm.provider) });
 }
 
 // Single raw-request capture point, wired into every provider's `fetch` option
@@ -127,7 +132,7 @@ export function openAICompatibleFetch(cfg: any, baseFetch: any = fetch, forceNoT
           }
           if (body.reasoning === undefined) {
             body.reasoning = reasoningMandatoryModel(String(body.model || ''))
-              ? { effort: 'minimal' }
+              ? mandatoryReasoningFloor()
               : { enabled: false };
           }
         }
@@ -148,6 +153,51 @@ export function openAICompatibleFetch(cfg: any, baseFetch: any = fetch, forceNoT
 // harmless on non-reasoning openai models.
 export function reasoningMandatoryModel(id: string): boolean {
   return /^openai\//i.test(id) || /(^|\/)deepseek-r1/i.test(id) || thinkingMandatoryModel(id);
+}
+
+// What a model that cannot stop thinking is asked for in place of
+// `enabled:false`: the lowest effort. A fresh object per call, because it is
+// spliced into request bodies.
+export function mandatoryReasoningFloor(): { effort: 'minimal' } {
+  return { effort: 'minimal' };
+}
+
+// OpenRouter's answer to `reasoning:{enabled:false}` when the model or endpoint
+// it routed the request to cannot stop thinking (#2092): a 400 whose message is
+// "Reasoning is mandatory for this endpoint and cannot be disabled."
+const REASONING_MANDATORY_RE = /\breasoning is mandatory\b[^"]{0,80}\bcannot be disabled\b/i;
+
+// Model ids already logged as needing the retry below, so a station on a model
+// that always needs it gets one line, not one per call.
+const reasoningMandatoryLogged = new Set<string>();
+
+// Fetch wrapper for the openrouter provider. reasoningMandatoryModel covers the
+// families known by id, but no id list can cover a router id (`openrouter/free`
+// picks a model at random on every request, `openrouter/auto` by prompt) or a
+// mandatory model it has not met yet, so OpenRouter's rejection is answered
+// here: the same request is sent once more with mandatoryReasoningFloor() in
+// place of `enabled:false`. Only that rejection of a body that asked for
+// reasoning off triggers it; every other request and response passes through
+// untouched, and a successful response is never read. Nothing is remembered,
+// because the next request may land on a model that can switch reasoning off,
+// and the operator's "reasoning off" should still reach it.
+export function openRouterFetch(baseFetch: any = fetch) {
+  return async (url: any, init: any) => {
+    const res = await baseFetch(url, init);
+    if (res?.ok !== false || typeof init?.body !== 'string') return res;
+    let body: any;
+    try { body = JSON.parse(init.body); } catch { return res; }
+    if (body?.reasoning?.enabled !== false) return res;
+    let text = '';
+    try { text = await res.clone().text(); } catch { return res; }
+    if (!REASONING_MANDATORY_RE.test(text)) return res;
+    const model = String(body.model || '');
+    if (!reasoningMandatoryLogged.has(model)) {
+      reasoningMandatoryLogged.add(model);
+      console.log(`[llm] openrouter: ${model} cannot switch reasoning off — retrying such requests at minimal effort`);
+    }
+    return baseFetch(url, { ...init, body: JSON.stringify({ ...body, reasoning: mandatoryReasoningFloor() }) });
+  };
 }
 
 // Ollama server URL: settings field, else the config default.
@@ -180,10 +230,6 @@ export function loccaEmbedBaseUrl(cfg: any): string {
   return cfg.baseUrl || DEFAULT_LOCCA_EMBED_BASE_URL;
 }
 
-// Requesty is a fixed-endpoint OpenAI-compatible aggregator, so the base URL is
-// not operator-configurable. Keyed by REQUESTY_API_KEY.
-export const DEFAULT_REQUESTY_BASE_URL = 'https://router.requesty.ai/v1';
-
 // OpenRouter app attribution (openrouter.ai/docs/app-attribution). Sent on every
 // OpenRouter request — chat, embeddings and the key-validation probes.
 export const OPENROUTER_APP_HEADERS = {
@@ -195,10 +241,19 @@ export const OPENROUTER_APP_HEADERS = {
 // LM Studio, locca). `.chat()` pins /v1/chat/completions — these servers don't
 // implement the Responses API the default `provider(id)` would target. Most
 // accept any non-empty key, so fall back to a placeholder.
-function openAICompatibleModel(cfg: any, id: string, baseURL: string, name: string, forceNoThink = false) {
+//
+// `forceNoThink` is the local no-think body injection (bodyNoThink); `forced`
+// says this is the leg's no-think client at all, which picks the operator's
+// request fields with the tool-call overrides laid over them (#2296).
+function openAICompatibleModel(cfg: any, id: string, baseURL: string, name: string, forceNoThink = false, forced = false) {
   // debugFetch is the inner transport, so the capture is the body as sent.
-  const fetchImpl = cfg.provider === 'openai-compatible' && cfg.compatibleMode === 'hosted'
+  const transport = cfg.provider === 'openai-compatible' && cfg.compatibleMode === 'hosted'
     ? debugFetch : openAICompatibleFetch(cfg, debugFetch, forceNoThink);
+  // The operator's fields go in first, so the local injection that follows
+  // still sees them (it never clobbers a key already set). No fields → the
+  // transport alone, byte-identical to a station without them.
+  const params = operatorBodyParams(cfg, forced);
+  const fetchImpl = Object.keys(params).length ? operatorBodyFetch(params, transport) : transport;
   const headers = customHeaders(cfg);
   const provider = createOpenAI({
     baseURL,
@@ -210,6 +265,67 @@ function openAICompatibleModel(cfg: any, id: string, baseURL: string, name: stri
     ...(headers ? { headers } : {}),
   });
   return provider.chat(id);
+}
+
+// Whether this leg's transport reads the operator's request-body lists
+// (settings llm.bodyParams / llm.toolCallBodyParams, #2296). Only the
+// openai-compatible transport does, as with custom headers: every other
+// provider has a typed SDK that owns its body.
+export function readsBodyParams(cfg: any): boolean {
+  return cfg?.provider === 'openai-compatible' || cfg?.provider === 'locca';
+}
+
+// The fields this leg's client adds to every request body: the request list,
+// with the tool-call overrides laid over it on the no-think client. {} when
+// the provider doesn't read them or nothing is set.
+export function operatorBodyParams(cfg: any, forced = false): Record<string, unknown> {
+  if (!readsBodyParams(cfg)) return {};
+  return forced
+    ? llmBodyParamsBody(cfg.bodyParams, cfg.toolCallBodyParams)
+    : llmBodyParamsBody(cfg.bodyParams);
+}
+
+// The tool-call override rows as body fields, a `null` (a removal) included.
+function toolCallOverrides(cfg: any): Record<string, unknown> {
+  return readsBodyParams(cfg) ? llmToolCallOverrides(cfg.toolCallBodyParams) : {};
+}
+
+// Whether the leg has tool-call overrides, i.e. whether its no-think client
+// must be its own instance even where it otherwise shares the normal one
+// (hosted mode, which has no body injection to tell the two apart).
+export function hasToolCallOverrides(cfg: any): boolean {
+  return Object.keys(toolCallOverrides(cfg)).length > 0;
+}
+
+// Cache-signature form of both lists: captured at construction like headers,
+// so an edit must build a fresh client. '' when the leg reads neither or both
+// are empty. Fingerprinted, because a value can be a credential.
+export function bodyParamsSig(cfg: any): string {
+  if (!readsBodyParams(cfg)) return '';
+  const req = llmBodyParamsBody(cfg.bodyParams);
+  const over = toolCallOverrides(cfg);
+  if (!Object.keys(req).length && !Object.keys(over).length) return '';
+  return credentialSig(JSON.stringify([req, over]));
+}
+
+// Adds the operator's fields to a JSON request body, never overwriting a key
+// the SDK already set: the model, messages, tools, tool choice and output cap
+// are the station's, whatever a list says. Anything else passes through.
+export function operatorBodyFetch(params: Record<string, unknown>, baseFetch: any = fetch) {
+  return (url: any, init: any) => {
+    if (init?.body && typeof init.body === 'string') {
+      try {
+        const body = JSON.parse(init.body);
+        if (body && typeof body === 'object' && !Array.isArray(body)) {
+          for (const [key, value] of Object.entries(params)) {
+            if (body[key] === undefined) body[key] = value;
+          }
+          init = { ...init, body: JSON.stringify(body) };
+        }
+      } catch { /* not JSON — leave the request untouched */ }
+    }
+    return baseFetch(url, init);
+  };
 }
 
 // The operator's extra request headers for this leg (settings llm.headers /
@@ -264,10 +380,14 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
   const constructionNoThink = opts.forceNoThink === true && caps.reasoningConstructionOnly === true;
   const bodyNoThink = opts.forceNoThink === true && caps.samplingViaBody === true
     && !(cfg.provider === 'openai-compatible' && cfg.compatibleMode === 'hosted');
+  // The operator's tool-call overrides make the no-think client its own
+  // instance even on hosted, where it otherwise shares the normal one (#2296).
+  // Empty overrides keep that sharing, byte-identical to before the field.
+  const overrideNoThink = opts.forceNoThink === true && hasToolCallOverrides(cfg);
   // repeat_penalty and num_ctx are captured at construction, so both key the
   // cache or an edit reads as ignored until the controller restarts (#1327).
   const apiKey = pinnedApiKey(cfg);
-  const sig = `${cfg.provider}|${id}|k${credentialSig(apiKey)}|${ollamaBaseUrl(cfg)}|${baseUrlSig}|${cfg.reasoning ? 'r1' : 'r0'}|${(constructionNoThink || bodyNoThink) ? 'nt1' : 'nt0'}|ctx${appliedNumCtx(cfg) ?? ''}|rp${appliedRepeatPenalty(cfg) ?? ''}|hd${headersSig(cfg)}|cm${cfg.compatibleMode || 'local'}`;
+  const sig = `${cfg.provider}|${id}|k${credentialSig(apiKey)}|${ollamaBaseUrl(cfg)}|${baseUrlSig}|${cfg.reasoning ? 'r1' : 'r0'}|${(constructionNoThink || bodyNoThink || overrideNoThink) ? 'nt1' : 'nt0'}|ctx${appliedNumCtx(cfg) ?? ''}|rp${appliedRepeatPenalty(cfg) ?? ''}|hd${headersSig(cfg)}|cm${cfg.compatibleMode || 'local'}|bp${bodyParamsSig(cfg)}|re${openRouterReasoningEffort(cfg) ?? ''}`;
 
   const cached = clientCache.get(sig);
   if (cached) return cached;
@@ -285,12 +405,12 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
       break;
     }
     case 'openai-compatible': {
-      model = openAICompatibleModel(cfg, id, cfg.baseUrl, 'openai-compatible', bodyNoThink);
+      model = openAICompatibleModel(cfg, id, cfg.baseUrl, 'openai-compatible', bodyNoThink, opts.forceNoThink === true);
       break;
     }
     case 'locca': {
       // Same transport as openai-compatible, with a default base URL.
-      model = openAICompatibleModel(cfg, id, loccaBaseUrl(cfg), 'locca', bodyNoThink);
+      model = openAICompatibleModel(cfg, id, loccaBaseUrl(cfg), 'locca', bodyNoThink, opts.forceNoThink === true);
       break;
     }
     case 'google': {
@@ -304,7 +424,8 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
       break;
     }
     case 'openrouter': {
-      const provider = createOpenRouter({ fetch: debugFetch, headers: OPENROUTER_APP_HEADERS, ...(cfg.apiKey ? { apiKey: cfg.apiKey } : {}) });
+      // debugFetch is the inner transport, so a retried request is captured too.
+      const provider = createOpenRouter({ fetch: openRouterFetch(debugFetch), headers: OPENROUTER_APP_HEADERS, ...(cfg.apiKey ? { apiKey: cfg.apiKey } : {}) });
       // OpenRouter reads `reasoning` from construction settings, not per-call
       // providerOptions, so the toggle has to be wired here. Suppressed on
       // forced-tool legs and when the operator turns reasoning off; otherwise
@@ -314,23 +435,16 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
       // `enabled:false` is the off-switch. effort:'minimal' is NOT one for most
       // families (a no-op for Qwen/GLM; OpenRouter maps any effort onto an
       // Anthropic thinking BUDGET, so it turns thinking on) and survives only
-      // for the reasoning-mandatory families — see reasoningMandatoryModel.
+      // for the reasoning-mandatory families — see reasoningMandatoryModel. A
+      // model outside that list that rejects `enabled:false` is retried at the
+      // floor by openRouterFetch.
+      // An operator's level (llm.reasoningEffort, #2296) is construction-time
+      // too, so it keys the cache sig (`re…`); 'default' builds exactly the
+      // instance it always did.
+      const effort = openRouterReasoningEffort(cfg);
       model = suppressReasoning
-        ? provider(id, { extraBody: { reasoning: reasoningMandatoryModel(id) ? { effort: 'minimal' } : { enabled: false } } })
-        : provider(id);
-      break;
-    }
-    case 'requesty': {
-      // Same createOpenAI transport as openai-compatible on a fixed base URL.
-      // Hosted aggregator with no thinking knob, so no body injection — that
-      // only makes sense for self-hosted llama.cpp/vLLM. A real key is required.
-      const provider = createOpenAI({
-        baseURL: DEFAULT_REQUESTY_BASE_URL,
-        apiKey: apiKey || 'unused',
-        name: 'requesty',
-        fetch: debugFetch,
-      });
-      model = provider.chat(id);
+        ? provider(id, { extraBody: { reasoning: reasoningMandatoryModel(id) ? mandatoryReasoningFloor() : { enabled: false } } })
+        : effort ? provider(id, { extraBody: { reasoning: { effort } } }) : provider(id);
       break;
     }
     case 'gateway': {
@@ -342,6 +456,22 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
     }
     case 'ollama':
     default: {
+      // A fixed-endpoint OpenAI-compatible gateway (the catalogue's
+      // openaiCompatible): the createOpenAI transport on its own base URL.
+      // Hosted, with no thinking knob, so no body injection — that only makes
+      // sense for self-hosted llama.cpp/vLLM. A real key is required. Any other
+      // id is Ollama, as it always has been.
+      const gw = openaiCompatibleGateway(cfg.provider);
+      if (gw) {
+        const provider = createOpenAI({
+          baseURL: gw.openaiCompatible.baseUrl,
+          apiKey: apiKey || 'unused',
+          name: gw.id,
+          fetch: debugFetch,
+        });
+        model = provider.chat(id);
+        break;
+      }
       // `baseURL` is the bare Ollama host (no `/api` suffix); the package
       // appends the path. The default factory already translates tools /
       // toolChoice / activeTools, so no `.chat(id)` override.

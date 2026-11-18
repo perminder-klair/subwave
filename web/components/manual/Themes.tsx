@@ -40,7 +40,7 @@ const SKINS = [
   },
   {
     name: 'TTY',
-    blurb: 'The station as a live process — panes and a status line, everything tailing like a terminal.',
+    blurb: 'The station as a live process — panes, an ASCII cover and a scope, everything tailing like a terminal. Press F and the window becomes an ANSI landscape for the hour and the weather, playing along with the music.',
   },
   {
     name: 'Platter',
@@ -140,9 +140,12 @@ export default function Themes() {
           lets a listener choose a different theme <em>and</em> a different skin
           for their own browser. The choice is saved locally and beats the
           station-wide pick until they clear it; a{' '}
-          <em>Use station default</em> / <em>Use station skin</em> row drops them
-          back to whatever the operator is running. The same menu carries the
-          per-browser lite-mode toggle.
+          <em>Use station default</em> / <em>Use station skin</em> button on each
+          section&rsquo;s heading drops them back to whatever the operator is
+          running. The same menu carries the per-browser <em>Lite mode</em>{' '}
+          toggle; a kiosk can pin it from its start URL with{' '}
+          <code>?lite=1</code>, which that browser keeps until{' '}
+          <code>?lite=0</code>.
         </p>
         <p className="text-muted">
           The skin picker only appears when the build ships more than one skin
@@ -166,9 +169,9 @@ export default function Themes() {
           <li><strong>Vinyl</strong> &mdash; warm record sleeve: sepia paper, deep brown ink, mustard accent.</li>
           <li><strong>Cyberpunk</strong> &mdash; near-black neon: graphite base, cyan ink, hot pink accent.</li>
           <li><strong>Blueprint</strong> &mdash; drafting-table cobalt: chalk-white linework, a bright azure accent.</li>
-          <li><strong>Flare</strong> &mdash; hazard-orange flood: a full high-vis field, near-black ink, ultra-bold grotesque.</li>
+          <li><strong>Phosphor</strong> &mdash; a lab oscilloscope at night: green phosphor ink on black glass, amber for anything live, scanlines and a glow on every bright stroke.</li>
           <li><strong>Recon</strong> &mdash; field-ops poster: warm khaki stock, a hot-orange grid and accent.</li>
-          <li><strong>Signal</strong> &mdash; concrete monochrome: mid-gray press field, near-black ink. No colour, all signal.</li>
+          <li><strong>Riso</strong> &mdash; a two-drum duplicator print: blue and fluorescent pink on uncoated stock, a halftone screen, and the pink drum printing a couple of pixels off.</li>
         </ul>
         <p className="text-muted">
           The palette recolours both the player <em>and</em> the admin console,
@@ -221,7 +224,7 @@ export default function Themes() {
 
       <section className="bs-section">
         <p className="bs-eyebrow">THE TOKEN MAP</p>
-        <h2>Sixteen knobs, no surprises.</h2>
+        <h2>Eighteen knobs, no surprises.</h2>
         <p>
           A theme writes a fixed set of CSS variables onto <code className="bs-code-inline">&lt;html&gt;</code>.
           Any other key in your JSON is silently dropped, so a malformed theme can&rsquo;t
@@ -236,7 +239,7 @@ export default function Themes() {
           <li><strong>Accent</strong> &mdash; <code className="bs-code-inline">--accent</code> the station&rsquo;s accent (active states, on-air pill, focus rings), <code className="bs-code-inline">--accent-2</code> a genuinely different second ink (charts, secondary marks), <code className="bs-code-inline">--accent-soft</code> the accent tinted well into the paper.</li>
           <li><strong>Structure</strong> &mdash; <code className="bs-code-inline">--line</code> crisp hairline, <code className="bs-code-inline">--soft-border</code> the softer hairline between sections, <code className="bs-code-inline">--overlay</code> translucent wash for hover and modal scrims.</li>
           <li><strong>Type</strong> &mdash; <code className="bs-code-inline">--display-font</code> / <code className="bs-code-inline">--mono-font</code>, each a curated id (not a free font string).</li>
-          <li><strong>Texture</strong> &mdash; <code className="bs-code-inline">--grain</code>, the paper-grain strength, 0&ndash;1.</li>
+          <li><strong>Texture</strong> &mdash; <code className="bs-code-inline">--grain</code>, the paper-grain strength, 0&ndash;1. <code className="bs-code-inline">--texture</code> lays a pattern over the player (<code className="bs-code-inline">scanline</code> or <code className="bs-code-inline">halftone</code>), and <code className="bs-code-inline">--finish</code> runs a filter over everything the skin draws: <code className="bs-code-inline">bloom</code> glows light ink into a dark ground, <code className="bs-code-inline">misregister</code> prints an accent-coloured ghost under dark ink on light paper. Both are off when omitted, both touch the player only, never the admin console, and lite mode drops the finish. Safari and every iOS browser skip it too: WebKit runs that filter on the CPU over the whole player on every frame, so they keep the texture alone.</li>
         </ul>
         <p>
           Any CSS colour value works: hex, <code className="bs-code-inline">rgb()</code>,{' '}

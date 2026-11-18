@@ -1,5 +1,7 @@
 'use client';
 
+import { LLM_PROVIDER_FORM_KEYS } from './registry';
+
 import type { ChangeEvent } from 'react';
 import { useEffect, useState } from 'react';
 import { notify, errorMessage } from '../../../lib/notify';
@@ -10,23 +12,30 @@ import { V3AlertDialog } from '../../ui/alert-dialog';
 import { Input } from '../../ui/input';
 import { Label } from '../../ui/label';
 import {
-  Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup,
+  Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup, SelectLabel,
 } from '../../ui/select';
 import { Card, Btn, Pill, Seg } from '../ui';
-import { ProviderSelector } from '../llm/ProviderSelector';
+import { ProviderPicker } from '../llm/ProviderPicker';
 import { ModelCombobox } from '../llm/ModelCombobox';
-import { LLM_ENV_VARS, llmProviderLabel } from '../llm/providerMeta';
+import { LLM_ENV_VARS, groupProviders, llmProviderLabel } from '../llm/providerMeta';
 import { Advanced } from './section-chrome';
+import { ContextSizing } from './ContextSizing';
+import { COMPAT_MODE_OPTIONS, compatDetectedNote, effectiveCompatMode, type CompatMode } from './compat-mode';
+import { pinnedFieldNames, type SwapEmbeddingPreview } from './llm-swap-copy';
 import {
-  SectionHeader, SaveBar, KeyStatus, KeyTestResult, KEY_HINTS,
+  LLM_BODY_PARAM_PRESETS, LLM_BODY_PARAMS_MAX, bodyParamProblem, bodyParamsPayload, fillBodyParamsPreset,
+  type LlmBodyParamRow, type LlmLegId,
+} from './llmBodyParams';
+import {
+  REASONING_EFFORT_OPTIONS, hostedReasoningHint, reasoningEffortHiddenHint, reasoningEffortHint,
+  reasoningEffortShown, setReasoningEffort, type ReasoningEffort, type ReasoningLegView,
+} from './reasoningEffort';
+import {
+  SectionHeader, SaveBar, KeyStatus, KeyTestResult, KEY_HINTS, NowBanner,
   headerMap,
   type SectionProps, type LlmHeaderRow,
 } from './shared';
-// The floor's ceiling and the custom-header grammar, from the same schema
-// module the server bounds-checks against — a hardcoded copy here is a client
-// hint that can disagree with the save it is meant to pre-empt.
 import {
-  PICKER_MIN_TRACK_LENGTH_BOUNDS,
   LLM_HEADER_NAME_RE,
   LLM_HEADER_VALUE_RE,
   LLM_HEADER_VALUE_MAX,
@@ -155,11 +164,201 @@ export function HeaderRowsEditor({
   );
 }
 
+// One `{ key, value }` row list of request-body fields (#2296). Values that
+// parse as JSON (false, 128, {"a":1}, null) are sent as JSON, anything else
+// as a string. Problems are what the save would refuse, from the mirrored rule.
+function BodyParamRowsEditor({ rows, onChange, idPrefix, keyPlaceholder, valuePlaceholder, addLabel }: {
+  rows: LlmBodyParamRow[];
+  onChange: (next: LlmBodyParamRow[]) => void;
+  idPrefix: string;
+  keyPlaceholder: string;
+  valuePlaceholder: string;
+  addLabel: string;
+}) {
+  const setRow = (i: number, patch: Partial<LlmBodyParamRow>) =>
+    onChange(rows.map((r, n) => (n === i ? { ...r, ...patch } : r)));
+  return (
+    <div className="flex flex-col gap-2">
+      {rows.map((r, i) => {
+        const err = bodyParamProblem(r, rows);
+        return (
+          <div key={`${idPrefix}-${i}`} className="flex flex-col gap-1">
+            <div className="flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
+              <Input
+                value={r.key}
+                onChange={(e: ChangeEvent<HTMLInputElement>) => setRow(i, { key: e.target.value })}
+                placeholder={keyPlaceholder}
+                aria-label="Field name"
+                className="max-w-[220px]"
+              />
+              <Input
+                value={r.value}
+                onChange={(e: ChangeEvent<HTMLInputElement>) => setRow(i, { value: e.target.value })}
+                placeholder={valuePlaceholder}
+                aria-label="Field value"
+                className="max-w-[260px]"
+              />
+              <Btn onClick={() => onChange(rows.filter((_, n) => n !== i))}>Remove</Btn>
+            </div>
+            {err && <div className="text-xs text-vermilion">{err}</div>}
+          </div>
+        );
+      })}
+      <div>
+        <Btn onClick={() => onChange([...rows, { key: '', value: '' }])} disabled={rows.length >= LLM_BODY_PARAMS_MAX}>
+          {addLabel}
+        </Btn>
+      </div>
+    </div>
+  );
+}
+
+// Both request-body lists for one leg, shown for the openai-compatible
+// transport (openai-compatible, local or hosted, and locca) only.
+// The Default / Low / Medium / High control under a leg's Reasoning switch
+// (#2296). Shown only while reasoning is On, and only where the leg can
+// express a level (reasoningEffort.ts); elsewhere a hint points at Request
+// parameters when the leg has them.
+function ReasoningEffortField({ leg, view, on, value, setForm }: {
+  leg: LlmLegId;
+  view: ReasoningLegView;
+  on: boolean;
+  value: ReasoningEffort;
+  setForm: SectionProps['setForm'];
+}) {
+  if (!on) return null;
+  if (!reasoningEffortShown(view)) {
+    const hint = reasoningEffortHiddenHint(view);
+    return hint ? <div className="field-hint mt-2 max-w-[480px]">{hint}</div> : null;
+  }
+  return (
+    <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
+      <div>
+        <div className="text-[13px] font-bold">{leg === 'primary' ? 'Reasoning level' : 'Backup reasoning level'}</div>
+        <div className="field-hint mt-1 max-w-[440px]">{reasoningEffortHint(view)}</div>
+      </div>
+      <Seg
+        accent
+        value={value}
+        options={REASONING_EFFORT_OPTIONS.map(o => ({ id: o.id, label: o.label }))}
+        onChange={v => setForm(setReasoningEffort(leg, v as ReasoningEffort))}
+      />
+    </div>
+  );
+}
+
+function BodyParamsFields({ leg, bodyParams, toolCallBodyParams, setForm }: {
+  leg: LlmLegId;
+  bodyParams: LlmBodyParamRow[];
+  toolCallBodyParams: LlmBodyParamRow[];
+  setForm: SectionProps['setForm'];
+}) {
+  const setList = (list: 'bodyParams' | 'toolCallBodyParams', rows: LlmBodyParamRow[]) =>
+    setForm(f => (leg === 'primary'
+      ? { ...f, llm: { ...f.llm, [list]: rows } }
+      : { ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, [list]: rows } } }));
+  return (
+    <>
+      <div className="field">
+        <Label>Request parameters</Label>
+        <BodyParamRowsEditor
+          idPrefix={`llm-${leg}-body-param`}
+          rows={bodyParams}
+          onChange={rows => setList('bodyParams', rows)}
+          keyPlaceholder="enable_thinking"
+          valuePlaceholder="false"
+          addLabel="Add parameter"
+        />
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          {LLM_BODY_PARAM_PRESETS.map(p => (
+            <Btn key={p.id} onClick={() => setForm(fillBodyParamsPreset(leg, p.id))}>
+              Fill for {p.label}
+            </Btn>
+          ))}
+        </div>
+        <div className="field-hint">
+          Extra fields added to the body of every request to this server, in the
+          server&apos;s own words: SUB/WAVE&apos;s reasoning switch does nothing on a
+          hosted connection, so <strong>thinking settings go here</strong> (for a
+          Qwen3 on Hetzner or vLLM, <code>enable_thinking</code> = <code>false</code>;
+          the Fill button adds that row, and nothing is stored until you save).
+          Values like <code>false</code>, <code>128</code> or{' '}
+          <code>{'{"enable_thinking":false}'}</code> are sent as JSON. A field
+          never replaces one SUB/WAVE sets itself, and <code>model</code>,{' '}
+          <code>messages</code>, <code>tools</code>, <code>tool_choice</code>,{' '}
+          <code>max_tokens</code> and the like are refused. A server may accept
+          a budget field and ignore it (Hetzner does with{' '}
+          <code>thinking_budget</code>), so check{' '}
+          <code>usage.completion_tokens_details.reasoning_tokens</code> in the
+          debug log, not <code>reasoning_content</code>, which can be empty
+          while the model thinks.
+        </div>
+      </div>
+      <div className="field">
+        <Label>Structured &amp; tool-call overrides</Label>
+        <BodyParamRowsEditor
+          idPrefix={`llm-${leg}-tool-call-param`}
+          rows={toolCallBodyParams}
+          onChange={rows => setList('toolCallBodyParams', rows)}
+          keyPlaceholder="thinking_budget"
+          valuePlaceholder="null"
+          addLabel="Add override"
+        />
+        <div className="field-hint">
+          Laid over the request parameters on picks, structured answers and every
+          other call that forces a tool. <strong>Put the off-switch for a thinking
+          setting here</strong>: a model that thinks there truncates mid-thought or
+          is refused, and two short calls (search verification, the 64-token
+          link fallback) fail outright if thinking reaches them. A value of{' '}
+          <code>null</code> removes that field from these calls. DashScope&apos;s
+          Qwen also rejects a forced tool choice while thinking; if it errors on
+          picks, set Tool choice to Auto above.
+        </div>
+      </div>
+    </>
+  );
+}
+
 interface LlmSectionProps extends SectionProps {
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
   refresh: () => void;
+  /** Settings holds unsaved edits in ANY section, not just this one. The swap
+   *  saves straight away from the stored settings, and while anything is
+   *  unsaved the panel holds the post-swap read back from the form. */
+  unsavedChanges?: boolean;
+  /** POST /settings/llm/swap through the panel, which adopts the swapped legs
+   *  from the authoritative read (SettingsPanel swapLlmLegs). */
+  swapLegs: () => Promise<boolean>;
 }
-export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refresh, fieldErrors }: LlmSectionProps) {
+export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refresh, fieldErrors, unsavedChanges = false, swapLegs }: LlmSectionProps) {
+  const [swapOpen, setSwapOpen] = useState(false);
+  const [swapping, setSwapping] = useState(false);
+  // What the backup may not suit once primary, for the agentic routes set in
+  // Music selection / DJ behaviour (settings/llm-swap-fit.ts). Warning only:
+  // null while loading, 'error' when the check could not run.
+  const [swapFit, setSwapFit] = useState<SwapFit | 'error' | null>(null);
+  const openSwap = async () => {
+    setSwapFit(null);
+    setSwapOpen(true);
+    try {
+      // admin-query-imperative: llm-swap-fit-preview
+      const r = await adminResponse(adminFetch, '/settings/llm/swap/fit');
+      setSwapFit(await r.json() as SwapFit);
+    } catch {
+      setSwapFit('error');
+    }
+  };
+  // The swap is built and saved on the controller (settings/llm-swap.ts):
+  // headers only ever reach this page redacted, so the browser cannot move them.
+  const confirmSwap = async () => {
+    setSwapping(true);
+    try {
+      await swapLegs();
+    } finally {
+      setSwapping(false);
+      setSwapOpen(false);
+    }
+  };
   const [resetCompatKey, setResetCompatKey] = useState(false);
   const [primaryKeyInput, setPrimaryKeyInput] = useState('');
   const [fallbackKeyInput, setFallbackKeyInput] = useState('');
@@ -355,20 +554,17 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         repeatPenalty: form.llm.repeatPenalty,
         providerBaseUrls: form.llm.providerBaseUrls,
         headers: headerMap(form.llm.headers),
+        bodyParams: bodyParamsPayload(form.llm.bodyParams),
+        toolCallBodyParams: bodyParamsPayload(form.llm.toolCallBodyParams),
         compatibleMode: form.llm.compatibleMode,
         reasoning: form.llm.reasoning,
+        reasoningEffort: form.llm.reasoningEffort,
         toolChoice: form.llm.toolChoice,
-        pickerAgent: form.llm.pickerAgent,
-        noRepeatWindow: Math.max(0, parseInt(form.llm.noRepeatWindow, 10) || 0),
-        artistVarietyWindow: Math.max(0, parseInt(form.llm.artistVarietyWindow, 10) || 0),
-        requestWebResolve: form.llm.requestWebResolve,
-        agentTimeoutMs: form.llm.agentTimeoutMs,
         pauseWhenEmpty: form.llm.pauseWhenEmpty,
         dailyTokenCap: form.llm.dailyTokenCap,
         budgetSoftPct: form.llm.budgetSoftPct,
         exemptRequests: form.llm.exemptRequests,
         maxOutputTokens: form.llm.maxOutputTokens,
-        discoverySteps: form.llm.discoverySteps,
         geminiSafety: { ...form.llm.geminiSafety },
         ...(INLINE_KEY_PROVIDERS.includes(activeProvider) && (compatKeyInput.trim() || resetCompatKey)
           ? { apiKey: compatKeyInput.trim() }
@@ -384,19 +580,16 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
           geminiSafety: { ...form.llm.fallback.geminiSafety },
           providerBaseUrls: form.llm.fallback.providerBaseUrls,
           headers: headerMap(form.llm.fallback.headers),
+          bodyParams: bodyParamsPayload(form.llm.fallback.bodyParams),
+          toolCallBodyParams: bodyParamsPayload(form.llm.fallback.toolCallBodyParams),
           compatibleMode: form.llm.fallback.compatibleMode,
           reasoning: form.llm.fallback.reasoning,
+          reasoningEffort: form.llm.fallback.reasoningEffort,
+          toolChoice: form.llm.fallback.toolChoice,
           ...(INLINE_KEY_PROVIDERS.includes(activeFallbackProvider) && compatFallbackKeyInput.trim()
             ? { apiKey: compatFallbackKeyInput.trim() }
             : {}),
         },
-      },
-      // Its own top-level key, not part of `llm`: the album cooldown is read by
-      // the stateless pool picker too, so it is picking config rather than LLM
-      // config. It rides in the same PATCH because it is edited on this card.
-      picker: {
-        albumHours: Math.max(0, parseFloat(form.picker.albumHours) || 0),
-        minTrackLengthSeconds: Math.max(0, parseInt(form.picker.minTrackLengthSeconds, 10) || 0),
       },
     });
     // Save API keys if typed — these go to secrets.env, not settings.json
@@ -439,28 +632,21 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
 
       <Card title="Provider" sub="active routing">
         <div className="grid gap-[18px]">
-          <div className="flex items-start gap-2.5 border border-[var(--accent)] bg-[var(--ink-softer)] p-3">
-            <span className="mt-1 size-1.5 flex-none rounded-full bg-vermilion" />
-            <div className="grid min-w-0 gap-0.5">
-              <span className="text-[11px] font-bold tracking-[0.12em] text-vermilion uppercase">
-                Routing now · {llmProviderLabel(activeProvider)}
-              </span>
-              <span className="text-[14px] leading-[1.5] text-muted">
-                {activeModel
-                  ? <>Model <code>{activeModel}</code>, every LLM call goes here. {llmDirty ? 'Your edits below aren’t live until you Save.' : 'This is the saved, running config.'}</>
-                  : <>No model is set for this provider yet.</>}
-              </span>
-            </div>
-          </div>
+          <NowBanner label={<>Routing now · {llmProviderLabel(activeProvider)}</>}>
+            {activeModel
+              ? <>Model <code>{activeModel}</code>, every LLM call goes here. {llmDirty ? 'Your edits below aren’t live until you Save.' : 'This is the saved, running config.'}</>
+              : <>No model is set for this provider yet.</>}
+          </NowBanner>
 
           <div className="field">
             <div className="flex items-center gap-2">
               <Label>Provider</Label>
               {llmDirty && <Pill tone="accent" dot>unsaved</Pill>}
             </div>
-            <ProviderSelector
+            <ProviderPicker
               value={form.llm.provider}
               providerIds={data.llm?.providers || ['ollama']}
+              label="LLM provider"
               env={data.env}
               onChange={changeLlmProvider}
             />
@@ -512,6 +698,11 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 raise it for reasoning models, lower it on tight VRAM. Set 0 to
                 use Ollama&apos;s default. Ignored for <code>:cloud</code> models.
               </div>
+              <ContextSizing
+                adminFetch={adminFetch}
+                numCtx={form.llm.numCtx}
+                onUse={tokens => setForm(f => ({ ...f, llm: { ...f.llm, numCtx: tokens } }))}
+              />
             </div>
           )}
 
@@ -556,12 +747,15 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             <div className="field">
               <Label>API behavior</Label>
               <Seg value={form.llm.compatibleMode}
-                options={[{ id: 'local', label: 'Local model' }, { id: 'hosted', label: 'Hosted service' }]}
-                onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, compatibleMode: v as 'local' | 'hosted' } }))} />
+                options={COMPAT_MODE_OPTIONS}
+                onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, compatibleMode: v as CompatMode } }))} />
               <div className="field-hint">
-                Hosted uses native structured output and leaves sampling and reasoning
-                controls to the service. Local keeps the llama.cpp/vLLM request
-                adjustments. Existing stations stay on Local.
+                Auto-detect asks the server what it is: llama.cpp, LM Studio, vLLM
+                or Ollama run as a local model; a cloud model or public API runs as
+                a hosted service; anything it cannot tell stays local. Hosted uses
+                native structured output and leaves sampling and reasoning controls
+                to the service. Local keeps the llama.cpp/vLLM request adjustments.
+                {compatDetectedNote(form.llm.compatibleMode, data.llm?.compatDetection?.primary)}
               </div>
             </div>
           )}
@@ -655,7 +849,16 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             </div>
           )}
 
-          {(form.llm.provider === 'locca' || (form.llm.provider === 'openai-compatible' && form.llm.compatibleMode === 'local')) && (
+          {INLINE_KEY_PROVIDERS.includes(form.llm.provider) && (
+            <BodyParamsFields
+              leg="primary"
+              bodyParams={form.llm.bodyParams}
+              toolCallBodyParams={form.llm.toolCallBodyParams}
+              setForm={setForm}
+            />
+          )}
+
+          {(form.llm.provider === 'locca' || (form.llm.provider === 'openai-compatible' && effectiveCompatMode(form.llm.compatibleMode, data.llm?.compatDetection?.primary) === 'local')) && (
             <div className="field">
               <Label>Repetition penalty (repeat_penalty)</Label>
               <Input
@@ -807,7 +1010,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         </div>
       </Card>
 
-      <Advanced note="tuning, the fallback chain, the picker and the daily budget">
+      <Advanced note="tuning, the fallback chain and the daily budget">
       <Card title="Fallback" sub="backup when the primary is offline">
         <div className="grid gap-[18px]">
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
@@ -848,11 +1051,14 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 >
                   <SelectTrigger className="max-w-[360px]" aria-label="Backup provider"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectGroup>
-                      {(data.llm?.providers || ['ollama']).map(p => (
-                        <SelectItem key={p} value={p}>{llmProviderLabel(p)}</SelectItem>
-                      ))}
-                    </SelectGroup>
+                    {groupProviders(data.llm?.providers || ['ollama']).map(g => (
+                      <SelectGroup key={g.group}>
+                        <SelectLabel>{g.label}</SelectLabel>
+                        {g.ids.map(p => (
+                          <SelectItem key={p} value={p}>{llmProviderLabel(p)}</SelectItem>
+                        ))}
+                      </SelectGroup>
+                    ))}
                   </SelectContent>
                 </Select>
                 <div className="field-hint">
@@ -923,8 +1129,11 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 <div className="field">
                   <Label>Backup API behavior</Label>
                   <Seg value={form.llm.fallback.compatibleMode}
-                    options={[{ id: 'local', label: 'Local model' }, { id: 'hosted', label: 'Hosted service' }]}
-                    onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, compatibleMode: v as 'local' | 'hosted' } } }))} />
+                    options={COMPAT_MODE_OPTIONS}
+                    onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, compatibleMode: v as CompatMode } } }))} />
+                  <div className="field-hint">
+                    {compatDetectedNote(form.llm.fallback.compatibleMode, data.llm?.compatDetection?.fallback)}
+                  </div>
                 </div>
               )}
 
@@ -999,7 +1208,16 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 </>
               )}
 
-              {(form.llm.fallback.provider === 'locca' || (form.llm.fallback.provider === 'openai-compatible' && form.llm.fallback.compatibleMode === 'local')) && (
+              {INLINE_KEY_PROVIDERS.includes(form.llm.fallback.provider) && (
+                <BodyParamsFields
+                  leg="fallback"
+                  bodyParams={form.llm.fallback.bodyParams}
+                  toolCallBodyParams={form.llm.fallback.toolCallBodyParams}
+                  setForm={setForm}
+                />
+              )}
+
+              {(form.llm.fallback.provider === 'locca' || (form.llm.fallback.provider === 'openai-compatible' && effectiveCompatMode(form.llm.fallback.compatibleMode, data.llm?.compatDetection?.fallback) === 'local')) && (
                 <div className="field">
                   <Label>Repetition penalty (repeat_penalty)</Label>
                   <Input
@@ -1022,7 +1240,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 </div>
               )}
 
-              {form.llm.pickerAgent && (
+              {form.llm.trackSelection === 'agentic' && (
                 <div className="field">
                   <Label>Discovery rounds per pick</Label>
                   <Input
@@ -1137,12 +1355,35 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 <KeyStatus envVar={fallbackKeyVar} present={!!data.env?.[fallbackKeyVar]} />
               )}
 
+              {form.llm.fallback.provider === 'openai-compatible' && (
+                <div className="field">
+                  <Label>Backup forced tool calls</Label>
+                  <Seg
+                    accent
+                    value={form.llm.fallback.toolChoice === 'auto' ? 'auto' : 'required'}
+                    options={[
+                      { id: 'required', label: 'Required' },
+                      { id: 'auto', label: 'Auto' },
+                    ]}
+                    onChange={v =>
+                      setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, toolChoice: v } } }))
+                    }
+                  />
+                  <div className="field-hint">
+                    The backup&rsquo;s own setting, as for the primary above: <code>Required</code>{' '}
+                    (default) is the reliable path for local models; switch to <code>Auto</code> only
+                    if this backup&rsquo;s server crashes on a tool call. It moves with the leg when
+                    you swap the primary and backup.
+                  </div>
+                </div>
+              )}
+
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
                 <div>
                   <div className="text-[13px] font-bold">Backup chain-of-thought</div>
                   <div className="mt-0.5 max-w-[480px] text-[14px] leading-[1.5] text-muted">
-                    {form.llm.fallback.provider === 'openai-compatible' && form.llm.fallback.compatibleMode === 'hosted'
-                      ? 'Hosted compatible services control their own reasoning; this switch is ignored for this backup.'
+                    {form.llm.fallback.provider === 'openai-compatible' && effectiveCompatMode(form.llm.fallback.compatibleMode, data.llm?.compatDetection?.fallback) === 'hosted'
+                      ? hostedReasoningHint(form.llm.fallback.model, true)
                       : 'Whether the backup model may emit a reasoning step. Off by default, like the primary.'}
                   </div>
                 </div>
@@ -1158,6 +1399,32 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                   }
                 />
               </div>
+              <ReasoningEffortField
+                leg="fallback"
+                view={{ provider: form.llm.fallback.provider, model: form.llm.fallback.model, compatibleMode: effectiveCompatMode(form.llm.fallback.compatibleMode, data.llm?.compatDetection?.fallback) }}
+                on={form.llm.fallback.reasoning}
+                value={form.llm.fallback.reasoningEffort}
+                setForm={setForm}
+              />
+
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
+                <div>
+                  <div className="text-[13px] font-bold">Swap with primary</div>
+                  <div className="mt-0.5 max-w-[480px] text-[14px] leading-[1.5] text-muted">
+                    {unsavedChanges
+                      ? 'Save or discard your unsaved settings changes first (on any page of Settings): the swap saves straight away.'
+                      : 'Make this backup the primary, and the primary the backup. Each keeps its own settings, so swapping again swaps the two back.'}
+                  </div>
+                </div>
+                <Btn
+                  tone="accent"
+                  onClick={() => { void openSwap(); }}
+                  disabled={unsavedChanges || busy || swapping}
+                  title={unsavedChanges ? 'Unsaved changes in Settings' : undefined}
+                >
+                  {swapping ? 'Swapping…' : 'Swap with primary'}
+                </Btn>
+              </div>
             </>
           )}
         </div>
@@ -1168,8 +1435,8 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
           <div>
             <div className="text-[13px] font-bold">Chain-of-thought</div>
             <div className="field-hint mt-1 max-w-[440px]">
-              {form.llm.provider === 'openai-compatible' && form.llm.compatibleMode === 'hosted'
-                ? 'Hosted compatible services control their own reasoning; this switch is ignored for this connection.'
+              {form.llm.provider === 'openai-compatible' && effectiveCompatMode(form.llm.compatibleMode, data.llm?.compatDetection?.primary) === 'hosted'
+                ? hostedReasoningHint(form.llm.model, false)
                 : <>When off, thinking-capable models skip their internal reasoning
               step (Ollama, Qwen3, Gemini, OpenAI o-series/gpt-5, Claude,
               DeepSeek). DJ scripts and structured picks are short, so thinking
@@ -1188,6 +1455,13 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, reasoning: v === 'on' } }))}
           />
         </div>
+        <ReasoningEffortField
+          leg="primary"
+          view={{ provider: form.llm.provider, model: form.llm.model, compatibleMode: effectiveCompatMode(form.llm.compatibleMode, data.llm?.compatDetection?.primary) }}
+          on={form.llm.reasoning}
+          value={form.llm.reasoningEffort}
+          setForm={setForm}
+        />
 
         <div className="field mt-4">
           <Label>Max response size (tokens)</Label>
@@ -1242,204 +1516,6 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
           />
         </Card>
       )}
-
-      <Card title="Next-track picker" sub="how the DJ chooses">
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
-          <div>
-            <div className="text-[13px] font-bold">Agentic picker</div>
-            <div className="field-hint mt-1 max-w-[440px]">
-              When on, the picker is a tool-using agent that explores the library
-              itself; needs a model good at multi-step tool calls. Leave off for
-              small local models, where skill segments (weather, news&hellip;) then
-              run as one call instead of a tool loop.
-            </div>
-          </div>
-          <Seg
-            accent
-            value={form.llm.pickerAgent ? 'agent' : 'pool'}
-            options={[
-              { id: 'pool', label: 'Candidate pool' },
-              { id: 'agent', label: 'Agent' },
-            ]}
-            onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, pickerAgent: v === 'agent' } }))}
-          />
-        </div>
-
-        {form.llm.pickerAgent && (
-          <div className="field mt-4">
-            <Label>Agent deadline (seconds)</Label>
-            <Input
-              type="number"
-              min={5}
-              max={300}
-              step={5}
-              value={Math.round(form.llm.agentTimeoutMs / 1000)}
-              onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                setForm(f => ({ ...f, llm: { ...f.llm, agentTimeoutMs: Number(e.target.value) * 1000 } }))
-              }
-              placeholder="45"
-              className="max-w-[200px]"
-            />
-            <div className="field-hint">
-              How long an agent pick or listener request may run before falling
-              back to the stateless picker. Slow reasoning models often need
-              20&ndash;40s per pick; lower it for snappier fallbacks on a fast
-              model. 5&ndash;300s.
-            </div>
-          </div>
-        )}
-
-        {form.llm.pickerAgent && (
-          <div className="field mt-4">
-            <Label>Discovery rounds per pick</Label>
-            <Input
-              type="number"
-              min={0}
-              max={5}
-              step={1}
-              value={form.llm.discoverySteps}
-              onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                setForm(f => ({ ...f, llm: { ...f.llm, discoverySteps: Number(e.target.value) } }))
-              }
-              placeholder="0"
-              className="max-w-[200px]"
-            />
-            <div className="field-hint">
-              How many times the DJ may search your library before it has to commit
-              to a track. {' '}<strong>0 = auto</strong>, which picks for you based on
-              your provider: 1 for self-hosted servers (Ollama, llama.cpp, vLLM,
-              LM Studio), 3 for the cloud providers. Raise it if you run a capable
-              model on your own hardware &mdash; auto is cautious there because many
-              local models wander when given more than one round. Lower it to 1 to
-              cut tokens and latency: every round is a separate call, and they all
-              share the agent deadline above. 0&ndash;5.
-            </div>
-          </div>
-        )}
-
-        {form.llm.pickerAgent && (
-          <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
-            <div>
-              <div className="text-[13px] font-bold">Resolve described requests via web</div>
-              <div className="field-hint mt-1 max-w-[440px]">
-                When on, a listener who <em>describes</em> a track instead of naming
-                it (&ldquo;the song from the new Dune movie&rdquo;) gets it looked up on
-                the web, then matched to your library. Needs a web-search provider
-                set under Web search; otherwise it does nothing.
-              </div>
-            </div>
-            <Seg
-              accent
-              value={form.llm.requestWebResolve ? 'on' : 'off'}
-              options={[
-                { id: 'off', label: 'Off' },
-                { id: 'on', label: 'On' },
-              ]}
-              onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, requestWebResolve: v === 'on' } }))}
-            />
-          </div>
-        )}
-
-        <div className="field mt-4">
-          <Label>No-repeat window (tracks)</Label>
-          <Input
-            type="number"
-            min={0}
-            max={1000}
-            step={10}
-            value={form.llm.noRepeatWindow}
-            onChange={(e: ChangeEvent<HTMLInputElement>) =>
-              setForm(f => ({ ...f, llm: { ...f.llm, noRepeatWindow: e.target.value } }))
-            }
-            placeholder="250"
-            className="max-w-[200px]"
-          />
-          <div className="field-hint">
-            The last N <strong>distinct</strong> tracks can never be re-picked: a hard
-            guard on both the agent and candidate-pool pickers, on top of the time-based
-            window. Auto-scales down on a small library so it never blocks everything;
-            on a big library, raise it — it is the station&apos;s long memory.
-            {' '}<strong>0 = off</strong>. Listener requests stay exempt. 0&ndash;1000.
-          </div>
-        </div>
-
-        <div className="field mt-4">
-          <Label>Artist spacing (slots)</Label>
-          <Input
-            type="number"
-            min={0}
-            max={25}
-            step={1}
-            value={form.llm.artistVarietyWindow}
-            onChange={(e: ChangeEvent<HTMLInputElement>) =>
-              setForm(f => ({ ...f, llm: { ...f.llm, artistVarietyWindow: e.target.value } }))
-            }
-            placeholder="5"
-            className="max-w-[200px]"
-          />
-          <div className="field-hint">
-            Best-effort artist spacing across queued, on-air and recent tracks.
-            The agent tries another eligible candidate; the candidate pool
-            prefers artists outside this window, including when its model call
-            fails. Spacing can relax when eligible choices are limited or an
-            agent re-pick fails, and the picker logs why. {' '}<strong>0 = off</strong>.
-            The agent still tries to avoid repeating its pick-anchor artist.
-            Listener requests are exempt. Emergency playlist playback has no
-            live spacing check. 0&ndash;25.
-          </div>
-        </div>
-
-        <div className="field mt-4">
-          <Label>Album cooldown (hours)</Label>
-          <Input
-            type="number"
-            min={0}
-            max={72}
-            step={0.5}
-            value={form.picker.albumHours}
-            onChange={(e: ChangeEvent<HTMLInputElement>) =>
-              setForm(f => ({ ...f, picker: { ...f.picker, albumHours: e.target.value } }))
-            }
-            placeholder="0"
-            className="max-w-[200px]"
-          />
-          <div className="field-hint">
-            How long a <strong>record</strong> rests after one of its tracks airs, on
-            both pickers. Only worth setting <em>above</em> the artist spacing above
-            &mdash; below it, the artist guard already covers the same ground. Like
-            that one it yields rather than starving the pool, and compilations and
-            various-artists albums are exempt, since two tracks off one sampler is
-            ordinary radio. {' '}<strong>0 = off</strong> (the default). 0&ndash;72.
-          </div>
-        </div>
-
-        <div className="field mt-4">
-          <Label>Minimum track length (seconds)</Label>
-          <Input
-            type="number"
-            min={0}
-            max={PICKER_MIN_TRACK_LENGTH_BOUNDS.max}
-            step={1}
-            value={form.picker.minTrackLengthSeconds}
-            onChange={(e: ChangeEvent<HTMLInputElement>) =>
-              setForm(f => ({ ...f, picker: { ...f.picker, minTrackLengthSeconds: e.target.value } }))
-            }
-            placeholder="0"
-            className="max-w-[200px]"
-          />
-          <div className="field-hint">
-            The shortest a track can be to get picked, on both pickers and the
-            offline fallback playlist &mdash; the way to keep 40-second skits,
-            interludes and album intros off air. The mirror of the max track
-            length in Broadcast, but a <em>selection</em> filter: a short track is
-            never chosen, where a long one is simply faded out at the cap. A show
-            can set its own; listener requests are always exempt.
-            {' '}<strong>0 = off</strong> (the default). A non-zero value has to
-            be at least {data?.values?.minTrackSeconds ?? 30}s &mdash; the same
-            crossfade-derived minimum the track-length cap clears.
-          </div>
-        </div>
-      </Card>
 
       <Card title="Idle behaviour" sub="when no one's listening">
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
@@ -1542,7 +1618,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         onSave={save}
         saveLabel="Save LLM provider"
         errors={fieldErrors}
-        ownedKeys={['llm']}
+        ownedKeys={LLM_PROVIDER_FORM_KEYS}
         // All four key boxes are component-local — the panel diffs FormState
         // and cannot see them, so a pasted key alone would leave the section
         // "clean" and unmount the very button that saves it. The managed pair
@@ -1551,6 +1627,26 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
           primaryKeyInput.trim() || fallbackKeyInput.trim()
           || compatKeyInput.trim() || compatFallbackKeyInput.trim()
         )}
+      />
+
+      <V3AlertDialog
+        open={swapOpen}
+        onOpenChange={(o) => { if (!o && !swapping) setSwapOpen(false); }}
+        title="Swap primary and backup LLM"
+        description={
+          <>
+            <strong>{llmProviderLabel(form.llm.fallback.provider)}</strong>
+            {form.llm.fallback.model ? <> / <code>{form.llm.fallback.model}</code></> : null}
+            {' '}becomes the primary, and{' '}
+            <strong>{llmProviderLabel(form.llm.provider)}</strong>
+            {form.llm.model ? <> / <code>{form.llm.model}</code></> : null}
+            {' '}the backup. Each keeps its own settings, and the change is saved at once.
+          </>
+        }
+        details={<><SwapFitNotice fit={swapFit} /><SwapPinNotice fit={swapFit} /></>}
+        confirmLabel="swap"
+        cancelLabel="cancel"
+        onConfirm={() => { void confirmSwap(); }}
       />
 
       <V3AlertDialog
@@ -1578,5 +1674,82 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         }}
       />
     </>
+  );
+}
+
+/** GET /settings/llm/swap/fit (controller settings/llm-swap-fit.ts, plus the
+ *  route's preview of the embedding pins). */
+interface SwapFit {
+  agenticRoutes: string[];
+  target: { provider: string; model: string };
+  warnings: { check: string; detail: string }[];
+  embedding?: SwapEmbeddingPreview;
+}
+
+/** The swap dialog's Library-tagger line. A pin is written once and stays:
+ *  swapping back restores the two LLM legs, not the embedding leg's
+ *  inheritance, so the operator is told before it happens. */
+function SwapPinNotice({ fit }: { fit: SwapFit | 'error' | null }) {
+  if (fit === null) return null;
+  if (fit === 'error' || !fit.embedding) {
+    return (
+      <div className="mt-3 text-[12px] leading-[1.5] text-muted">
+        Library tagger values inherited from the primary are pinned to their current values, so the
+        library&rsquo;s vectors keep their model.
+      </div>
+    );
+  }
+  const { pinned, keyNotPinned } = fit.embedding;
+  if (!pinned.length && !keyNotPinned) return null;
+  return (
+    <div role="note" className="mt-3 text-[12px] leading-[1.5]">
+      {pinned.length > 0 && (
+        <div>
+          The Library tagger follows the primary for its {pinnedFieldNames(pinned)}. The swap
+          pins {pinned.length === 1 ? 'it' : 'them'} to today&rsquo;s values so the library&rsquo;s
+          vectors keep their model. Swapping back does not undo this: clear the field in Library
+          tagger to follow the primary again.
+        </div>
+      )}
+      {keyNotPinned && (
+        <div className={pinned.length > 0 ? 'mt-1' : undefined}>
+          The primary&rsquo;s API key is too long for the Library tagger to store, so it is not
+          pinned. If embeddings stop working after the swap, set an embedding key in Library tagger.
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The swap dialog's warning: which agentic routes the incoming primary may
+ *  not suit, and why. Never blocks the swap — the same engine already takes
+ *  those routes on a failover. */
+function SwapFitNotice({ fit }: { fit: SwapFit | 'error' | null }) {
+  if (fit === null) {
+    return <div className="mt-3 text-[12px] text-muted">Checking the agentic routes…</div>;
+  }
+  if (fit === 'error') {
+    return <div className="mt-3 text-[12px] text-muted">Could not check the agentic routes against the backup.</div>;
+  }
+  if (!fit.warnings.length) return null;
+  const who = fit.target.model || llmProviderLabel(fit.target.provider);
+  return (
+    <div role="note" className="mt-3 border border-[var(--warn,var(--accent))] px-3 py-2 text-[12px] leading-[1.5]">
+      <div className="font-bold text-[color:var(--warn,var(--accent))]">
+        {who} may not suit the agentic routes
+      </div>
+      <div className="mt-1">
+        Agentic: {fit.agenticRoutes.join(', ')}.
+      </div>
+      <ul className="m-0 mt-1 list-disc pl-4">
+        {fit.warnings.map(w => (
+          <li key={w.check + w.detail}><strong>{w.check}</strong>: {w.detail}.</li>
+        ))}
+      </ul>
+      <div className="mt-1 text-muted">
+        The swap still goes through. These routes are set in Settings → Music selection and DJ behaviour,
+        not on this page, and the backup already takes them over on a failover.
+      </div>
+    </div>
   );
 }

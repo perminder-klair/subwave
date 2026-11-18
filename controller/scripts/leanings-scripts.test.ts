@@ -46,6 +46,9 @@ test('replay leaves active station files untouched; evaluation sends actual trea
   const state = createTempDir(join(tmpdir(), 'subwave-leanings-scripts-'));
   const requests: Array<z.infer<typeof requestSchema>> = [];
   const server = createServer(async (req, res) => {
+    // The scripts' connection-mode detection probes with GETs (/models, /props
+    // …); a real server answers what it does not serve with a 404.
+    if (req.method !== 'POST') { res.statusCode = 404; res.end(); return; }
     let data = '';
     for await (const chunk of req) data += String(chunk);
     const body = requestSchema.parse(JSON.parse(data));

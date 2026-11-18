@@ -1,26 +1,15 @@
 // Unit tests for planRun — the pure phase-gating decision behind the re-scan
 // scoping fix (option B: "Re-scan redoes already-done work, never forward-
-// processes the untagged remainder"). Run: `tsx scripts/rescan-scope.test.ts`
-// (folded into `npm run test`). node:assert-via-tsx style, matching the sibling
-// pure-helper tests.
+// processes the untagged remainder"). Run: `npm test -- rescan-scope`
+// (folded into `npm test`).
 //
 // The load-bearing invariant: in EVERY re-scan combination, forwardTag is false
 // (no seed/propagate/active-learn over untagged tracks), and each pass fires iff
 // its own re-* flag is set. A normal run keeps the legacy skip-flag gating.
 
+import test from 'node:test';
 import assert from 'node:assert/strict';
 import { planRun } from '../src/music/rescan-scope.js';
-
-let failures = 0;
-function test(name: string, fn: () => void) {
-  try {
-    fn();
-    console.log(`  ✓ ${name}`);
-  } catch (err: any) {
-    failures++;
-    console.error(`  ✗ ${name}\n      ${err?.message || err}`);
-  }
-}
 
 // Defaults for the fields a given case doesn't care about.
 function flags(over: Partial<Parameters<typeof planRun>[0]> = {}) {
@@ -31,8 +20,6 @@ function flags(over: Partial<Parameters<typeof planRun>[0]> = {}) {
     ...over,
   };
 }
-
-console.log('planRun — normal (forward) runs keep the legacy skip-flag gating:');
 
 test('a plain run does the full forward pass, no re-* passes', () => {
   assert.deepEqual(planRun(flags()), {
@@ -59,8 +46,6 @@ test('re-* flags WITHOUT --rescan (raw CLI) do NOT suppress forward discovery', 
     enrich: true, forwardTag: true, reEmbed: false, reDecide: false, analyze: true,
   });
 });
-
-console.log('planRun — re-scans fire ONLY the selected passes, never forward discovery:');
 
 test('re-scan ALWAYS suppresses forward discovery (the core invariant)', () => {
   const combos = [
@@ -98,9 +83,3 @@ test('re-scan ignores forward skip-flags (they belong to the Run tab)', () => {
     enrich: false, forwardTag: false, reEmbed: false, reDecide: false, analyze: true,
   });
 });
-
-if (failures > 0) {
-  console.error(`\n${failures} test(s) failed`);
-  process.exit(1);
-}
-console.log('\nall rescan-scope tests passed');

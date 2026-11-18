@@ -1,6 +1,6 @@
 'use client';
 
-import type { QueryClient, UseMutationResult, UseQueryResult } from '@tanstack/react-query';
+import type { QueryClient, UseMutationResult, UseQueryOptions, UseQueryResult } from '@tanstack/react-query';
 import {
   adminJson,
   useAdminMutation as useSharedAdminMutation,
@@ -29,7 +29,8 @@ export interface AdminQueryOpts<T> {
   init?: RequestInit;
   enabled?: boolean;
   staleTime?: number;
-  refetchInterval?: number | false;
+  /** A number, or a function of the cached query (TanStack's own form). */
+  refetchInterval?: UseQueryOptions<T>['refetchInterval'];
   /** Toast the error. Omit for the polls that deliberately fail silently. */
   toastOnError?: boolean;
   /**

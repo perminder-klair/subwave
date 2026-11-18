@@ -1,6 +1,7 @@
 import { normalizeStationLocale } from '../../../lib/format';
-import { normalizeGeminiSafety, TRANSITION_EFFECTS, type TransitionEffect } from '../../../lib/schemas.generated';
+import { normalizeGeminiSafety, normalizeReasoningEffort, SHORTLIST_PASSES_DEFAULT, TRANSITION_EFFECTS, ttsVoiceLevellingSchema, type TransitionEffect } from '../../../lib/schemas.generated';
 import type { FormState, SettingsData, LlmHeaderRow } from './shared';
+import { bodyParamRows } from './llmBodyParams';
 
 // The single client-side copy, read by both form hydration and the dirty-check.
 // Must mirror DEFAULTS.tts.cloud in controller/src/settings.ts.
@@ -26,6 +27,12 @@ function headerRows(raw: Record<string, string> | undefined): LlmHeaderRow[] {
   return Object.keys(raw).map((name) => ({ name, value: raw[name] ?? '' }));
 }
 
+// The stored connection mode, as the form holds it. Anything unrecognised is
+// 'local', which is how the controller loads it too.
+function compatibleModeOf(v: unknown): 'local' | 'hosted' | 'auto' {
+  return v === 'hosted' || v === 'auto' ? v : 'local';
+}
+
 export function settingsForm(v: NonNullable<SettingsData['values']>): FormState {
   return {
     crossfadeDuration: String(v.crossfadeDuration ?? ''),
@@ -43,6 +50,11 @@ export function settingsForm(v: NonNullable<SettingsData['values']>): FormState 
     transitions: {
       pairDrain: v.transitions?.pairDrain ?? true,
       stemBlends: v.transitions?.stemBlends ?? false,
+      pickTimeStems: v.transitions?.pickTimeStems === true,
+      equalPowerCrossfade: v.transitions?.equalPowerCrossfade === true,
+      fadeAudibleEnd: v.transitions?.fadeAudibleEnd === true,
+      fadeAudibleEndDb: String(v.transitions?.fadeAudibleEndDb ?? 20),
+      tailFromCurve: v.transitions?.tailFromCurve === true,
       // Absent reads as ON, matching the controller's resolver
       // (settings/transition-effects.ts) — a station that has never saved
       // this block has the whole kit.
@@ -106,6 +118,9 @@ export function settingsForm(v: NonNullable<SettingsData['values']>): FormState 
       showWelcome: v.djBehaviour?.showWelcome === true,
       previewNextShow: v.djBehaviour?.previewNextShow !== false,
       sameHostAcknowledgement: v.djBehaviour?.sameHostAcknowledgement === true,
+      // Absent (a settings.json predating the key) reads as OFF, the
+      // established per-line delivery, matching settings.load()'s coercion.
+      holdDuckBetweenSpeakers: v.djBehaviour?.holdDuckBetweenSpeakers === true,
       extendedSleeveNotes: v.djBehaviour?.extendedSleeveNotes === true,
       releaseYearMentions: v.djBehaviour?.releaseYearMentions ?? 'regular',
       recapLimit: String(v.djBehaviour?.recapLimit ?? 10),
@@ -123,6 +138,7 @@ export function settingsForm(v: NonNullable<SettingsData['values']>): FormState 
       // Absent (a settings.json predating the key) reads as ON, matching the
       // controller's own coercion in settings.load().
       enabled: v.tts?.enabled !== false,
+      voiceLevelling: ttsVoiceLevellingSchema.catch(false).parse(v.tts?.voiceLevelling),
       defaultEngine: v.tts?.defaultEngine ?? 'piper',
       // Absent block = off, matching the controller's normalizeTtsFallback().
       fallback: {
@@ -208,16 +224,26 @@ export function settingsForm(v: NonNullable<SettingsData['values']>): FormState 
         return legacy ? { [prov]: legacy } : {};
       })(),
       headers: headerRows(v.llm?.headers),
-      compatibleMode: v.llm?.compatibleMode === 'hosted' ? 'hosted' : 'local',
+      bodyParams: bodyParamRows(v.llm?.bodyParams),
+      toolCallBodyParams: bodyParamRows(v.llm?.toolCallBodyParams),
+      compatibleMode: compatibleModeOf(v.llm?.compatibleMode),
       reasoning: !!v.llm?.reasoning,
+      reasoningEffort: normalizeReasoningEffort(v.llm?.reasoningEffort),
       toolChoice: v.llm?.toolChoice === 'auto' ? 'auto' : 'required',
       pickerAgent: !!v.llm?.pickerAgent,
+      trackSelection: v.llm?.trackSelection === 'shortlist' ? 'shortlist' : 'agentic',
+      shortlistPasses: typeof v.llm?.shortlistPasses === 'number' ? v.llm.shortlistPasses : SHORTLIST_PASSES_DEFAULT,
+      shortlistSearchPreparation: v.llm?.shortlistSearchPreparation === true,
+      guestMusicalLeanings: v.llm?.guestMusicalLeanings === true,
+      requestMatching: v.llm?.requestMatching === 'direct' ? 'direct' : 'agentic',
+      segmentRuntime: v.llm?.segmentRuntime === 'direct' ? 'direct' : 'agentic',
       // Fallback must track the controller's default (config.ts, 250): a
       // settings.json written before the field existed omits the key, and
       // seeding the OLD default here means opening Settings and saving any
       // LLM field silently persists it over the new one.
       noRepeatWindow: String(typeof v.llm?.noRepeatWindow === 'number' ? v.llm.noRepeatWindow : 250),
       artistVarietyWindow: String(typeof v.llm?.artistVarietyWindow === 'number' ? v.llm.artistVarietyWindow : 5),
+      genreVarietyWindow: String(typeof v.llm?.genreVarietyWindow === 'number' ? v.llm.genreVarietyWindow : 0),
       requestWebResolve: !!v.llm?.requestWebResolve,
       agentTimeoutMs: typeof v.llm?.agentTimeoutMs === 'number' ? v.llm.agentTimeoutMs : 45000,
       pauseWhenEmpty: !!v.llm?.pauseWhenEmpty,
@@ -245,8 +271,12 @@ export function settingsForm(v: NonNullable<SettingsData['values']>): FormState 
           return legacy ? { [prov]: legacy } : {};
         })(),
         headers: headerRows(v.llm?.fallback?.headers),
-        compatibleMode: v.llm?.fallback?.compatibleMode === 'hosted' ? 'hosted' : 'local',
+        bodyParams: bodyParamRows(v.llm?.fallback?.bodyParams),
+        toolCallBodyParams: bodyParamRows(v.llm?.fallback?.toolCallBodyParams),
+        compatibleMode: compatibleModeOf(v.llm?.fallback?.compatibleMode),
         reasoning: !!v.llm?.fallback?.reasoning,
+        reasoningEffort: normalizeReasoningEffort(v.llm?.fallback?.reasoningEffort),
+        toolChoice: v.llm?.fallback?.toolChoice === 'auto' ? 'auto' : 'required',
       },
     },
     search: {
@@ -278,9 +308,16 @@ export function settingsForm(v: NonNullable<SettingsData['values']>): FormState 
       confidenceThreshold: String(v.embedding?.confidenceThreshold ?? 0.35),
       maxActiveLearningRounds: String(v.embedding?.maxActiveLearningRounds ?? 3),
       audioFusionWeight: String(v.embedding?.audioFusionWeight ?? 0.5),
+      audioEnergy: {
+        fillEmpty: v.embedding?.audioEnergy?.fillEmpty === true,
+        overruleLlm: v.embedding?.audioEnergy?.overruleLlm === true,
+      },
       batchSize: String(v.embedding?.batchSize ?? 25),
       enrichment: {
-        lastfmTags: v.embedding?.enrichment?.lastfmTags ?? false,
+        // Unset is auto, never off: loading it as false wrote false on the next
+        // Library save and stopped Last.fm enrichment on a keyed install (#2233).
+        lastfmTags: v.embedding?.enrichment?.lastfmTags ?? null,
+        lastfmTrackTags: v.embedding?.enrichment?.lastfmTrackTags ?? false,
         lyrics: v.embedding?.enrichment?.lyrics ?? true,
       },
     },
@@ -319,6 +356,11 @@ export function settingsForm(v: NonNullable<SettingsData['values']>): FormState 
       influenceDj: !!v.likes?.influenceDj,
       maxTracks: String(v.likes?.maxTracks ?? 10),
       windowDays: String(v.likes?.windowDays ?? 30),
+    },
+    // Off unless the station has said otherwise: the controller's default.
+    lyrics: {
+      enabled: v.lyrics?.enabled === true,
+      lrclib: v.lyrics?.lrclib === true,
     },
   };
 }

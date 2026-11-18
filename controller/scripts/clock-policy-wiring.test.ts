@@ -5,6 +5,7 @@
 // Run: npm test -- clock-policy-wiring
 
 import assert from 'node:assert/strict';
+import { chatCompletionResponse } from './test-utils/llm.js';
 import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -74,14 +75,10 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
         }],
       }
     : { role: 'assistant', content: 'A deterministic fixture link without a spoken time.' };
-  return new Response(JSON.stringify({
-    id: `chatcmpl-${modelRequests.length}`,
-    object: 'chat.completion',
-    created: 1,
-    model: 'fixture-model',
-    choices: [{ index: 0, message, finish_reason: toolCall ? 'tool_calls' : 'stop' }],
-    usage: { prompt_tokens: 10, completion_tokens: 8, total_tokens: 18 },
-  }), { status: 200, headers: { 'content-type': 'application/json' } });
+  return chatCompletionResponse({ id: `chatcmpl-${modelRequests.length}`,
+    message: message,
+    finishReason: toolCall ? 'tool_calls' : 'stop',
+    usage: { prompt_tokens: 10, completion_tokens: 8, total_tokens: 18 } });
 }) as typeof fetch;
 
 after(() => {

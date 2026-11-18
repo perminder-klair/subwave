@@ -3,13 +3,13 @@
 // explicitly rather than importing config.js — cycle-free and tmp-root testable.
 
 import {
-  existsSync, mkdirSync, readdirSync, readFileSync, renameSync,
+  existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync,
   rmSync, unlinkSync, writeFileSync,
 } from 'node:fs';
 import { cp } from 'node:fs/promises';
 import { join, resolve as pathResolve, sep } from 'node:path';
 import {
-  STATION_ID_RE, conversionAction, duplicateAction, parseActivePointer,
+  STATION_ID_RE, conversionAction, conversionLogAction, duplicateAction, parseActivePointer,
 } from './pure.js';
 import { stationCreateSchema, stationRenameSchema } from '../schemas/station.js';
 import { stationCapMessage, uniqueStationId } from '../schemas/station-server.js';
@@ -178,10 +178,17 @@ export function convertToMultiStation(
   mkdirSync(dest, { recursive: true });
   // fs.rename per entry: same filesystem, so never a copy. The just-created
   // stations/ dir classifies as 'keep' and skips itself.
+  // Entries as paths relative to root/dest, so a split logs/ child
+  // (`logs/events-….jsonl`) rolls back through the same list as a whole entry.
   const moved: string[] = [];
   try {
     for (const entry of readdirSync(root)) {
-      if (conversionAction(entry) === 'keep') continue;
+      const action = conversionAction(entry);
+      if (action === 'keep') continue;
+      if (action === 'split') {
+        moveStationLogs(root, dest, entry, renameFn, moved);
+        continue;
+      }
       renameFn(join(root, entry), join(dest, entry));
       moved.push(entry);
     }
@@ -223,6 +230,38 @@ export function convertToMultiStation(
   writeCard(dest, currentName);
   writeActivePointer(root, id);
   return id;
+}
+
+// The split half of conversion (#2349): logs/ itself and liquidsoap's files stay
+// at the root, the station's own history moves into stations/main/logs/. Only a
+// real directory is split; a symlink (an operator parking logs on another disk)
+// or a stray file is left whole at the root. A file on another filesystem
+// (logs/ is its own mount) cannot be renamed, and log history is not worth
+// failing the conversion over, so it stays at the root; any other failure aborts
+// the conversion and rolls back like a whole entry.
+function moveStationLogs(
+  root: string,
+  dest: string,
+  entry: string,
+  renameFn: (src: string, dest: string) => void,
+  moved: string[],
+): void {
+  const src = join(root, entry);
+  if (!lstatSync(src).isDirectory()) return;
+  const names = readdirSync(src).filter(name => conversionLogAction(name) === 'move');
+  if (names.length === 0) return;
+  mkdirSync(join(dest, entry), { recursive: true });
+  for (const name of names) {
+    const rel = join(entry, name);
+    try {
+      renameFn(join(root, rel), join(dest, rel));
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EXDEV') throw err;
+      console.warn(`[stations] conversion: ${rel} is on another filesystem — left at the state root`);
+      continue;
+    }
+    moved.push(rel);
+  }
 }
 
 export async function createStation(root: string, opts: {

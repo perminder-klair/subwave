@@ -32,6 +32,7 @@ export function createStationIdPicker(random = Math.random) {
     const text = candidates.length === 1
       ? candidates[0]
       : candidates[Math.floor(random() * candidates.length)];
+    // Only commit() clears this, so a refused ID's reservation lingers until the next pick overwrites it.
     inFlight.set(persona.id, text);
     return lines.get(text)!;
   };

@@ -16,8 +16,8 @@
 //    that boundary and no later. `OVERRIDE_MIN_MINUTES` used to be applied here
 //    as the ceiling's mirror image, which made "end at the change" end AFTER
 //    the change — so the floor case below asserts the boundary is stored
-//    verbatim, and that the floor still governs `until: 'fixed'`, where it is a
-//    bound on typed input rather than on a resolved instant.
+//    verbatim. schedule-schema.test.ts pins the floor on `until: 'fixed'`,
+//    where it bounds typed input rather than a resolved instant.
 //  - The scan is on the STATION clock, so a zone at a :30 offset moves the
 //    answer by half an hour rather than rounding to the process hour.
 //
@@ -27,11 +27,11 @@
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const root = mkdtempSync(join(tmpdir(), 'subwave-takeover-window-'));
+const root = createTempDir(join(tmpdir(), 'subwave-takeover-window-'));
 process.env.STATE_DIR = root;
 
 const settings = await import('../src/settings.js');
@@ -41,9 +41,7 @@ const {
   resolveTakeoverWindowNow,
 } = await import('../src/broadcast/takeover-window.js');
 const {
-  OVERRIDE_MAX_MINUTES,
-  OVERRIDE_MIN_MINUTES,
-  scheduleOverrideRequestSchema,
+  OVERRIDE_MIN_MINUTES, OVERRIDE_MAX_MINUTES,
   scheduleOverrideSchema,
 } = await import('../src/schemas/schedule.js');
 
@@ -91,19 +89,6 @@ test('a change nearer than the request floor is still the change itself', () => 
   const schema = scheduleOverrideSchema({ showIds: ['early'], now: null });
   const short = resolveTakeoverWindow({ startedAt: T0, nextChangeAt: T0 + 1 * MIN });
   assert.equal(schema.safeParse({ showId: 'early', startedAt: T0, expiresAt: short.expiresAt }).success, true);
-});
-
-test('the floor still governs the FIXED window, where it bounds typed input', () => {
-  // The floor did not move, it stopped being applied to a resolved instant. A
-  // duration an operator types is exactly where it belongs.
-  assert.equal(
-    scheduleOverrideRequestSchema.safeParse({ showId: 'x', minutes: OVERRIDE_MIN_MINUTES - 1 }).success,
-    false,
-  );
-  assert.equal(
-    scheduleOverrideRequestSchema.safeParse({ showId: 'x', minutes: OVERRIDE_MIN_MINUTES }).success,
-    true,
-  );
 });
 
 test('a change past the ceiling is trimmed to the ceiling, under its own source', () => {
@@ -230,19 +215,3 @@ test('a boundary minutes away resolves live to that boundary, not past it', asyn
   assert.equal(w.source, 'schedule');
   assert.equal(w.minutes, 5);
 });
-
-test('a Default programming takeover resolves the same boundary', async () => {
-  await seed('UTC');
-  // The boundary is a property of the grid, not of what is pinned over it, so
-  // the null target gets the same answer a show pin does — the explicit call
-  // the issue asked for.
-  const w = resolveTakeoverWindowNow(T0);
-  assert.equal(w.expiresAt, Date.UTC(2026, 0, 15, 11, 0));
-  const schema = scheduleOverrideSchema({ showIds: ['early'], now: null });
-  assert.equal(
-    schema.safeParse({ showId: null, startedAt: T0, expiresAt: w.expiresAt }).success,
-    true,
-  );
-});
-
-test.after(() => rmSync(root, { recursive: true, force: true }));

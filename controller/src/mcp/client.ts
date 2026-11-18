@@ -135,6 +135,18 @@ export interface QueueBlockResult {
   runsPastShowChange: { at: string; show: string | null; bySec: number } | null;
 }
 
+/** POST /dj/skip. `reason`/`error` are set only when a targeted skip was refused (HTTP 409). */
+export interface SkipResult {
+  ok: boolean;
+  /** The queued pick had to be committed first, and whether it confirmed in time. */
+  pending?: boolean;
+  committed?: boolean;
+  reason?: string;
+  error?: string;
+  /** What now-playing names, on a refusal. */
+  onAirId?: string | null;
+}
+
 export interface SfxPlayResult {
   ok: boolean;
   name: string;
@@ -416,9 +428,21 @@ export class SubwaveClient {
     });
   }
 
-  /** POST /dj/skip — force-end the current track (operator override). */
-  async skipTrack(): Promise<{ ok: boolean }> {
-    return this.call<{ ok: boolean }>("/dj/skip", { method: "POST", admin: true });
+  /**
+   * POST /dj/skip — force-end the current track (operator override). With
+   * `expectId` the skip is targeted: the controller answers 409 rather than
+   * skip when that track is no longer what is on air, returned as `ok: false`
+   * with its reason. Without it, the bare skip sent exactly as before.
+   */
+  async skipTrack(expectId?: string | null): Promise<SkipResult> {
+    if (!expectId) return this.call<SkipResult>("/dj/skip", { method: "POST", admin: true });
+    const body = await this.call<SkipResult>("/dj/skip", {
+      method: "POST",
+      admin: true,
+      body: { expectId },
+      allowStatuses: [409],
+    });
+    return body.reason ? { ...body, ok: false } : body;
   }
 
   /** POST /dj/refresh-playlist — rebuild the fallback auto-playlist now. */

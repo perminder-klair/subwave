@@ -1,6 +1,10 @@
 // Pins the talk slot table and its arbitration (broadcast/talk-scheduler.ts).
 // One per-minute tick over a table of windowed rows: postpone-never-cancel,
 // one talker per minute (#310), and a row yields only to a row that is FIRING.
+// Banter's constants and frequency rung share this table (#1419, #1500).
+// A :15 ident deferred to :19:35 used to cancel the :20 banter chance, costing
+// moderate its whole hour. Idents still count toward the five-minute quiet gap;
+// the window postpones the exchange, and retries keep their opening slot's rung.
 // STATE_DIR is redirected before the first import, hence the dynamic imports.
 
 import test from 'node:test';
@@ -10,13 +14,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 // Types only, erased at build time, so nothing loads before STATE_DIR is set.
 import type { TalkKind, TalkPlan } from '../src/broadcast/talk-scheduler.js';
+import type { PendingTalk } from '../src/broadcast/queue/kinds.js';
 
 const root = mkdtempSync(join(tmpdir(), 'subwave-talk-'));
 process.env.STATE_DIR = root;
 
 const settings = await import('../src/settings.js');
 const {
-  TALK_SLOTS, talkSlot, talkTickPlan, talkSlotPlan, talkGap, talkSlotKey,
+  TALK_SLOTS, talkSlot, talkTickPlan, talkSlotPlan, talkGap, talkSlotKey, talkMinute,
   openMinuteFor, windowEndMinute, canRetry, standDownLine, missedLine,
 } = await import('../src/broadcast/talk-scheduler.js');
 const { BANTER_SLOTS, BANTER_WINDOW_MINUTES, BANTER_MIN_GAP_MS } = await import('../src/broadcast/banter-policy.js');
@@ -40,20 +45,22 @@ const clockAt = (minute: number, second = 0, hour = HOUR) =>
   new Date(2026, 7, 19, hour, minute, second).getTime();
 
 // Drives the planner exactly as scheduler.talkTick does. `feedback` closes the
-// loop: a segment that airs sets the quiet gap for every row after it.
+// loop: a segment that airs sets the quiet gap for every row after it. Minutes
+// are recorded on the station clock, which is the process's unless a test sets
+// a timezone.
 function makeReplay(opts: {
   lastTalkBreakAt?: number;
   feedback?: boolean;
   // A function when the clip's presence has to change mid-hour.
-  pendingTalk?: { kind: string; queuedAt: number } | null
-    | ((now: Date) => { kind: string; queuedAt: number } | null);
+  pendingTalk?: PendingTalk | null
+    | ((now: Date) => PendingTalk | null);
   betweenTracksOnly?: boolean;
   eligible?: (kind: TalkKind, now: Date) => boolean;
   externalSlot?: (kind: TalkKind, now: Date) => string | null;
 } = {}) {
   const fired: Partial<Record<TalkKind, string | null>> = {};
   const logged: Partial<Record<TalkKind, string | null>> = {};
-  const rang: { minute: number; kind: TalkKind; slot: string; air: string }[] = [];
+  const rang: { minute: number; at: Date; kind: TalkKind; slot: string; air: string }[] = [];
   const logs: string[] = [];
   let lastTalkBreakAt = opts.lastTalkBreakAt ?? 0;
   const tick = (now: Date) => {
@@ -82,13 +89,21 @@ function makeReplay(opts: {
         continue;
       }
       fired[plan.kind] = plan.slotKey;
-      rang.push({ minute: now.getMinutes(), kind: plan.kind, slot: plan.slot, air: plan.air });
+      rang.push({ minute: talkMinute(now), at: now, kind: plan.kind, slot: plan.slot, air: plan.air });
       if (opts.feedback) lastTalkBreakAt = now.getTime();
     }
     return plans;
   };
   const hour = (hourOf = HOUR) => { for (let m = 0; m < 60; m++) tick(at(m, hourOf)); };
-  return { tick, hour, rang, logs, minutesOf: (k: TalkKind) => rang.filter(r => r.kind === k).map(r => r.minute) };
+  // One tick a minute from `from`, whatever the host's minute hand reads.
+  const walk = (from: Date, minutes = 60) => {
+    for (let i = 0; i < minutes; i++) tick(new Date(from.getTime() + i * 60_000));
+  };
+  return {
+    tick, hour, walk, rang, logs,
+    minutesOf: (k: TalkKind) => rang.filter(r => r.kind === k).map(r => r.minute),
+    labels: () => rang.map(r => `${r.kind}@${r.minute}`),
+  };
 }
 
 test('a quiet hour is unchanged — every row still fires on the minute its cron did', async () => {
@@ -154,17 +169,26 @@ test('the table carries real windows and real gaps, banter widest', () => {
   assert.ok(talkSlot('banter').priority < talkSlot('station-id').priority);
 });
 
-test('per-row air mode and clock survive the merge', () => {
+test('the quiet gap is 5 minutes, and the window is deliberately twice it', () => {
+  assert.equal(BANTER_MIN_GAP_MS, 5 * 60_000);
+  // A talk break landing anywhere in the 5 minutes before the slot opens clears
+  // by the halfway point, leaving the rest of the window to render a
+  // multi-voice exchange and still finish clear of the next slot.
+  assert.equal(BANTER_WINDOW_MINUTES, 2 * (BANTER_MIN_GAP_MS / 60_000));
+  // Both windows close before the hour does, which is what lets a slot be keyed
+  // by wall-clock hour rather than by a rolling timer.
+  for (const slot of BANTER_SLOTS) assert.ok(slot + BANTER_WINDOW_MINUTES <= 60);
+});
+
+test('per-row air mode survives the merge, and no row keeps its own clock', () => {
   // An ident defers to the next track boundary; everything else airs immediately.
   assert.equal(talkSlot('station-id').air, 'next-track');
   for (const kind of ['hourly', 'banter', 'programme'] as TalkKind[]) {
     assert.equal(talkSlot(kind).air, 'immediate', `${kind} must air immediately`);
   }
-  // Slot minutes are process time; programme beats are a station-zone fact.
-  assert.equal(talkSlot('programme').clock, 'station');
-  for (const kind of ['hourly', 'banter', 'station-id'] as TalkKind[]) {
-    assert.equal(talkSlot(kind).clock, 'process', `${kind} slots are process minutes`);
-  }
+  // Every row reads the station clock (#2254), so the per-row label is gone
+  // rather than left to say something nothing reads.
+  for (const row of TALK_SLOTS) assert.ok(!('clock' in row), `${row.kind} still carries a clock label`);
 });
 
 test('a disrupted hour postpones every row instead of dropping it', async () => {
@@ -369,6 +393,19 @@ test('a segment waiting for a track boundary holds every gap-gated row', () => {
   const after = makeReplay({ eligible: kind => kind === 'banter' });
   after.tick(at(21));
   assert.deepEqual(after.minutesOf('banter'), [21]);
+});
+
+test('a cron claim that has not rendered yet holds the row, and says it is being written', () => {
+  // A cron fire claims the boundary before it generates (#2259); talkTick passes
+  // the claim as pending speech marked `generating`. Same hold, honest wording.
+  const r = makeReplay({
+    pendingTalk: { kind: 'news', queuedAt: clockAt(15), generating: true },
+    eligible: kind => kind === 'banter',
+  });
+  r.tick(at(20));
+  assert.deepEqual(r.minutesOf('banter'), [], 'a claimed boundary is still taken');
+  assert.equal(r.logs.length, 1);
+  assert.match(r.logs[0], /^\[banter\] stood down at :20 — a news is being written for the next track boundary \(retrying until :29\)$/);
 });
 
 test('a pending segment fresh enough to outlast a window holds it — and says so', () => {
@@ -591,6 +628,31 @@ test('a row with no gap ignores in-flight talk, because it has opted out of the 
   assert.deepEqual(r.minutesOf('programme'), [55]);
 });
 
+test('the frequency ladder is unchanged, and reads the slot rather than the minute', async () => {
+  await station('quiet');
+  // Quiet never auto-banters anywhere in either window.
+  for (const m of [20, 24, 29, 50, 59]) assert.equal(shouldFire('banter', at(m)), false);
+
+  await station('moderate');
+  // One an hour: the :20 slot only, but now with its full retry tail.
+  for (let i = 0; i < BANTER_WINDOW_MINUTES; i++) {
+    assert.equal(shouldFire('banter', at(20 + i)), true, `moderate should retry at :${20 + i}`);
+  }
+  for (const m of [50, 55, 59]) assert.equal(shouldFire('banter', at(m)), false);
+
+  for (const f of ['chatty', 'aggressive']) {
+    await station(f);
+    for (const m of [20, 25, 29, 50, 55, 59]) {
+      assert.equal(shouldFire('banter', at(m)), true, `${f} should fire at :${m}`);
+    }
+    // Outside the windows nothing fires, whatever the rung. :00 stays the
+    // hourly check's and :15/:30/:45 stay the idents' opening minutes (#310).
+    for (const m of [0, 15, 19, 30, 45, 49]) {
+      assert.equal(shouldFire('banter', at(m)), false, `${f} must not fire at :${m}`);
+    }
+  }
+});
+
 test('the ident rung reads the slot, so every retry minute keeps its chance', async () => {
   // `[15,30,45].includes(m)` would answer false for :18 and cancel every retry.
   const window = (open: number) => Array.from({ length: talkSlot('station-id').windowMinutes }, (_, i) => open + i);
@@ -730,11 +792,7 @@ test('policy is asked only for a row that is open and unfired', () => {
   // slot window may reach. The segment director's stride skips :12.
   assert.deepEqual(asked, ['jingle'],
     'the only row a minute inside no slot window may reach is the one with no window');
-  // :15 opens the ident row, and a slot row wanting the minute stops the
-  // filler's gates being asked at all (see the fill-row tests).
-  asked.length = 0;
-  r.tick(at(15));
-  assert.deepEqual(asked, ['station-id']);
+  r.tick(at(15)); // Claim the ident slot before repeating its tick below.
   // The claim is per ROW, not per minute. node-cron fires a minute once, so a
   // repeat tick is only ever the shape of the claim.
   asked.length = 0;
@@ -905,6 +963,142 @@ test('one talker per minute survives the switch — the loser waits, it does not
   r.tick(at(20));
   assert.deepEqual(r.rang.map(x => `${x.kind}@${x.minute}`), ['banter@20']);
   assert.match(r.logs[0], /^\[station-id\] stood down at :15 — banter took the minute \(retrying until :24\)$/);
+});
+
+// A station a fractional number of hours from its host (#2254). The rows used
+// to open on process minutes, so an IST station on a UTC host heard its "top of
+// the hour" check at station :30 and an ident on its own :00.
+async function onStationClock(fn: () => void | Promise<void>, zone = 'Asia/Kolkata', host = 'UTC') {
+  const prevTz = process.env.TZ;
+  process.env.TZ = host;
+  await settings.update({ timezone: zone });
+  try {
+    await fn();
+  } finally {
+    await settings.update({ timezone: '' });
+    if (prevTz === undefined) delete process.env.TZ;
+    else process.env.TZ = prevTz;
+  }
+}
+
+const utcAt = (h: number, m: number, s = 0) => new Date(Date.UTC(2026, 7, 19, h, m, s));
+const MINUTE = 60_000;
+
+// The instant the station's clock reads 10:00 on 2026-08-19.
+function stationTen(): Date {
+  for (let t = utcAt(0, 0).getTime(); t < utcAt(0, 0).getTime() + 24 * 60 * MINUTE; t += MINUTE) {
+    const { day, hour, minute } = zonedParts(new Date(t));
+    if (day === 19 && hour === 10 && minute === 0) return new Date(t);
+  }
+  throw new Error('no station 10:00 on 2026-08-19');
+}
+
+const GATED: Partial<Record<TalkKind, string>> = { hourly: 'hourly', 'station-id': 'stationId', banter: 'banter' };
+const gated = (kind: TalkKind, now: Date) => !!GATED[kind] && shouldFire(GATED[kind], now);
+
+test('a fractional-offset station opens the hourly check, idents and banter on its own clock', async () => {
+  const cases = [
+    { zone: 'Asia/Kolkata', host: 'UTC', hostMinute: 30 },
+    { zone: 'Asia/Kathmandu', host: 'UTC', hostMinute: 15 },
+    { zone: 'America/St_Johns', host: 'UTC', hostMinute: 30 },     // -2:30 in August
+    { zone: 'Europe/London', host: 'Asia/Kolkata', hostMinute: 30 }, // the reverse
+  ];
+  for (const { zone, host, hostMinute } of cases) {
+    await onStationClock(async () => {
+      await station('chatty');
+      const ten = stationTen();
+      assert.equal(ten.getMinutes(), hostMinute, `${zone} on ${host}: the host's minute hand at station 10:00`);
+      const r = makeReplay({ eligible: gated });
+      r.walk(ten);
+      assert.deepEqual(
+        r.labels(),
+        ['hourly@0', 'station-id@15', 'banter@20', 'station-id@30', 'station-id@45', 'banter@50'],
+        `${zone} on ${host}: the table's minutes are the station's`,
+      );
+      // One fire per STATION hour: the key names the station's 10 o'clock.
+      assert.equal(talkSlotKey('hourly', ten, '0'), 'hourly-2026-8-19-10-0');
+      assert.equal(talkSlotKey('hourly', new Date(ten.getTime() + 59 * MINUTE), '0'), 'hourly-2026-8-19-10-0');
+    }, zone, host);
+  }
+});
+
+test("a fractional-offset station's frequency ladder asks per station slot", async () => {
+  await onStationClock(async () => {
+    await station('moderate');
+    // IST 10:15 is UTC 04:45; IST 10:30 is UTC 05:00.
+    assert.equal(shouldFire('stationId', utcAt(4, 45)), true, 'the :15 ident is a moderate chance');
+    assert.equal(shouldFire('stationId', utcAt(4, 48)), true, 'a retry at :18 still reads as the :15 chance');
+    assert.equal(shouldFire('stationId', utcAt(5, 0)), false, "the :30 ident is chatty's, though it is the host's :00");
+    assert.equal(shouldFire('banter', utcAt(4, 50)), true, 'banter at station :20');
+    assert.equal(shouldFire('banter', utcAt(5, 20)), false, 'station :50 is not a moderate banter slot');
+  });
+});
+
+test("the segment director's five-minute stride lands on the same ticks on either clock", async () => {
+  await onStationClock(async () => {
+    const r = makeReplay({ eligible: kind => kind === 'segment' });
+    r.walk(utcAt(4, 15));  // Kathmandu 10:00
+    assert.deepEqual(r.labels(), Array.from({ length: 12 }, (_, i) => `segment@${i * 5}`));
+  }, 'Asia/Kathmandu');
+});
+
+// A DST fall-back repeats the station hour and every slot key in it, and a row
+// skips the slot it fired last. So a row with one slot an hour airs once across
+// both passes, and a row with several slots airs each of them again. London on
+// a UTC host used to hear the hourly check in both 01:00 hours, on the host's
+// unrepeated keys; it now hears it once, like London on a London host always
+// did (#2254).
+test('a DST fall-back airs a one-slot-an-hour row once across both passes', async () => {
+  // 2026-10-25: London 02:00 BST falls back to 01:00 GMT at UTC 01:00, so
+  // UTC 00:00-01:59 is London's 01:00 hour twice.
+  const firstPass = new Date(Date.UTC(2026, 9, 25, 0, 0));
+  const expected: Record<string, string[]> = {
+    chatty: [
+      'hourly@00:00', 'station-id@00:15', 'banter@00:20', 'station-id@00:30', 'station-id@00:45', 'banter@00:50',
+      'station-id@01:15', 'banter@01:20', 'station-id@01:30', 'station-id@01:45', 'banter@01:50',
+    ],
+    // Banter's one moderate slot, :20, airs once; the :15/:45 idents twice.
+    moderate: [
+      'hourly@00:00', 'station-id@00:15', 'banter@00:20', 'station-id@00:45',
+      'station-id@01:15', 'station-id@01:45',
+    ],
+    // The quiet rung's one ident, at :45, airs once (its hourly check runs
+    // every other station hour, so it is left out here).
+    quiet: ['station-id@00:45'],
+  };
+  for (const host of ['UTC', 'Europe/London']) {
+    await onStationClock(async () => {
+      assert.equal(zonedParts(firstPass).hour, 1);
+      assert.equal(zonedParts(new Date(firstPass.getTime() + 60 * MINUTE)).hour, 1, 'the hour repeats');
+      for (const [frequency, want] of Object.entries(expected)) {
+        await station(frequency);
+        const r = makeReplay({ eligible: (kind, now) => (frequency !== 'quiet' || kind !== 'hourly') && gated(kind, now) });
+        r.walk(firstPass, 120);
+        assert.deepEqual(
+          r.rang.map(x => `${x.kind}@${x.at.toISOString().slice(11, 16)}`),
+          want,
+          `${frequency} London station on a ${host} host`,
+        );
+      }
+    }, 'Europe/London', host);
+  }
+});
+
+test("the pending-clip hold measures the window's close on the station clock", async () => {
+  await onStationClock(async () => {
+    // IST 10:20 is UTC 04:50: the :15 ident window has five station minutes
+    // left (it closes at 10:25). On the host's clock :50 is past :24, which
+    // read as no time left and held the row for any live clip.
+    const now = utcAt(4, 50);
+    const row = talkSlot('station-id');
+    const plan = (validForMs: number) => talkSlotPlan(row, {
+      now, lastTalkBreakAt: 0,
+      pendingTalk: { kind: 'banter', queuedAt: now.getTime() - (PENDING_VOICE_MAX_AGE_MS - validForMs) },
+      eligible: () => true, externalSlot: () => null, fired: {}, logged: {},
+    });
+    assert.equal(plan(4 * MINUTE)?.act, 'fire', 'a clip the queue drops before the window closes does not hold it');
+    assert.equal(plan(6 * MINUTE)?.act, 'wait', 'a clip that outlives the window holds it');
+  });
 });
 
 test.after(() => rmSync(root, { recursive: true, force: true }));

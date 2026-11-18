@@ -13,10 +13,12 @@
 
 import type { SessionContext } from '../src/broadcast/session.js';
 import assert from 'node:assert/strict';
+import { chatCompletionResponse } from './test-utils/llm.js';
 import test, { after } from 'node:test';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const root = await mkdtemp(join(tmpdir(), 'subwave-programme-feature-kind-'));
 process.env.STATE_DIR = root;
@@ -27,7 +29,7 @@ const { queue } = await import('../src/broadcast/queue.js');
 const registry = await import('../src/skills/registry.js');
 const { getFullContext } = await import('../src/context.js');
 const { narrowPlanKinds } = await import('../src/llm/internal/prompts/programme.js');
-after(() => rm(root, { recursive: true, force: true }));
+after(() => removeTempDir(root));
 await settings.load();
 
 test('narrowPlanKinds nulls any kind outside the offered menu', () => {
@@ -39,11 +41,9 @@ test('narrowPlanKinds nulls any kind outside the offered menu', () => {
 });
 
 function fixtureFetch(): Response {
-  return new Response(JSON.stringify({
-    id: 'fixture', object: 'chat.completion', created: 1, model: 'fixture-model',
-    choices: [{ index: 0, message: { role: 'assistant', content: 'A straight-talk feature line.' }, finish_reason: 'stop' }],
-    usage: { prompt_tokens: 10, completion_tokens: 8, total_tokens: 18 },
-  }), { headers: { 'content-type': 'application/json' } });
+  return chatCompletionResponse({ id: 'fixture',
+    message: { role: 'assistant', content: 'A straight-talk feature line.' },
+    usage: { prompt_tokens: 10, completion_tokens: 8, total_tokens: 18 } });
 }
 
 const weekFor = (id: string) => Object.fromEntries(Array.from({ length: 7 }, (_, day) => [day, Array(24).fill(id)]));

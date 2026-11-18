@@ -38,6 +38,14 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.caddy
+      # No build attestations: BuildKit stamps each one fresh, and with the
+      # containerd image store that gives an unchanged, fully cached image a
+      # NEW id on every build. \`up -d --build controller\` rebuilds broadcast
+      # as a dependency, so the new id recreated the mixer and dropped every
+      # listener on a controller-only deploy. Published images keep theirs
+      # (publish-images.yml builds separately).
+      provenance: false
+      sbom: false
     container_name: sub-wave-caddy
     restart: unless-stopped
     logging: *default-logging
@@ -66,6 +74,8 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.broadcast
+      provenance: false
+      sbom: false
     container_name: sub-wave-broadcast
     restart: unless-stopped
     logging: *default-logging
@@ -115,11 +125,16 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.controller
+      provenance: false
+      sbom: false
       args:
         # Version reported by the controller; unset → controller/package.json.
         - SUBWAVE_BUILD_VERSION=\${SUBWAVE_BUILD_VERSION:-}
     container_name: sub-wave-controller
     restart: unless-stopped
+    # tini as PID 1: reaps orphans (a health-check curl killed on timeout, a
+    # \`docker exec … tsx\` helper) that Node would leave as zombies.
+    init: true
     logging: *default-logging
     depends_on:
       broadcast:
@@ -132,11 +147,14 @@ services:
       # Enables the production-only admin gate (refuses to boot without
       # ADMIN_USER + ADMIN_PASS).
       - NODE_ENV=production
-      # Schedule slots are day-of-week + hour via date.getHours(); without TZ
-      # the container runs UTC and fires shows an hour early during BST.
+      # Schedule slots follow the station timezone (Settings, \`timezone\`);
+      # left on Auto they follow this TZ, and without it the container runs
+      # UTC and fires shows an hour early during BST.
       - TZ=\${TZ:-Europe/London}
       - STATE_DIR=/var/sub-wave
       - SOUNDS_DIR=/sounds
+      # Maintainer-only, hidden Discovery Bench. Empty keeps its routes disabled.
+      - SUBWAVE_DISCOVERY_BENCH=\${SUBWAVE_DISCOVERY_BENCH:-}
       # Container path of the STEMS_DIR bind mount above — empty when the
       # operator did not relocate, which keeps the cache under the state dir
       # exactly as before. Named apart from STEMS_DIR on purpose: that one is a
@@ -192,6 +210,8 @@ services:
     build:
       context: .
       dockerfile: web/Dockerfile
+      provenance: false
+      sbom: false
       args:
         # Source builds only — absolute URLs render off the RUNTIME env below.
         - SITE_URL=\${SITE_URL:-}
@@ -201,6 +221,8 @@ services:
         - SUBWAVE_BUILD_VERSION=\${SUBWAVE_BUILD_VERSION:-}
     container_name: sub-wave-web
     restart: unless-stopped
+    # tini as PID 1, as on the controller: reaps orphaned children.
+    init: true
     logging: *default-logging
     depends_on:
       # The homepage renders per-request against the controller — starting web
@@ -210,6 +232,7 @@ services:
     environment:
       - NODE_ENV=production
       - SUBWAVE_HOMEPAGE=\${SUBWAVE_HOMEPAGE:-player}
+      - SUBWAVE_DISCOVERY_BENCH=\${SUBWAVE_DISCOVERY_BENCH:-}
       - SUBWAVE_DJ_BRAIN_ENABLED=\${SUBWAVE_DJ_BRAIN_ENABLED:-false}
       # RUNTIME source of truth for absolute URLs (canonicals, og:url,
       # robots.txt, sitemap.xml) — the generic image serves any domain.
@@ -236,6 +259,8 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.tts-heavy
+      provenance: false
+      sbom: false
       args:
         # GPU opt-in (source build only): point at a CUDA wheel index and layer
         # on docker-compose.tts-heavy-gpu.yml. See docs/gpu-tts.md.
@@ -278,6 +303,11 @@ services:
       # The local (AIO) chatterbox path already honoured this; forwarding it
       # here is what makes the sidecar agree (#1591).
       - CHATTERBOX_REFERENCE_WAV=\${CHATTERBOX_REFERENCE_WAV:-}
+      # On-air level of each engine's clips: the linear RMS a clip is
+      # normalised to before the soft limiter. Read by the workers, which
+      # inherit this env; empty keeps each worker's own default.
+      - CHATTERBOX_TARGET_RMS=\${CHATTERBOX_TARGET_RMS:-}
+      - POCKET_TTS_TARGET_RMS=\${POCKET_TTS_TARGET_RMS:-}
       # Optional — PocketTTS voice CLONING (#238): the cloning weights are
       # gated on HF; accept the terms at huggingface.co/kyutai/pocket-tts and
       # set HF_TOKEN. Without it, cloned .wav voices revert to a built-in.
@@ -310,6 +340,8 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.analyzer
+      provenance: false
+      sbom: false
       args:
         # Local build mirrors the pulled image: lean unless ANALYZER_HEAVY set.
         WITH_CLAP: \${ANALYZER_HEAVY:+1}
@@ -345,8 +377,12 @@ services:
       - CLAP_MODEL_PATH=\${CLAP_MODEL_PATH:-}
       # Demucs model + analysis-window overrides (see .env.example).
       - DEMUCS_MODEL=\${DEMUCS_MODEL:-}
+      - DEMUCS_OVERLAP=\${DEMUCS_OVERLAP:-}
       - ANALYZE_SECONDS=\${ANALYZE_SECONDS:-}
       - ANALYZE_CONCURRENCY=\${ANALYZE_CONCURRENCY:-}
+      # Whole-file facets (loudness v2, edges): their own lane width on this host.
+      - ANALYZE_WHOLE_FILE_CONCURRENCY=\${ANALYZE_WHOLE_FILE_CONCURRENCY:-}
+      - ANALYZE_WHOLE_FILE_TIMEOUT_S=\${ANALYZE_WHOLE_FILE_TIMEOUT_S:-}
       - ANALYZE_CLAP_WINDOWS=\${ANALYZE_CLAP_WINDOWS:-}
       - ANALYZE_OUTRO_SECONDS=\${ANALYZE_OUTRO_SECONDS:-}
       # CLAP isn't gated, but anonymous HF downloads are rate-limited. Same var
@@ -387,6 +423,13 @@ export const COMPOSE_BYO_YML = `# SUB/WAVE — production without the bundled re
 # Split hostnames need a web rebuild with NEXT_PUBLIC_API_URL /
 # NEXT_PUBLIC_STREAM_URL (baked at build time).
 #
+# On /stream*, drop WWW-Authenticate from the response when the request has an
+# \`auth\` query parameter, or Sec-Fetch-Dest: audio|video with Sec-Fetch-Site:
+# same-origin, and ONLY then. Browsers answer Icecast's 401 challenge with a native
+# dialog over the whole player, but ffmpeg, mpv and GStreamer send \`user:pass@\` only
+# once challenged, so a blanket strip locks them out. docs/reverse-proxy.md has the
+# recipes.
+#
 # Block /api/listener-auth at your proxy: it is Icecast's URL-auth callback and
 # answers 200/401 on the shared privacy.password, so routing it hands the
 # internet a password oracle (#478). Icecast reaches the controller directly
@@ -421,6 +464,14 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.broadcast
+      # No build attestations: BuildKit stamps each one fresh, and with the
+      # containerd image store that gives an unchanged, fully cached image a
+      # NEW id on every build. \`up -d --build controller\` rebuilds broadcast
+      # as a dependency, so the new id recreated the mixer and dropped every
+      # listener on a controller-only deploy. Published images keep theirs
+      # (publish-images.yml builds separately).
+      provenance: false
+      sbom: false
     container_name: sub-wave-broadcast
     restart: unless-stopped
     logging: *default-logging
@@ -464,11 +515,16 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.controller
+      provenance: false
+      sbom: false
       args:
         # Version reported by the controller; unset → controller/package.json.
         - SUBWAVE_BUILD_VERSION=\${SUBWAVE_BUILD_VERSION:-}
     container_name: sub-wave-controller
     restart: unless-stopped
+    # tini as PID 1: reaps orphans (a health-check curl killed on timeout, a
+    # \`docker exec … tsx\` helper) that Node would leave as zombies.
+    init: true
     logging: *default-logging
     depends_on:
       broadcast:
@@ -482,6 +538,8 @@ services:
       - TZ=\${TZ:-Europe/London}
       - STATE_DIR=/var/sub-wave
       - SOUNDS_DIR=/sounds
+      # Maintainer-only, hidden Discovery Bench. Empty keeps its routes disabled.
+      - SUBWAVE_DISCOVERY_BENCH=\${SUBWAVE_DISCOVERY_BENCH:-}
       # Container path of the STEMS_DIR bind mount above — empty when the
       # operator did not relocate, which keeps the cache under the state dir
       # exactly as before. Named apart from STEMS_DIR on purpose: that one is a
@@ -537,6 +595,8 @@ services:
     build:
       context: .
       dockerfile: web/Dockerfile
+      provenance: false
+      sbom: false
       args:
         - SITE_URL=\${SITE_URL:-}
         - NEXT_PUBLIC_GA_ID=\${NEXT_PUBLIC_GA_ID:-}
@@ -544,6 +604,8 @@ services:
         - SUBWAVE_BUILD_VERSION=\${SUBWAVE_BUILD_VERSION:-}
     container_name: sub-wave-web
     restart: unless-stopped
+    # tini as PID 1, as on the controller: reaps orphaned children.
+    init: true
     logging: *default-logging
     depends_on:
       # The homepage renders per-request against the controller — starting web
@@ -553,6 +615,7 @@ services:
     environment:
       - NODE_ENV=production
       - SUBWAVE_HOMEPAGE=\${SUBWAVE_HOMEPAGE:-player}
+      - SUBWAVE_DISCOVERY_BENCH=\${SUBWAVE_DISCOVERY_BENCH:-}
       - SUBWAVE_DJ_BRAIN_ENABLED=\${SUBWAVE_DJ_BRAIN_ENABLED:-false}
       - SITE_URL=\${SITE_URL:-}
       # Set to 1 to keep the shared product pages (landing, docs, news,
@@ -578,6 +641,8 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.tts-heavy
+      provenance: false
+      sbom: false
       args:
         # GPU opt-in (source build only) — see docs/gpu-tts.md.
         CHATTERBOX_TORCH_INDEX_URL: \${CHATTERBOX_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
@@ -609,6 +674,9 @@ services:
       # Fallback Chatterbox reference WAV when a line has no persona voice of
       # its own — a path inside this container (see docker-compose.yml).
       - CHATTERBOX_REFERENCE_WAV=\${CHATTERBOX_REFERENCE_WAV:-}
+      # On-air level targets (linear RMS); empty keeps each worker's default.
+      - CHATTERBOX_TARGET_RMS=\${CHATTERBOX_TARGET_RMS:-}
+      - POCKET_TTS_TARGET_RMS=\${POCKET_TTS_TARGET_RMS:-}
       # Optional — PocketTTS voice cloning (#238): accept the terms at
       # huggingface.co/kyutai/pocket-tts and set HF_TOKEN.
       - HF_TOKEN=\${HF_TOKEN:-}
@@ -638,6 +706,8 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.analyzer
+      provenance: false
+      sbom: false
       args:
         # Local build mirrors the pulled image: lean unless ANALYZER_HEAVY set.
         WITH_CLAP: \${ANALYZER_HEAVY:+1}
@@ -670,8 +740,12 @@ services:
       - CLAP_MODEL_PATH=\${CLAP_MODEL_PATH:-}
       # Demucs model + analysis-window overrides (see .env.example).
       - DEMUCS_MODEL=\${DEMUCS_MODEL:-}
+      - DEMUCS_OVERLAP=\${DEMUCS_OVERLAP:-}
       - ANALYZE_SECONDS=\${ANALYZE_SECONDS:-}
       - ANALYZE_CONCURRENCY=\${ANALYZE_CONCURRENCY:-}
+      # Whole-file facets (loudness v2, edges): their own lane width on this host.
+      - ANALYZE_WHOLE_FILE_CONCURRENCY=\${ANALYZE_WHOLE_FILE_CONCURRENCY:-}
+      - ANALYZE_WHOLE_FILE_TIMEOUT_S=\${ANALYZE_WHOLE_FILE_TIMEOUT_S:-}
       - ANALYZE_CLAP_WINDOWS=\${ANALYZE_CLAP_WINDOWS:-}
       - ANALYZE_OUTRO_SECONDS=\${ANALYZE_OUTRO_SECONDS:-}
       # Anonymous HF downloads are rate-limited; same var as tts-heavy.
@@ -688,7 +762,7 @@ volumes:
 `;
 
 // docker-compose.dev.yml
-export const COMPOSE_DEV_YML = `# SUB/WAVE — dev compose (local smoke test): Broadcast + Controller only.
+export const COMPOSE_DEV_YML = `# SUB/WAVE — dev compose (local smoke test): Broadcast, Controller, analyzer and docker-socket-proxy.
 # The Next.js UI runs separately via \`cd web && npm run dev\` for hot reload.
 # State + sounds + radio.liq are bind-mounted so dev cycles need no rebuilds.
 
@@ -717,6 +791,14 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.broadcast
+      # No build attestations: BuildKit stamps each one fresh, and with the
+      # containerd image store that gives an unchanged, fully cached image a
+      # NEW id on every build. \`up -d --build controller\` rebuilds broadcast
+      # as a dependency, so the new id recreated the mixer and dropped every
+      # listener on a controller-only deploy. Published images keep theirs
+      # (publish-images.yml builds separately).
+      provenance: false
+      sbom: false
     # No \`platform:\` pin. On Apple Silicon, forcing linux/amd64 routes
     # liquidsoap through emulation where clock_nanosleep fails
     # (\`Unix.Unix_error(EUNKNOWNERR 0)\`) — the clock loop dies on every boot
@@ -770,6 +852,8 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.controller
+      provenance: false
+      sbom: false
       args:
         # Version reported by the controller; unset → controller/package.json.
         # The dev web UI resolves its own via \`git describe\` (next.config.js).
@@ -777,6 +861,9 @@ services:
     platform: linux/amd64
     container_name: sub-wave-controller
     restart: unless-stopped
+    # tini as PID 1: reaps orphans (a health-check curl killed on timeout, a
+    # \`docker exec … tsx\` helper) that Node would leave as zombies.
+    init: true
     logging: *default-logging
     depends_on:
       broadcast:
@@ -789,6 +876,8 @@ services:
       - TZ=\${TZ:-Europe/London}
       - STATE_DIR=/var/sub-wave
       - SOUNDS_DIR=/sounds
+      # Maintainer-only, hidden Discovery Bench. Empty keeps its routes disabled.
+      - SUBWAVE_DISCOVERY_BENCH=\${SUBWAVE_DISCOVERY_BENCH:-}
       # Container path of the STEMS_DIR bind mount above — empty when the
       # operator did not relocate, which keeps the cache under the state dir
       # exactly as before. Named apart from STEMS_DIR on purpose: that one is a
@@ -856,6 +945,8 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.tts-heavy
+      provenance: false
+      sbom: false
       args:
         # GPU opt-in (source build only) — see docs/gpu-tts.md.
         CHATTERBOX_TORCH_INDEX_URL: \${CHATTERBOX_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
@@ -886,6 +977,9 @@ services:
       # Fallback Chatterbox reference WAV when a line has no persona voice of
       # its own — a path inside this container (see docker-compose.yml).
       - CHATTERBOX_REFERENCE_WAV=\${CHATTERBOX_REFERENCE_WAV:-}
+      # On-air level targets (linear RMS); empty keeps each worker's default.
+      - CHATTERBOX_TARGET_RMS=\${CHATTERBOX_TARGET_RMS:-}
+      - POCKET_TTS_TARGET_RMS=\${POCKET_TTS_TARGET_RMS:-}
       # Optional — PocketTTS voice cloning (#238); weights gated on HF.
       - HF_TOKEN=\${HF_TOKEN:-}
     volumes:
@@ -913,6 +1007,8 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.analyzer
+      provenance: false
+      sbom: false
       args:
         # Local build mirrors the pulled image: lean unless ANALYZER_HEAVY set.
         WITH_CLAP: \${ANALYZER_HEAVY:+1}
@@ -943,8 +1039,12 @@ services:
       - CLAP_MODEL_PATH=\${CLAP_MODEL_PATH:-}
       # Demucs model + analysis-window overrides (see .env.example).
       - DEMUCS_MODEL=\${DEMUCS_MODEL:-}
+      - DEMUCS_OVERLAP=\${DEMUCS_OVERLAP:-}
       - ANALYZE_SECONDS=\${ANALYZE_SECONDS:-}
       - ANALYZE_CONCURRENCY=\${ANALYZE_CONCURRENCY:-}
+      # Whole-file facets (loudness v2, edges): their own lane width on this host.
+      - ANALYZE_WHOLE_FILE_CONCURRENCY=\${ANALYZE_WHOLE_FILE_CONCURRENCY:-}
+      - ANALYZE_WHOLE_FILE_TIMEOUT_S=\${ANALYZE_WHOLE_FILE_TIMEOUT_S:-}
       - ANALYZE_CLAP_WINDOWS=\${ANALYZE_CLAP_WINDOWS:-}
       - ANALYZE_OUTRO_SECONDS=\${ANALYZE_OUTRO_SECONDS:-}
       # Anonymous HF downloads are rate-limited; same var as tts-heavy.
@@ -1016,20 +1116,30 @@ export const COMPOSE_ANALYZER_GPU_YML = `# GPU opt-in overlay for the analyzer �
 #   docker compose -f docker-compose.yml -f docker-compose.analyzer-gpu.yml up -d
 #   (BYO hosts: swap in docker-compose.byo.yml.)
 #
-# Requirements: NVIDIA driver + Container Toolkit only (cu124 wheels vendor the
+# Requirements: NVIDIA driver + Container Toolkit only (cu128 wheels vendor the
 # CUDA runtime). The worker picks the device itself (ANALYZE_DEVICE=auto: cuda
-# when torch sees a GPU, else cpu with a warning — a misconfigured host
-# degrades, not fails). ANALYZE_DEVICE=cpu in .env forces CPU without dropping
-# the overlay.
+# when torch sees a GPU and a test op runs on it, else cpu with a warning — a
+# misconfigured host, or a card this build has no kernels for, degrades, not
+# fails). An explicit ANALYZE_DEVICE=cuda falls back the same way, and
+# ANALYZE_DEVICE=cpu in .env forces CPU without dropping the overlay.
 #
 # After ~5 idle minutes the worker drops its models out of VRAM so a
 # co-resident TTS/LLM gets the card back (ANALYZE_IDLE_UNLOAD_S tunes it;
 # 0 keeps them resident). A few hundred MB of CUDA context remain until the
 # container stops.
+#
+# The image is built once per torch wheel (#2280). Unset, ANALYZER_CUDA_TAG
+# follows SUBWAVE_VERSION like every other image: the cu128 build, for Turing
+# (RTX 20-series, GTX 16-series) and newer. An older card needs the cu124
+# build: set ANALYZER_CUDA_TAG in .env to its architecture tag (maxwell,
+# pascal or volta), or to <version>-cu124 to pin a release. The tag table is in
+# docs/internals/infrastructure.md (#aio-cuda-tags).
 services:
   analyzer:
-    image: ghcr.io/perminder-klair/subwave-analyzer-cuda:\${SUBWAVE_VERSION:-latest}
-    # Local build with this overlay applied mirrors the published cuda image.
+    image: ghcr.io/perminder-klair/subwave-analyzer-cuda:\${ANALYZER_CUDA_TAG:-\${SUBWAVE_VERSION:-latest}}
+    # Local build with this overlay applied mirrors the published cu128 image,
+    # whatever ANALYZER_CUDA_TAG says; for the cu124 one, build with
+    # --build-arg TORCH_CUDA=cu124.
     build:
       args:
         WITH_CLAP: 1
@@ -1108,6 +1218,14 @@ SITE_URL=
 # semver (e.g. 0.35.0 or 0.35), plus \`latest\`.
 # SUBWAVE_VERSION=latest
 
+# The CUDA analyzer's tag, read only by docker-compose.analyzer-gpu.yml. Unset
+# follows SUBWAVE_VERSION: the cu128 build, for Turing (RTX 20-series, GTX
+# 16-series) and newer. A Maxwell, Pascal (GTX 10-series) or Volta card needs
+# the cu124 build: set its architecture tag, which moves with each release, or
+# <version>-cu124 to pin one (\`subwave update\` does not move that pin). Tags:
+# docs/internals/infrastructure.md#aio-cuda-tags.
+# ANALYZER_CUDA_TAG=pascal
+
 # ───────── Ports (byo-proxy compose only) ─────────
 # CADDY_PORT=7700
 # WEB_PORT=7700
@@ -1170,6 +1288,16 @@ SITE_URL=
 # directly lets a single spoofed header defeat every limit listed above.
 # TRUST_CF_CONNECTING_IP=1
 
+# The admin brute-force lockout: ten DIFFERENT wrong passwords lock sign-in for
+# 15 minutes, and the right password is refused until it lifts. A client
+# re-sending one old password counts once, so a forgotten tab can't trip it.
+# The lock is held in memory: \`docker compose restart controller\` clears it now.
+#
+# Set this to turn the lockout off altogether, on a station that can't be reached
+# from the internet. Nothing then limits password guesses, so ADMIN_PASS alone
+# guards the admin API. Compose reads it at recreate, not at restart.
+# ADMIN_LOCKOUT=off
+
 # Offline GeoIP database for the Stats page's listener-country rollup.
 #
 # Stats reads CF-IPCountry first, then whatever header you name in
@@ -1191,12 +1319,23 @@ SITE_URL=
 # NAVIDROME_USER=
 # NAVIDROME_PASS=
 # Optional: play tracks straight off disk instead of streaming them over HTTP.
-# Only worth setting when the controller container mounts the SAME library
-# Navidrome scans. Note Navidrome's Subsonic \`path\` is built from tags, not read
-# off disk, so it often disagrees with your real folder names (e.g. the API says
-# "Chunga's Revenge" where the folder is "Chunga's Revenge (1970)"). Every
-# mismatch falls back to streaming, so it is safe to leave on — it just does
-# nothing for the tracks whose paths don't line up.
+# Only worth setting when BOTH the controller and broadcast containers mount the
+# SAME library Navidrome scans, at this same path: the controller finds the file
+# and Liquidsoap, in broadcast, opens it. No compose file mounts it for you, so
+# add the volume to both services. Until the mixer has proved it can read the
+# mount every track streams, and the Doctor says so under "library mount".
+# Note Navidrome's Subsonic \`path\` is built from tags, not read off disk, so it
+# often disagrees with your real folder names (e.g. the API says "Chunga's
+# Revenge" where the folder is "Chunga's Revenge (1970)"). Turn on Settings ->
+# Music source -> "Keep Report Real Path on" and it sends the real path instead.
+# If Navidrome mounts the library at this same path, that path is used as it is.
+# If not, SUB/WAVE looks for it under this folder, and plays a file only when its
+# size matches the track and its tags give it the title Navidrome reports for the
+# track, subtitle included. Anything it can't find or can't prove falls back to
+# streaming, so those tracks play as they would without this. A different
+# recording at the same folder and file name, with the same size and the same
+# title, would still play. With "Keep Report Real Path on" set, the Doctor samples a few tracks
+# under "real file paths" to show whether they line up.
 # MUSIC_LIBRARY_PATH=
 # TTS_SPEED=0.85
 # Routine fallback refresh uses hourly minute-step cadence, rotated off :00/:02:
@@ -1219,22 +1358,51 @@ SITE_URL=
 # GOOGLE_GENERATIVE_AI_API_KEY=
 # OPENROUTER_API_KEY=
 # REQUESTY_API_KEY=
+# CHEAPER_INFERENCE_API_KEY=
 # DEEPSEEK_API_KEY=
 # AI_GATEWAY_API_KEY=
 # ELEVENLABS_API_KEY=
 # FISH_API_KEY=
-# SEARCH_API_KEY=tvly-...           # Tavily or Brave Search key (optional, paid/metered)
+# SEARCH_API_KEY=tvly-...           # Tavily or Brave Search key (optional, paid/metered),
+#                                   # or a keen_... Keenable key (optional, raises its free limit),
+#                                   # or an fc-... Firecrawl key,
+#                                   # or an ock_... Outcrawl key,
+#                                   # or an ss_... SpecStream key
 # SearXNG: no env var. Configure base URL in admin UI → Settings → Search.
 # Embedding key — only when embeddings use a different provider/key than chat
 # (e.g. OpenRouter for embeddings, a local proxy for chat). Blank → inherit the
 # chat key. OpenRouter embeddings also fall back to OPENROUTER_API_KEY above.
 # EMBEDDING_API_KEY=
 
+# ───────── Last.fm (optional — also configurable in admin UI) ─────────
+# Tags need only the API key. Paste it in Settings → Listeners → Last.fm, or
+# set it here; from there Last.fm tags are on by default (Library tagger →
+# Advanced → Enrichment is Auto). Scrobbling is separate and stays off until
+# you enable it in that card; only then are the secret and session key needed.
+# LASTFM_API_KEY=
+# LASTFM_API_SECRET=                # scrobbling only
+# LASTFM_SESSION_KEY=               # scrobbling only; or use Connect in the card
+
 # ───────── Scrobbling (optional — also configurable in admin UI) ─────────
 # LISTENBRAINZ_USER_TOKEN=          # ListenBrainz or LB-compatible scrobbler token
 # LISTENBRAINZ_API_URL=             # optional full submit-listens URL override
 #                                   # e.g. http://koito:4110/apis/listenbrainz/1/submit-listens
-#                                   # otherwise set base URL in admin → Settings → Scrobbling
+#                                   # otherwise set base URL in admin → Settings → Listeners → ListenBrainz
+
+# ───────── Original years (optional — also configurable in admin UI) ─────────
+# Era-bounded shows ask MusicBrainz (keyless) for the original year of reissues
+# and compilations. With a Discogs personal access token (Discogs → Settings →
+# Developers, free), Discogs is asked when MusicBrainz has no year: one search
+# per track, sending its artist and title. Admin → Settings → Library → Enrichment.
+# DISCOGS_TOKEN=
+
+# ───────── Lyrics (optional) ─────────
+# The LRCLIB fallback (admin → Settings → Listeners → Lyrics panel, on by
+# default) asks lrclib.net for synced lyrics the music server lacks, sending each
+# such track's artist, title, album and length. LRCLIB is self-hostable: point
+# this at your own instance and no track names leave your network, or switch
+# the fallback off in that panel.
+# LRCLIB_URL=https://lrclib.net
 
 # ───────── Acoustic analysis (CLAP audio-similarity + Demucs vocals) ─────────
 # The analysis pass (npm run analyze / admin "Analyze audio") computes bpm, key,
@@ -1278,6 +1446,28 @@ SITE_URL=
 #                        # both station and GPU hosts. Each worker can load its
 #                        # own models, increasing CPU/RAM/VRAM plus network and
 #                        # source-server demand; tune to the smaller host limit.
+# ANALYZE_WHOLE_FILE=1   # opt-in: every analysis run also measures the
+#                        # whole-file facets for tracks that need them —
+#                        # loudness v2 (integrated loudness + true peak over the
+#                        # WHOLE file at its own rate) and edges (silence at both
+#                        # ends + the decoded length, used by silence trim). One
+#                        # ffmpeg decode per track, streamed from the music
+#                        # server; the first library pass reads every file once.
+#                        # Unset = off. On demand instead:
+#                        #   npm run analyze -- --facets loudness,edges
+# ANALYZE_WHOLE_FILE_CONCURRENCY=4  # whole-file facet jobs in flight (1-32).
+#                        # The analyzer runs them in their own lane (one ffmpeg
+#                        # process each, no model), outside ANALYZE_CONCURRENCY's
+#                        # pool; set the SAME value on station and analyzer
+#                        # hosts. The bound is mostly reading files from the
+#                        # music server.
+# ANALYZE_WHOLE_FILE_TIMEOUT_S=900  # analyzer host: wall-clock limit for ONE
+#                        # whole-file run, in seconds (30-7200). Raise it for
+#                        # DJ sets of several hours streamed from a slow server.
+# ANALYZE_WHOLE_FILE_TIMEOUT_MS=960000  # station host: how long the controller
+#                        # waits for that answer (90000-7260000). Keep it 60 s
+#                        # above the analyzer's limit, so the analyzer reports
+#                        # its own timeout first.
 # ANALYZE_PROBE_MS=60000  # how long "no analyzer at all" is cached before the
 #                         # /health probe runs again. A backend that ANSWERED is
 #                         # remembered until restart; only the miss is timed, so
@@ -1285,7 +1475,9 @@ SITE_URL=
 #                         # still found within this window. Lower it if you start
 #                         # analyzers by hand and want them picked up sooner.
 # ANALYZE_DEVICE=    # auto (default) / cpu / cuda — torch device for CLAP/Demucs;
-#                    # only meaningful on the cuda analyzer flavour
+#                    # only meaningful on the cuda analyzer flavour. auto and
+#                    # cuda both fall back to cpu, with a warning, when the card
+#                    # fails a one-op self-test (no GPU, or no kernels for it)
 # ANALYZE_IDLE_UNLOAD_S=  # seconds of no CLAP/Demucs use before the models are
 #                         # dropped (0 = keep resident). Defaults per device:
 #                         # 300 on cuda (frees the GPU for co-resident TTS/LLM
@@ -1293,9 +1485,11 @@ SITE_URL=
 #                         # search loads them once and they'd otherwise sit in
 #                         # RAM/swap forever; the longer window keeps the cold
 #                         # reload off interactive sound searches).
-# ANALYZE_RECYCLE_IDLE_S= # sidecar only: seconds of no heavy use before the
-#                         # whole worker process is recycled (default 3600;
-#                         # 0 = never). The model release above hands back the
+# ANALYZE_RECYCLE_IDLE_S= # sidecar only: seconds without any request before
+#                         # the whole worker process is recycled (default 3600;
+#                         # 0 = never). A plain bpm/key pass counts too: it
+#                         # loads no models but leaves the same scratch
+#                         # resident. The model release above hands back the
 #                         # weights; the recycle also reclaims the ~1GB of
 #                         # librosa/numba/torch scratch — and on cuda the CUDA
 #                         # context — that survive it. Next request re-pays the
@@ -1312,20 +1506,36 @@ SITE_URL=
 # Building from source instead of pulling? \`docker compose build analyzer\` with
 # ANALYZER_HEAVY=1 bakes the stack (or pass WITH_CLAP=1 / WITH_DEMUCS=1 directly).
 #
-# Vocal-gate tuning (#1125). The Demucs vocal stem is thresholded against BOTH
-# its own loud level AND a fraction of the FULL-MIX loud level — the mix floor
-# stops separation bleed on instrumentals from reading as vocals. Raise the
-# floor if instrumentals still slip through (over-compressed masters leak more);
+# Vocal-gate tuning (#1125, #2237). The Demucs vocal stem is thresholded against
+# BOTH its own loud level AND a fraction of the FULL-MIX loud level — the mix
+# floor stops separation bleed on instrumentals from reading as vocals. Each
+# window has its own floor: the opening's was raised on real audio (#2237), the
+# ending's is unchanged. Raise a floor if instrumentals still slip through;
 # lower it if quiet vocals get dropped. Defaults shown.
-# VOCAL_MIX_FLOOR=0.06     # vocal stem must reach >=6% of the full-mix loud level
-# VOCAL_STEM_REL=0.15      # ...OR >=15% of the vocal stem's own loud level
+# VOCAL_HEAD_MIX_FLOOR=0.15  # opening: stem must reach >=15% of the mix's loud level
+# VOCAL_MIX_FLOOR=0.06       # ending: >=6%. Set alone, it sets the opening too
+# VOCAL_STEM_REL=0.15        # ...OR >=15% of the vocal stem's own loud level
 #
 # Optional model overrides (sensible defaults shown):
 # CLAP_MODEL=laion-clap
 # DEMUCS_MODEL=htdemucs   # vocal separation is the slow pass, and the default
 #                         # is also the fastest on CPU we've measured — the
-#                         # mdx*/*_q alternatives are bags of 4 sub-models and
-#                         # run ~3x SLOWER despite the smaller download
+#                         # mdx* alternatives are bags of 4 sub-models and
+#                         # run ~3x SLOWER. The quantised *_q models (mdx_q,
+#                         # mdx_extra_q) aren't supported: the analyzer doesn't
+#                         # ship diffq, so a *_q name loads htdemucs instead
+#                         # and logs one line saying so. mdx and mdx_extra are
+#                         # the same models unquantised
+# DEMUCS_OVERLAP=0.25     # share of each Demucs chunk that overlaps the next
+#                         # (0-0.9; anything else warns and uses 0.25). 0.1
+#                         # measured ~14% faster on CPU with near-identical
+#                         # vocal ranges. It also changes the cached stems
+#                         # that stem-blend transitions play on air, not just
+#                         # analysis. Treat 0.1 as the floor: at the default
+#                         # window 0 is no faster and leaves a hard seam
+#                         # between chunks. The saving comes in whole chunks
+#                         # (7.8 s each for htdemucs), so how much you get
+#                         # depends on ANALYZE_SECONDS
 # ANALYZE_SECONDS=40      # per-track analysis window (seconds), shared by
 #                         # bpm/key, CLAP and Demucs — the real speed lever
 #                         # (cost scales linearly). Raise it if you want vocal
@@ -1384,11 +1594,29 @@ SITE_URL=
 # all-in-one image reads the same variable for its in-process Chatterbox.
 # CHATTERBOX_REFERENCE_WAV=/var/sub-wave/voices/house.wav
 #
+# On-air level of the heavy voices: the linear RMS each clip is normalised to
+# before a soft limiter catches its peaks (x1.12 is about +1 dB). Chatterbox's
+# default sits it beside Piper and Kokoro; PocketTTS's is deliberately hot.
+# Empty keeps the default, and anything that isn't a positive number is
+# ignored with a warning. Read by the tts-heavy sidecar and the in-process
+# workers alike.
+# CHATTERBOX_TARGET_RMS=0.135
+# POCKET_TTS_TARGET_RMS=0.245
+#
 # Own TTS server? There's nothing to set here — the *Remote* engine points the
 # DJ at any HTTP server that answers GET /health and returns rendered audio from
 # POST /speak (a GPU box, a Tailscale peer, a bridge in front of a vendor API
 # like Gemini TTS). It's a station setting, not env: admin → Settings → Voices →
 # Remote. Contract + a 20-line reference server: docs/custom-tts.md
+#
+# A shared Kokoro server for the built-in *Kokoro* engine. Set it and the
+# controller renders Kokoro there instead of loading the model itself (about
+# 880 MiB resident), so several stations on one box hold one model between
+# them. Voices, language and speed work as before. The server answers
+# POST /v1/speak { text, voice, lang, speed } with WAV bytes and
+# GET /v1/health with { "ok": true }; while it's unreachable, Kokoro speech
+# falls back to Piper. Unset (the default) runs Kokoro in the controller.
+# KOKORO_URL=http://kokoro:8880
 #
 # Memory ceilings for the model-loading sidecars (OOM containment — keeps a
 # runaway model load from taking down the host's other services). Defaults are
@@ -1397,6 +1625,15 @@ SITE_URL=
 # ANALYZER_MEM_LIMIT=6g
 # TTS_HEAVY_MEM_LIMIT=10g
 #
+# JavaScript heap, in MB, for the Observatory's sound-map projection child.
+# Unset uses Node's default, which scales with the host's memory. The child
+# fits as many tracks as that heap holds (at most 40,000, about 52 KB each)
+# and places the rest, so a smaller heap fits a coarser map instead of running
+# out during the fit; loading and placing a very large library still need
+# room. Values below 512 are raised to 512. Raise this for a finer map on a
+# small host, or if the Observatory reports the run ran out of memory.
+# SUBWAVE_MAP_HEAP_MB=4096
+#
 # HuggingFace token — lets the tts-heavy sidecar lazily download gated model
 # weights at runtime (PocketTTS cloning weights; some CLAP/Demucs checkpoints).
 # HF_TOKEN=
@@ -1404,4 +1641,4 @@ SITE_URL=
 
 // cli/package.json#version (embedded so the compiled binary can self-identify
 // — used by `subwave --version`).
-export const CLI_VERSION = `1.19.0`; // x-release-please-version
+export const CLI_VERSION = `1.31.0`; // x-release-please-version

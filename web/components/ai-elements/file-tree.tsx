@@ -287,23 +287,3 @@ export const FileTreeFile = ({
     </FileTreeFileContext.Provider>
   );
 };
-
-export type FileTreeActionsProps = HTMLAttributes<HTMLDivElement>;
-
-const stopPropagation = (e: React.SyntheticEvent) => e.stopPropagation();
-
-export const FileTreeActions = ({
-  className,
-  children,
-  ...props
-}: FileTreeActionsProps) => (
-  <div
-    className={cn("ml-auto flex items-center gap-1", className)}
-    onClick={stopPropagation}
-    onKeyDown={stopPropagation}
-    role="group"
-    {...props}
-  >
-    {children}
-  </div>
-);

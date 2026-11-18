@@ -7,9 +7,15 @@
 import { config } from '../config.js';
 import * as subsonic from '../music/subsonic.js';
 import * as subsonicLog from '../music/subsonic-log.js';
+import { proveLibraryMount } from '../music/library-mount.js';
+import { libraryMountFinding } from '../music/library-mount-policy.js';
+import { passiveRealPathStatus, sampleLocalPaths } from '../music/navidrome-players.js';
+import { realPathFinding } from '../music/navidrome-players-policy.js';
 import * as library from '../music/library.js';
 import * as embeddings from '../music/embeddings.js';
 import * as tts from '../audio/tts.js';
+import { personaRescueSlot, sameTtsTarget, type PersonaFallbackVoiceConfig, type RescueSlot } from '../audio/tts-fallback.js';
+import { resolvePersonaVoiceSlot } from '../schemas/persona.js';
 import { getStreamStatus } from '../broadcast/listeners.js';
 import { streamStatusFresh } from '../broadcast/liquidsoap-control.js';
 import {
@@ -18,16 +24,26 @@ import {
   probeLegReachable,
   providerName,
   activeModelLabel,
+  detectCompatibleMode,
+  type CompatDetection,
+  type Leg,
 } from '../llm/provider.js';
-import { recentCalls, generationHealthSnapshot } from '../llm/log.js';
+import { recentCalls, generationHealthSnapshot, failoverRoutingSnapshot } from '../llm/log.js';
 import type { Finding, StationSettings } from './types.js';
-import { classifyModel, isSchemaFailure } from './util.js';
+import { isSchemaFailure } from './util.js';
+import { settingsAgentRoutes } from '../schemas/settings.js';
+import { modelClassConcern } from './agent-fit.js';
 
 // ---------------------------------------------------------------------------
 // Sections
 // ---------------------------------------------------------------------------
 
-export async function checkLlm(s: StationSettings | null): Promise<Finding[]> {
+// `candidatePoolMigrated` is passed in rather than read here, so the check
+// stays a function of its arguments (settings.migratedFromCandidatePool()).
+export async function checkLlm(
+  s: StationSettings | null,
+  { candidatePoolMigrated = false }: { candidatePoolMigrated?: boolean } = {},
+): Promise<Finding[]> {
   const out: Finding[] = [];
 
   // Primary leg. probeLegReachable returns true for cloud providers (no cheap
@@ -41,14 +57,14 @@ export async function checkLlm(s: StationSettings | null): Promise<Finding[]> {
       detail: `${providerName()} · ${activeModelLabel()}${ok ? ' · reachable' : ' · unreachable'}`,
       hint: ok
         ? undefined
-        : 'Without the LLM the DJ falls back to a stateless picker and skips spoken links. Check the provider, model and host in Settings → LLM.',
+        : 'Without the LLM the DJ falls back to a stateless picker and skips spoken links. Check the provider, model and host in Settings → LLM provider.',
     });
   } catch (err) {
     out.push({
       label: 'provider',
       status: 'fail',
       detail: err?.message || 'not configured',
-      hint: 'Pick a provider + model in Settings → LLM.',
+      hint: 'Pick a provider + model in Settings → LLM provider.',
     });
   }
 
@@ -67,6 +83,24 @@ export async function checkLlm(s: StationSettings | null): Promise<Finding[]> {
     }
   } catch { /* fallback is best-effort */ }
 
+  // openai-compatible connection mode, per leg: is the server driven the way
+  // it wants to be? Probed fresh here (the doctor is occasional), never cached
+  // stale from a call path.
+  for (const [label, legOf] of [
+    ['connection mode', primaryLeg],
+    ['fallback connection mode', fallbackLeg],
+  ] as const) {
+    try {
+      const leg = legOf();
+      if (leg?.cfg?.provider !== 'openai-compatible') continue;
+      // The operator's own choice: resolveCompatibleMode keeps 'auto' here
+      // when it rewrote compatibleMode to the detected value.
+      const setting = leg.cfg.compatibleModeSetting ?? leg.cfg.compatibleMode;
+      const detection = await detectCompatibleMode(leg.cfg);
+      out.push(compatModeFinding(label, setting, detection, agentRecoveryRate(leg, recentCalls)));
+    } catch { /* a leg that cannot be built is reported by the provider rows */ }
+  }
+
   // Reachability cannot diagnose a provider whose generation slot is stuck.
   // Keep this finding independent of probes and cached/LLM-generated reviews.
   const generation = generationHealthSnapshot();
@@ -78,6 +112,22 @@ export async function checkLlm(s: StationSettings | null): Promise<Finding[]> {
       ? 'An observed generation is stale or recently timed out. Check the provider and requestTimeoutMs; client abort does not guarantee release of the remote inference slot. /doctor/llm has live target details.'
       : generation.status === 'idle' ? 'No observed generation failure; endpoint capacity is not measured.' : undefined,
   });
+
+  // Calls going to the backup instead of the primary — the same record /debug
+  // shows. Inside a sticky window those calls carry no failover record of
+  // their own, so this is where the operator learns why.
+  const routing = failoverRoutingSnapshot();
+  if (routing) {
+    const next = typeof routing.retryPrimaryAt === 'number'
+      ? `primary tried again in ${Math.max(1, Math.ceil((routing.retryPrimaryAt - Date.now()) / 1000))} s`
+      : 'the next call tries the primary first';
+    out.push({
+      label: 'backup routing',
+      status: 'warn',
+      detail: `${routing.reason} — ${routing.calls} call${routing.calls === 1 ? '' : 's'} sent to ${routing.model}${routing.lastOk === false ? ', which failed too' : ''}; ${next}`,
+      hint: 'Calls return to the primary as soon as it answers. A refused connection is probed every 30 s; a 5xx or a hung model is retried after 90 s, or at once if the backup also fails.',
+    });
+  }
 
   // Recent error rate from the in-memory ring.
   const recent = recentCalls.slice(0, 20);
@@ -112,37 +162,45 @@ export async function checkLlm(s: StationSettings | null): Promise<Finding[]> {
       status: schemaFails.length >= 3 ? 'fail' : 'warn',
       detail: `${schemaFails.length} schema-validation failure(s)${kinds.length ? ` · ${kinds.join(', ')}` : ''}`,
       hint:
-        'The model is returning JSON that does not match the required shape, so these features fall back or go silent (DJ Doc’s own AI review is one of them). It’s the classic sign of a model that’s weak at schema-constrained output — usually a code-specialised or very small model. Switch Settings → LLM to a general instruction-tuned model (a ~12B+ local or a capable cloud model), and try turning reasoning OFF — “thinking” output can corrupt the JSON.',
+        'The model is returning JSON that does not match the required shape, so these features fall back or go silent (DJ Doc’s own AI review is one of them). It’s the classic sign of a model that’s weak at schema-constrained output — usually a code-specialised or very small model. Switch Settings → LLM provider to a general instruction-tuned model (a ~12B+ local or a capable cloud model), and try turning Chain-of-thought OFF in Settings → LLM provider — “thinking” output can corrupt the JSON.',
     });
   }
 
   // Model class — weigh the chosen model's *name* against how it's being used.
   // Heuristic only (name-based), so it never fails, only warns: a code-specialised
   // model is tuned for programming rather than DJ links / structured picks, and a
-  // small model paired with the agentic picker tends to time out into the pool.
-  const cls = classifyModel(activeModelLabel());
-  if (cls.code) {
+  // small model driving Agentic Tools tends to time out into the pool.
+  const routes = settingsAgentRoutes(s?.llm);
+  const concern = modelClassConcern(activeModelLabel(), routes.picks);
+  if (concern?.kind === 'code') {
     out.push({
       label: 'model class',
       status: 'warn',
       detail: `${activeModelLabel()} looks code-specialised`,
-      hint: 'Code models are tuned for programming, not natural-language DJ links or schema-constrained JSON — they tend to write stiff intros and fail structured picks (the request matcher, pool picker and this very report). Prefer a general instruction-tuned model in Settings → LLM.',
+      hint: 'Code models are tuned for programming, not natural-language DJ links or schema-constrained JSON — they tend to write stiff intros and fail structured picks (the request matcher, Track Shortlist, the pool picker and this very report). Prefer a general instruction-tuned model in Settings → LLM provider.',
     });
-  } else if (cls.sizeB !== null && cls.sizeB < 11 && s?.llm?.pickerAgent !== false) {
+  } else if (concern?.kind === 'small') {
     out.push({
       label: 'model class',
       status: 'warn',
-      detail: `~${cls.sizeB}B model with the agentic picker on`,
-      hint: 'The agentic picker wants a ~12B-class (or good cloud) model; smaller models often time out into the pool fallback or fail structured picks. Either pick a larger model, or turn the agentic picker OFF (Settings → LLM) to use the simpler, more forgiving pool picker.',
+      detail: `~${concern.sizeB}B model with Agentic Tools selected`,
+      hint: 'Agentic Tools wants a ~12B-class (or good cloud) model; smaller models often time out into the pool fallback or fail structured picks. Either pick a larger model, or switch Settings → Music selection to Track Shortlist, where the controller builds the shortlist and the model makes one bounded choice.',
     });
   }
 
-  // Picker agent toggle — off is valid (stateless picker) but worth surfacing.
-  // DJ Doc weighs this against the model size + host resources in its review.
+  // Track selection route. Both are supported choices, so neither warns; DJ Doc
+  // weighs the route against the model size + host resources in its review.
   out.push({
-    label: 'picker agent',
-    status: s?.llm?.pickerAgent === false ? 'warn' : 'ok',
-    detail: s?.llm?.pickerAgent === false ? 'off — stateless pool picker' : 'on — session DJ agent (wants ~12B+ / good cloud model)',
+    label: 'track selection',
+    status: 'ok',
+    detail: routes.picks
+      ? 'Agentic Tools — model-led library search (wants ~12B+ / good cloud model)'
+      : 'Track Shortlist — controller-built shortlist, one bounded model choice',
+    // Not a fault (Shortlist is a supported route), but the one upgrade that
+    // changed behaviour unasked, so it is named until a save records it.
+    hint: candidatePoolMigrated
+      ? 'This station used the retired Candidate Pool and was moved to Track Shortlist, its replacement. Keep it, or switch to Agentic Tools in Settings → Music selection; saving any setting records the choice and clears this note.'
+      : undefined,
   });
 
   // Chain-of-thought (reasoning) — on costs latency + tokens; only worth it on a
@@ -180,7 +238,7 @@ export async function checkNavidrome(): Promise<Finding[]> {
     detail: p.ok ? `${config.navidrome.url} · authenticated` : p.reason || 'unreachable',
     hint: p.ok
       ? undefined
-      : 'The picker has no music source without Navidrome. Check the URL / username / password in setup, and that Navidrome is up.',
+      : 'The picker has no music source without Navidrome. Check the URL / username / password in Settings → Music source, and that Navidrome is up.',
   });
 
   // Recent call error rate across all endpoints.
@@ -200,6 +258,19 @@ export async function checkNavidrome(): Promise<Finding[]> {
       out.push({ label: 'call errors', status: 'skip', detail: 'no calls yet' });
     }
   } catch { /* tracker is best-effort */ }
+
+  // Navidrome's "Report Real Path" on SUB/WAVE's own players — read only; the
+  // switch is the opt-in setting or the Music source page's button. The Doctor
+  // runs unattended every night, so with the opt-in off it stays out of
+  // Navidrome's own API and skips.
+  if (p.ok) {
+    try {
+      const st = await passiveRealPathStatus();
+      const localMount = !!process.env.MUSIC_LIBRARY_PATH;
+      const sample = st.state === 'on' && localMount ? await sampleLocalPaths() : null;
+      out.push({ label: 'real file paths', ...realPathFinding(st, { localMount, sample }) });
+    } catch { /* never throws; belt and braces */ }
+  }
 
   // Mood-tag coverage — the picker leans on these tags to match the vibe.
   try {
@@ -233,7 +304,7 @@ export async function checkNavidrome(): Promise<Finding[]> {
       status: flag ? 'warn' : 'ok',
       detail: `${adv.provider}:${adv.model}${flag ? ' · heavy for a local host' : ''}`,
       hint: flag
-        ? 'This is a large local embedding model — roughly 3–4× the size and 2–3× slower per track than the default nomic-embed-text, with bigger vectors (slower KNN, more RAM). On a CPU / NAS host it dominates re-embed time and can thrash Ollama when RAM is tight (it reloads the model between calls). Unless you specifically need its multilingual / long-context quality, switch Settings → Library tagger → Embedding to nomic-embed-text, then re-embed (Library → Maintenance → Re-embed all tracks).'
+        ? 'This is a large local embedding model — roughly 3–4× the size and 2–3× slower per track than the default nomic-embed-text, with bigger vectors (slower KNN, more RAM). On a CPU / NAS host it dominates re-embed time and can thrash Ollama when RAM is tight (it reloads the model between calls). Unless you specifically need its multilingual / long-context quality, switch Settings → Library tagger → Embedding server → Model to nomic-embed-text, then re-embed (Library → Maintenance → Re-embed all tracks).'
         : undefined,
     });
   } catch { /* embedding cfg unavailable — skip silently */ }
@@ -312,7 +383,134 @@ export async function checkBroadcast(): Promise<Finding[]> {
     });
   }
 
+  // A library mount only counts if the mixer can read it: Liquidsoap opens the
+  // file, in another container. Asks afresh, as the check above does.
+  const mount = process.env.MUSIC_LIBRARY_PATH;
+  if (mount) {
+    const proof = await proveLibraryMount().catch(() => null);
+    out.push({ label: 'library mount', ...libraryMountFinding(proof ?? { mount, state: 'unknown', sample: null }) });
+  }
+
   return out;
+}
+
+// Can this rescue engine speak right now, on this provider? checkTts passes
+// tts.engineUsable, the probe the rescue chain itself runs, so the Doctor and
+// the chain agree on what gets skipped.
+export type RescueUsable = (engine: string, cloudProvider: string | null) => boolean;
+
+// Co-hosted shows whose hosts have no rescue voice that would help (#2029).
+// When a host's engine fails mid-render the line is rescued in the station's
+// fallback voice — one voice for every host, so a co-host can air sounding like
+// the other. A host is covered only by a rescue voice of its own that the chain
+// would actually reach, so three things count as none:
+//   - no rescue voice at all;
+//   - one on the same target as the host's own voice (engine, plus provider for
+//     cloud: sameTtsTarget, the chain's own exclusion), dropped as "the thing
+//     that just failed" before it is tried;
+//   - one that can't speak (`usable`, e.g. a cloud provider with no key),
+//     skipped by the chain's probe.
+// And a rescue voice that is a co-host's own voice (same target AND voice), or
+// two hosts on one show whose rescue voices are the same (`piper` with no voice
+// twice, say), are the original bug in a new place, so those warn too. Static configuration only: nothing here judges whether two
+// DIFFERENT voices sound alike. Null when no show has two or more hosts, so a
+// solo station sees no new finding.
+export function coHostRescueFinding(
+  s: StationSettings | null,
+  usable: RescueUsable = () => true,
+): Finding | null {
+  const personas = Array.isArray(s?.personas) ? s.personas : [];
+  const shows = Array.isArray(s?.shows) ? s.shows : [];
+  const byId = new Map(personas.filter((p) => p?.id).map((p) => [p.id, p]));
+  const defaultProvider = s?.tts?.cloud?.provider ?? null;
+  const label = (p: { id?: string; name?: string }) => p.name || p.id || 'unnamed';
+
+  // Why this host's rescue voice can't help, or null when it can.
+  type Host = NonNullable<StationSettings['personas']>[number];
+  // The host's own voice, `inherit` resolved to the station default engine.
+  const ownVoice = (p: Host) => {
+    const own = resolvePersonaVoiceSlot(
+      p.tts as Parameters<typeof resolvePersonaVoiceSlot>[0],
+      s?.tts as Parameters<typeof resolvePersonaVoiceSlot>[1],
+    );
+    const engine = own?.engine || s?.tts?.defaultEngine || 'piper';
+    return {
+      engine,
+      cloudProvider: engine === 'cloud' ? (own?.cloudProvider ?? null) : null,
+      voice: own?.voice || '',
+    };
+  };
+  const uncovered = (p: Host, rescue: RescueSlot | null): string | null => {
+    if (!rescue) return 'no rescue voice';
+    const provider = rescue.engine === 'cloud' ? (rescue.personaTts?.cloudProvider ?? null) : null;
+    const own = ownVoice(p);
+    const ownTarget = { engine: own.engine, cloudProvider: own.cloudProvider };
+    if (sameTtsTarget({ engine: rescue.engine, cloudProvider: provider }, ownTarget, defaultProvider)) {
+      return `rescue on their own engine, ${rescue.engine}`;
+    }
+    if (!usable(rescue.engine, provider)) {
+      return `rescue ${rescue.engine}${provider ? `/${provider}` : ''} can't speak`;
+    }
+    return null;
+  };
+  // Same engine, provider (cloud only) and voice: the one rescue voice.
+  const voiceKey = (v: { engine: string; cloudProvider?: string | null; voice?: string }) => [
+    v.engine,
+    v.engine === 'cloud' ? (v.cloudProvider || defaultProvider || '') : '',
+    (v.voice || '').trim(),
+  ].join('\u0000');
+  const rescueKey = (rescue: RescueSlot) => voiceKey({ engine: rescue.engine, ...rescue.personaTts });
+
+  let coHosted = 0;
+  const problems: string[] = [];
+  for (const show of shows) {
+    const ids = [show?.personaId, ...(Array.isArray(show?.guestPersonaIds) ? show.guestPersonaIds : [])];
+    const hosts = [...new Set(ids)]
+      .map((id) => (typeof id === 'string' ? byId.get(id) : undefined))
+      .filter((p): p is NonNullable<typeof p> => !!p);
+    if (hosts.length < 2) continue;
+    coHosted++;
+    const showName = show.name || 'Untitled show';
+    const shared = new Map<string, { names: string[]; rescue: RescueSlot }>();
+    for (const p of hosts) {
+      const rescue = personaRescueSlot(p.fallbackVoice as PersonaFallbackVoiceConfig | null, tts.ENGINES);
+      const why = uncovered(p, rescue);
+      if (why) {
+        problems.push(`${showName}: ${label(p)} (${why})`);
+      } else if (rescue) {
+        const key = rescueKey(rescue);
+        // A rescue that IS a co-host's own voice airs this host as that co-host.
+        const twin = hosts.find((o) => o !== p && voiceKey(ownVoice(o)) === key);
+        if (twin) {
+          problems.push(`${showName}: ${label(p)} (rescue voice is ${label(twin)}'s own voice)`);
+          continue;
+        }
+        const entry = shared.get(key) || { names: [], rescue };
+        entry.names.push(label(p));
+        shared.set(key, entry);
+      }
+    }
+    for (const { names, rescue } of shared.values()) {
+      if (names.length < 2) continue;
+      const name = (rescue.personaTts?.voice || '').trim();
+      const voice = name ? ` ${name}` : '';
+      problems.push(`${showName}: ${names.join(', ')} share one rescue voice (${rescue.engine}${voice})`);
+    }
+  }
+  if (!coHosted) return null;
+  if (!problems.length) {
+    return {
+      label: 'co-host rescue voices',
+      status: 'ok',
+      detail: `every host on ${coHosted} co-hosted show${coHosted === 1 ? '' : 's'} has a rescue voice of their own`,
+    };
+  }
+  return {
+    label: 'co-host rescue voices',
+    status: 'warn',
+    detail: problems.join('; '),
+    hint: "If a host's engine fails mid-render, their lines are rescued in the station's fallback voice — the same voice for every host, which can make one host sound like another. Give each host a Rescue voice in Personas → Voice that can speak, sits on a different engine from their own voice, and differs from each co-host's own voice and rescue voice (Piper with no voice picked is the same built-in voice for everyone).",
+  };
 }
 
 export async function checkTts(s: StationSettings | null): Promise<Finding[]> {
@@ -342,7 +540,7 @@ export async function checkTts(s: StationSettings | null): Promise<Finding[]> {
     hint:
       unavailable.length === 0
         ? undefined
-        : 'A configured voice engine is unavailable, so the DJ speaks in the Piper fallback voice. Enable the engine (e.g. the tts-heavy profile / cloud key) or pick an available one in Settings.',
+        : 'A configured voice engine is unavailable, so the DJ speaks in the Piper fallback voice. Enable the engine (e.g. the tts-heavy profile / cloud key) or pick an available Engine in Settings → TTS voice.',
   });
 
   // Is the current persona's voice silently routing through a fallback?
@@ -357,7 +555,87 @@ export async function checkTts(s: StationSettings | null): Promise<Finding[]> {
     });
   } catch { /* routing snapshot is best-effort */ }
 
+  const coHost = coHostRescueFinding(s, (engine, provider) => tts.engineUsable(engine, provider));
+  if (coHost) out.push(coHost);
+
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Connection mode (openai-compatible)
+// ---------------------------------------------------------------------------
 
+export interface AgentRecoveryRate {
+  agentCalls: number;
+  recoveries: number;
+}
+
+// How often this leg's recent tool-loop calls needed the done-only recovery
+// ("agent stopped without calling done"). On a hosted API driven in local mode
+// that is nearly every multi-round call, which is the runtime half of the
+// evidence; the probe is the other half.
+export function agentRecoveryRate(leg: Pick<Leg, 'label'>, calls: ReadonlyArray<any>): AgentRecoveryRate {
+  const agent = calls.filter(c => c?.model === leg.label && typeof c?.via === 'string' && c.via.startsWith('ai-sdk:agent'));
+  return { agentCalls: agent.length, recoveries: agent.filter(c => c.via.endsWith(':recovery')).length };
+}
+
+// A recovery on most of a handful of agent calls is a pattern, not a blip.
+const RECOVERY_MIN_CALLS = 4;
+const RECOVERY_SHARE = 0.5;
+
+function recoveryPattern(r: AgentRecoveryRate): boolean {
+  return r.agentCalls >= RECOVERY_MIN_CALLS && r.recoveries / r.agentCalls >= RECOVERY_SHARE;
+}
+
+function recoveryClause(r: AgentRecoveryRate): string {
+  return r.agentCalls ? ` · ${r.recoveries}/${r.agentCalls} recent agent calls needed the done-only recovery` : '';
+}
+
+const MODE_NAME: Record<string, string> = {
+  local: 'Self-hosted server',
+  hosted: 'Hosted API or proxy',
+  auto: 'Auto-detect',
+};
+
+// Pure: the setting, what the probe saw and the runtime recovery rate in, one
+// finding out. Warns only on a mismatch with evidence behind it; an undecided
+// probe is never a warning on its own.
+export function compatModeFinding(
+  label: string,
+  setting: unknown,
+  detection: CompatDetection,
+  recovery: AgentRecoveryRate,
+): Finding {
+  const mode = setting === 'hosted' || setting === 'auto' ? setting : 'local';
+  const seen = detection.mode ? `${detection.server ?? detection.mode} (${detection.evidence})` : `undetected (${detection.evidence})`;
+
+  if (mode === 'auto') {
+    return {
+      label,
+      status: 'ok',
+      detail: `${MODE_NAME.auto} → ${detection.mode ?? 'local'} · ${seen}${recoveryClause(recovery)}`,
+      hint: detection.mode ? undefined : 'Auto-detect found no positive evidence, so the connection runs as a self-hosted server. If it is a cloud API or proxy, set the mode to Hosted API or proxy.',
+    };
+  }
+  if (mode === 'local' && (detection.mode === 'hosted' || (!detection.mode && recoveryPattern(recovery)))) {
+    return {
+      label,
+      status: 'warn',
+      detail: `${MODE_NAME.local}, but this looks like a hosted API · ${seen}${recoveryClause(recovery)}`,
+      hint: 'Self-hosted mode forces the final tool call and sends llama.cpp sampling extras. A hosted API or proxy does not honour the forced call after several tool rounds, so agent runs stop without committing and fall to the recovery path (slower, more tokens). Set Settings → LLM provider → connection mode to Auto-detect or Hosted API or proxy.',
+    };
+  }
+  if (mode === 'hosted' && detection.mode === 'local') {
+    return {
+      label,
+      status: 'warn',
+      detail: `${MODE_NAME.hosted}, but the server identifies as ${seen}`,
+      hint: 'Hosted mode drops the forced tool call and the repeat-penalty / context-size extras that small self-hosted models depend on, so structured picks can fail or loop. Set Settings → LLM provider → connection mode to Auto-detect or Self-hosted server.',
+    };
+  }
+  return {
+    label,
+    status: 'ok',
+    detail: `${MODE_NAME[mode]} · ${seen}${recoveryClause(recovery)}`,
+  };
+}

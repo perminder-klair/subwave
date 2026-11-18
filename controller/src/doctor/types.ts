@@ -68,6 +68,9 @@ export interface DoctorReview {
 export interface StationSettings {
   llm?: {
     pickerAgent?: boolean;
+    trackSelection?: 'agentic' | 'shortlist';
+    requestMatching?: 'agentic' | 'direct';
+    segmentRuntime?: 'agentic' | 'direct';
     reasoning?: boolean;
     agentTimeoutMs?: number;
     provider?: string;
@@ -79,7 +82,10 @@ export interface StationSettings {
     pauseWhenEmpty?: boolean;
     noRepeatWindow?: number;
   };
-  tts?: { defaultEngine?: string; byKind?: Record<string, string | undefined> };
+  tts?: { defaultEngine?: string; byKind?: Record<string, string | undefined>; cloud?: { provider?: string } };
+  // Only what the co-host rescue-voice check reads (#2029).
+  personas?: Array<{ id?: string; name?: string; tts?: unknown; fallbackVoice?: unknown }>;
+  shows?: Array<{ name?: string; personaId?: string; guestPersonaIds?: string[] }>;
   search?: { provider?: string };
   audio?: { embeddings?: boolean; vocalActivity?: boolean; stemCache?: boolean; stemCacheGb?: number };
   transitions?: { pairDrain?: boolean; stemBlends?: boolean };

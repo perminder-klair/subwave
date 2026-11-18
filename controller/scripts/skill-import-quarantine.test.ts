@@ -18,12 +18,11 @@
 // mounts bare. Run: `npm test -- skill-import-quarantine`.
 
 import assert from 'node:assert/strict';
+import { listen as listenHttp } from './test-utils/http.js';
 import test from 'node:test';
-import { createServer } from 'node:http';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { AddressInfo } from 'node:net';
 import { createTempDir } from './test-utils/temp-dir.js';
 
 const STATE_DIR = createTempDir(join(tmpdir(), 'skill-import-quarantine-'));
@@ -63,10 +62,8 @@ await discoverSeededKinds();
 const app = express();
 app.use(express.json());
 app.use(router);
-const server = createServer(app);
-await new Promise<void>(r => { server.listen(0, '127.0.0.1', () => r()); });
+const { server, url: base } = await listenHttp(app);
 server.unref();
-const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 
 async function importZip(blob: Blob) {
   const fd = new FormData();

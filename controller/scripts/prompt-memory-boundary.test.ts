@@ -9,9 +9,10 @@
 
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const root = mkdtempSync(join(tmpdir(), 'subwave-prompt-memory-'));
 process.env.STATE_DIR = root;
@@ -22,8 +23,8 @@ const { queue } = await import('../src/broadcast/queue.js');
 const scripts = await import('../src/llm/internal/prompts/scripts.js');
 const { exchangeSegment } = await import('../src/broadcast/queue/pure.js');
 
-after(() => {
-  rmSync(root, { recursive: true, force: true });
+after(async () => {
+  await removeTempDir(root);
 });
 
 function context(show: { id: string; name: string } | null, period = 'morning') {

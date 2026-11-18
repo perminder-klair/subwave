@@ -263,6 +263,40 @@ async def test_single_worker_recycle_queues_instead_of_failing():
     assert await asyncio.wait_for(task, 1) == {"ok": True}
 
 
+async def test_lean_request_starts_the_recycle_clock():
+    """A bpm/key pass loads no models but leaves its scratch resident, so it
+    must arm the idle recycle; it must not read as model use on /health."""
+
+    class Stdin:
+        def write(self, data): pass
+        async def drain(self): pass
+
+    class Proc:
+        returncode = None
+        stdin = Stdin()
+
+    worker = server.StdioWorker("analyze-1", "python", "worker.py")
+    worker.proc = Proc()
+    worker.ready = True
+
+    async def reply():
+        return {"ok": True, "bpm": 120}
+
+    worker._await_message = reply
+    assert worker.last_use is None
+    await worker.request({"path": "/tmp/a.mp3"})
+    assert worker.last_use is not None
+    assert worker.last_heavy is None and not worker.models_resident
+    # The loop's own question, asked the way recycle_loop asks it: used, then
+    # left alone for the window.
+    assert not worker._idle_expired(3600)
+    worker.last_use -= 3601
+    assert worker._idle_expired(3600), "a lean request never made the worker recyclable"
+    await worker._reset()
+    assert worker.last_use is None, "a fresh worker has nothing to reclaim"
+    assert not worker._idle_expired(0), "a worker that served nothing was offered for recycling"
+
+
 async def test_no_worker_ready_and_none_recycling_fails_fast():
     """Boot and crash still fail fast — blocking there would help no one."""
     down = LifecycleWorker("analyze-1")
@@ -313,6 +347,165 @@ async def test_path_contract():
     }], worker_calls
 
 
+async def test_facet_contract():
+    """A facets request is forwarded verbatim and answered in the facet shape;
+    a request without facets keeps the flat shape (old controllers)."""
+    worker_calls = []
+    facet_answer = {
+        "ok": True,
+        "facets": {"tail": {"status": "unmeasurable", "reason": "capped-download"}},
+        "source": {"kind": "path", "duration_s": 200.0, "complete": False, "predecoded": True},
+    }
+
+    async def worker_request(payload):
+        worker_calls.append(payload)
+        return facet_answer
+
+    server.analyzer_pool.request = worker_request
+    with tempfile.NamedTemporaryFile() as audio:
+        result = await server.analyze(
+            server.AnalyzeRequest(path=audio.name, complete=False, facets=["tail"])
+        )
+    assert worker_calls == [{"id": "1", "path": audio.name, "complete": False, "facets": ["tail"]}], worker_calls
+    assert result == {"ok": True, "facets": facet_answer["facets"], "source": facet_answer["source"]}, result
+
+    # The whole-file facets stream the music server's URL: a path request
+    # carries it as stream_url, and a URL-only request needs no path check.
+    worker_calls.clear()
+    with tempfile.NamedTemporaryFile() as audio:
+        await server.analyze(server.AnalyzeRequest(
+            path=audio.name, complete=False, facets=["head", "edges"], stream_url="http://navi/stream",
+        ))
+    assert worker_calls == [{
+        "id": "1", "path": audio.name, "complete": False, "facets": ["head", "edges"],
+        "stream_url": "http://navi/stream",
+    }], worker_calls
+    # Whole-file facets alone take their own lane: a one-shot worker process
+    # under its own semaphore, never a pool worker holding CLAP/Demucs.
+    worker_calls.clear()
+    once_calls = []
+
+    async def once(payload):
+        once_calls.append(payload)
+        return {"ok": True, "facets": {"edges": {"status": "ok", "data": {}}}, "source": {"kind": "whole-file"}}
+
+    saved_once = server.run_whole_file_once
+    server.run_whole_file_once = once
+    try:
+        result = await server.analyze(server.AnalyzeRequest(url="http://navi/stream", facets=["loudness", "edges"]))
+    finally:
+        server.run_whole_file_once = saved_once
+    assert worker_calls == [], worker_calls
+    assert once_calls == [{"id": "1", "url": "http://navi/stream", "facets": ["loudness", "edges"]}], once_calls
+    assert result == {"ok": True, "facets": {"edges": {"status": "ok", "data": {}}}, "source": {"kind": "whole-file"}}, result
+    assert server.WHOLE_FILE_CONCURRENCY >= 1
+    # The URL is a facet-request field only: a flat request never forwards it.
+    worker_calls.clear()
+    with tempfile.NamedTemporaryFile() as audio:
+        await server.analyze(server.AnalyzeRequest(path=audio.name, stream_url="http://navi/stream"))
+    assert "stream_url" not in worker_calls[0], worker_calls
+    assert not server.StdioWorker._wants_models({"facets": ["loudness", "edges"]})
+    # A tail placed from the stored edges: the placement travels with the
+    # facet request (and the stream URL the worker reads the window from).
+    worker_calls.clear()
+    with tempfile.NamedTemporaryFile() as audio:
+        await server.analyze(server.AnalyzeRequest(
+            path=audio.name, complete=False, facets=["tail"], stream_url="http://navi/stream",
+            tail_window={"end_ms": 180000, "duration_ms": 200000},
+        ))
+    assert worker_calls == [{
+        "id": "1", "path": audio.name, "complete": False, "facets": ["tail"],
+        "stream_url": "http://navi/stream", "tail_window": {"end_ms": 180000, "duration_ms": 200000},
+    }], worker_calls
+    # A flat request (the regular analysis pass) carries the placement too,
+    # and its answer passes the placed marker back.
+    worker_calls.clear()
+
+    async def flat_request(payload):
+        worker_calls.append(payload)
+        return {"ok": True, "bpm": 120.0, "key": "Am", "intro_ms": 0, "confidence": 1.0, "tail_window": "edges",
+                "tail_start_ms": 180000, "tail_curve_unavailable": "meter-failed"}
+
+    server.analyzer_pool.request = flat_request
+    with tempfile.NamedTemporaryFile() as audio:
+        flat = await server.analyze(server.AnalyzeRequest(
+            path=audio.name, complete=False, stream_url="http://navi/stream",
+            tail_window={"end_ms": 180000, "duration_ms": 200000},
+        ))
+    server.analyzer_pool.request = worker_request
+    assert worker_calls[0].get("tail_window") == {"end_ms": 180000, "duration_ms": 200000}, worker_calls
+    assert worker_calls[0].get("stream_url") == "http://navi/stream", worker_calls
+    assert flat.get("tail_window") == "edges" and flat.get("tail_start_ms") == 180000, flat
+    # A capable meter that failed says so, or the tail is re-read every pass.
+    assert flat.get("tail_curve_unavailable") == "meter-failed", flat
+    # The stem outcome passes through, tail_stems_landed included (#2238): the
+    # controller's stems_at decision reads it.
+    async def stems_request(payload):
+        return {"ok": True, "bpm": 120.0, "key": "Am", "intro_ms": 0, "confidence": 1.0,
+                "stems_cached": True, "tail_stems_landed": False}
+
+    server.analyzer_pool.request = stems_request
+    with tempfile.NamedTemporaryFile() as audio:
+        flat = await server.analyze(server.AnalyzeRequest(path=audio.name, complete=True))
+    server.analyzer_pool.request = worker_request
+    assert flat.get("stems_cached") is True and flat.get("tail_stems_landed") is False, flat
+
+    # Model bookkeeping follows the facets named, not the env defaults.
+    assert server.StdioWorker._wants_models({"facets": ["head", "tail"]}) is False
+    assert server.StdioWorker._wants_models({"facets": ["clap"]}) is True
+    assert server.StdioWorker._used_models({"facets": {"clap": {"status": "ok"}}}) is True
+    assert server.StdioWorker._used_models({"facets": {"clap": {"status": "unavailable"}}}) is False
+    # A failed cache publication still used Demucs. Model loading failures
+    # answer unavailable and must not be mistaken for resident models.
+    assert server.StdioWorker._used_models({"facets": {"stems": {"status": "failed", "reason": "cache write failed"}}}) is True
+    assert server.StdioWorker._used_models({"facets": {"stems": {"status": "unavailable"}}}) is False
+
+
+async def test_stems_windows_and_pool_size_contract():
+    """#2253: a facet request's stems_windows reaches the worker verbatim (an
+    absent field is never invented), and /health reports the pool size the
+    controller's blend render takes the smaller of."""
+    worker_calls = []
+
+    async def worker_request(payload):
+        worker_calls.append(payload)
+        return {"ok": True, "facets": {"stems": {"status": "ok", "data": {"tail_stems": True}}}, "source": {}}
+
+    saved_request = server.analyzer_pool.request
+    server.analyzer_pool.request = worker_request
+    try:
+        with tempfile.NamedTemporaryFile() as audio:
+            await server.analyze(server.AnalyzeRequest(
+                path=audio.name, complete=True, facets=["stems"], stems_dir="/s/x",
+                stems_require_marker=True, stems_windows=["tail"],
+            ))
+            await server.analyze(server.AnalyzeRequest(path=audio.name, facets=["stems"], stems_dir="/s/x"))
+            # A flat request has no stems facet to scope: never forwarded.
+            await server.analyze(server.AnalyzeRequest(path=audio.name, stems_dir="/s/x", stems_windows=["tail"]))
+            # A malformed value is the worker's to judge (it separates both),
+            # never a 422 here.
+            await server.analyze(server.AnalyzeRequest(
+                path=audio.name, facets=["stems"], stems_dir="/s/x", stems_windows="tail",
+            ))
+    finally:
+        server.analyzer_pool.request = saved_request
+    assert worker_calls[0]["stems_windows"] == ["tail"], worker_calls
+    assert "stems_windows" not in worker_calls[1], worker_calls
+    assert "stems_windows" not in worker_calls[2], worker_calls
+    assert worker_calls[3]["stems_windows"] == "tail", worker_calls
+
+    saved_pool = server.analyzer_pool
+    # Members still booting: /health answers without reading their clocks,
+    # and the pool size is the setting, not how many are up right now.
+    server.analyzer_pool = server.AnalyzerWorkerPool([FakeWorker("a", ready=False), FakeWorker("b", ready=False)])
+    try:
+        body = await server.health()
+    finally:
+        server.analyzer_pool = saved_pool
+    assert body["analyze_concurrency"] == server.ANALYZE_CONCURRENCY, body
+    assert isinstance(body["analyze_concurrency"], int) and body["analyze_concurrency"] >= 1, body
+
+
 def test_concurrency_env_validation():
     old = os.environ.get("SUBWAVE_TEST_CONCURRENCY")
     try:
@@ -329,17 +522,72 @@ def test_concurrency_env_validation():
             os.environ["SUBWAVE_TEST_CONCURRENCY"] = old
 
 
+def test_whole_file_timeout_env_matches_the_worker():
+    # ANALYZE_WHOLE_FILE_TIMEOUT_S is read by the sidecar (which hands its
+    # reading to each one-shot worker) and by the worker itself on the local
+    # backend: one bound, one fall-back, never a clamp, on both sides.
+    sys.path.insert(0, str(Path(__file__).parent))
+    import analyze_worker as worker
+
+    name = "SUBWAVE_TEST_WHOLE_FILE_TIMEOUT"
+    old = os.environ.get(name)
+    try:
+        for raw, expected in ((None, 900.0), ("", 900.0), ("1800", 1800.0), ("45.5", 45.5), ("0", 900.0),
+                              ("-5", 900.0), ("29", 900.0), ("7201", 900.0), ("nan", 900.0), ("inf", 900.0),
+                              ("soon", 900.0)):
+            if raw is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = raw
+            assert server._bounded_float_env(name, 900.0, 30.0, 7200.0) == expected, (raw, "sidecar")
+            assert worker._env_float(name, 900.0, minimum=30.0, maximum=7200.0) == expected, (raw, "worker")
+    finally:
+        if old is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = old
+
+
+async def test_source_size_contract():
+    """#2238: the library's file size reaches the worker with a stems_dir, on
+    flat and facet requests, and never without one."""
+    worker_calls = []
+
+    async def worker_request(payload):
+        worker_calls.append(payload)
+        return {"ok": True, "facets": {}, "source": {}}
+
+    saved_request = server.analyzer_pool.request
+    server.analyzer_pool.request = worker_request
+    try:
+        with tempfile.NamedTemporaryFile() as audio:
+            await server.analyze(server.AnalyzeRequest(path=audio.name, stems_dir="/s/x", source_size=5_000_000))
+            await server.analyze(server.AnalyzeRequest(
+                path=audio.name, facets=["stems"], stems_dir="/s/x", source_size=5_000_000))
+            await server.analyze(server.AnalyzeRequest(path=audio.name, source_size=5_000_000))
+    finally:
+        server.analyzer_pool.request = saved_request
+    assert worker_calls[0]["source_size"] == 5_000_000, worker_calls
+    assert worker_calls[1]["source_size"] == 5_000_000, worker_calls
+    assert "source_size" not in worker_calls[2], worker_calls
+
+
 async def main():
     test_concurrency_env_validation()
+    test_whole_file_timeout_env_matches_the_worker()
     await test_pool_concurrency()
     await test_waiter_uses_worker_that_becomes_ready()
     await test_unavailable_selection_retries_another_ready_worker()
     await test_unavailable_worker_skipped()
     await test_single_worker_recycle_queues_instead_of_failing()
+    await test_lean_request_starts_the_recycle_clock()
     await test_no_worker_ready_and_none_recycling_fails_fast()
     await test_capability_aggregation_is_conservative()
     await test_latched_capability_error_does_not_fan_out()
     await test_path_contract()
+    await test_facet_contract()
+    await test_stems_windows_and_pool_size_contract()
+    await test_source_size_contract()
 
 
 asyncio.run(main())

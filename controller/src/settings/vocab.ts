@@ -30,7 +30,6 @@ import {
   PERSONA_LIMIT as PERSONA_LIMIT_VALUE,
   PERSONA_LINK_STYLES,
   PERSONA_SCRIPT_LENGTHS,
-  PERSONA_SKILLS_LIMIT,
   PERSONA_SOUL_MAX,
   TTS_CHATTERBOX_VOICE_RE,
   TTS_CLOUD_PROVIDERS as TTS_CLOUD_PROVIDER_VALUES,
@@ -61,7 +60,11 @@ import {
   SETTINGS_MP3_BITRATES,
   SETTINGS_OPUS_BITRATES,
   SETTINGS_SEARCH_PROVIDERS,
+  stripSecretControlChars,
 } from '../schemas/settings.js';
+import { EMBEDDING_PROVIDER_IDS, LLM_PROVIDER_IDS } from '../schemas/providers.js';
+import { REASONING_EFFORTS, isReasoningEffort } from '../schemas/reasoning.js';
+import { validateLlmBodyParams } from './compat-params.js';
 
 export { normalizeGeminiSafety } from '../schemas/settings.js';
 
@@ -112,7 +115,10 @@ const TONE_DIAL_PHRASES: Record<string, { low: string; high: string }> = {
   },
   localColour: {
     low: 'Keep it universal; skip local references and place-specific colour.',
-    high: 'Lean on the local setting (the town, the weather, the hour) as texture.',
+    // No weather here: links, idents and handoffs are given none (#471), so a
+    // dial that invited it had the DJ invent it ("the sun is blazing" under
+    // full cloud). The weather skill brings its own.
+    high: 'Lean on the local setting (the town, the hour) as texture.',
   },
   warmth: {
     low: 'Keep a cool, dry distance; let the music carry the warmth.',
@@ -147,8 +153,9 @@ export const TTS_ENGINES: readonly string[] = TTS_ENGINE_VALUES;
 // re-exported: ttsVoiceSlotSchema's `allowInherit` is the only way in.
 export { PERSONA_TTS_INHERIT };
 
-// DJ-voice trim in dB via Liquidsoap's `liq_amplify` annotation. A manual dial,
-// not auto-normalisation.
+// DJ-voice trim in dB via Liquidsoap's `liq_amplify` annotation. The operator's
+// manual dial; opt-in clip levelling (audio/clip-level.ts) is added to it,
+// and the total stays inside this same range.
 export const TTS_GAIN_CLAMP_DB = TTS_GAIN_CLAMP_DB_VALUE;
 
 // Finite number clamped to ±TTS_GAIN_CLAMP_DB and rounded to 0.1 dB; garbage
@@ -236,29 +243,17 @@ export function validateTtsCorrectionsStrict(raw: any): Array<{ from: string; to
 // Resolved by llm/provider.js. `openai-compatible` targets any self-hosted
 // server via `llm.baseUrl`; `locca` is the same transport with a default base
 // URL and onboarding discovery.
-export const LLM_PROVIDERS = [
-  'ollama',
-  'openai-compatible',
-  'locca',
-  'openrouter',
-  'requesty',
-  'anthropic',
-  'openai',
-  'google',
-  'deepseek',
-  'gateway',
-];
+// Every LLM provider, in catalogue order (schemas/providers.ts).
+export const LLM_PROVIDERS: string[] = [...LLM_PROVIDER_IDS];
 
-// Subset of LLM_PROVIDERS that can produce text embeddings (#493, #522).
-export const EMBEDDING_PROVIDERS = [
-  'ollama',
-  'openai-compatible',
-  'locca',
-  'openrouter',
-  'openai',
-  'google',
-  'requesty',
-];
+// Longest inline `embedding.apiKey` update() accepts. A chat leg's inline key
+// may run to 1000 (applyInlineKey), so whatever copies one into the embedding
+// leg (the LLM swap's pin, settings/llm-swap.ts) must check this first.
+export const EMBEDDING_API_KEY_MAX = 200;
+
+// Subset of LLM_PROVIDERS that can produce text embeddings (#493, #522): the
+// catalogue entries with an `embedding` block.
+export const EMBEDDING_PROVIDERS: string[] = [...EMBEDDING_PROVIDER_IDS];
 
 // Ollama context window; 0 disables, else floored into [2048, 131072].
 // Non-numeric falls back to `def`. Shared by both legs.
@@ -323,11 +318,12 @@ export function clampNoRepeatWindow(raw: unknown, def: number): number {
   return Math.min(1000, Math.max(0, Math.floor(raw)));
 }
 
-// Artist spacing in SLOTS (#1406), floored into [0, 25]; 0 leaves only the
-// always-on back-to-back guard. The low ceiling is deliberate: this is consulted
-// at the POINT OF CHOICE against the run's own candidates, so a large window
-// mostly buys re-pick calls that end in a waived window.
-export function clampArtistVarietyWindow(raw: unknown, def: number): number {
+// A variety window in SLOTS, floored into [0, 25]: artist spacing (#1406),
+// where 0 leaves only the always-on back-to-back guard, and the genre run
+// limit (#1897), where 0 is off. The low ceiling is deliberate: both are
+// consulted at the POINT OF CHOICE against the run's own candidates, so a
+// large window mostly buys re-pick calls that end in a waived window.
+export function clampVarietyWindow(raw: unknown, def: number): number {
   if (typeof raw !== 'number' || !Number.isFinite(raw)) return def;
   return Math.min(25, Math.max(0, Math.floor(raw)));
 }
@@ -350,8 +346,8 @@ export function applyLlmLegPatch(target: Record<string, unknown>, patch: unknown
     target.model = v;
   }
   if (l.compatibleMode !== undefined) {
-    if (l.compatibleMode !== 'local' && l.compatibleMode !== 'hosted') {
-      throw new Error(`${label}.compatibleMode must be "local" or "hosted"`);
+    if (l.compatibleMode !== 'local' && l.compatibleMode !== 'hosted' && l.compatibleMode !== 'auto') {
+      throw new Error(`${label}.compatibleMode must be "local", "hosted" or "auto"`);
     }
     target.compatibleMode = l.compatibleMode;
   }
@@ -410,8 +406,25 @@ export function applyLlmLegPatch(target: Record<string, unknown>, patch: unknown
   if (l.headers !== undefined) {
     target.headers = applyCustomHeadersPatch(target.headers, l.headers, label);
   }
+  // Extra request-body fields (#2296). Whole-list REPLACE, like headers: the
+  // editor always sends the full set. Reserved keys are refused in both.
+  if (l.bodyParams !== undefined) {
+    target.bodyParams = validateLlmBodyParams(l.bodyParams, `${label}.bodyParams`);
+  }
+  if (l.toolCallBodyParams !== undefined) {
+    target.toolCallBodyParams = validateLlmBodyParams(l.toolCallBodyParams, `${label}.toolCallBodyParams`);
+  }
   if (l.reasoning !== undefined) {
     target.reasoning = !!l.reasoning;
+  }
+  // The level "On" asks for (#2296). A bad value is a config error, like
+  // compatibleMode; it is stored whatever the provider, and read only where
+  // the leg can express a level (schemas/reasoning.ts).
+  if (l.reasoningEffort !== undefined) {
+    if (!isReasoningEffort(l.reasoningEffort)) {
+      throw new Error(`${label}.reasoningEffort must be one of ${REASONING_EFFORTS.map((e) => `"${e}"`).join(', ')}`);
+    }
+    target.reasoningEffort = l.reasoningEffort;
   }
   if (l.numCtx !== undefined) {
     target.numCtx = clampNumCtx(Number(l.numCtx), target.numCtx as number);
@@ -453,7 +466,7 @@ export function applyLlmLegPatch(target: Record<string, unknown>, patch: unknown
 // sentinel) and undefined leave it untouched.
 export function applyInlineKey(llmHost: { keys?: Record<string, string> }, provider: string, rawApiKey: unknown): void {
   if (rawApiKey === undefined || rawApiKey === 'set') return;
-  const v = String(rawApiKey);
+  const v = stripSecretControlChars(String(rawApiKey));
   if (v.length > 1000) throw new Error('llm.apiKey must be 0-1000 chars');
   if (!llmHost.keys || typeof llmHost.keys !== 'object') llmHost.keys = {};
   if (v) llmHost.keys[provider] = v;
@@ -584,7 +597,10 @@ export const TTS_CLOUD_PROVIDERS: readonly string[] = TTS_CLOUD_PROVIDER_VALUES;
 
 // Web-search backends. `duckduckgo` is free and keyless (useful only for
 // entity/definition queries); `tavily` and `brave` read SEARCH_API_KEY;
-// `searxng` is keyless self-hosted meta-search via settings.search.baseUrl.
+// `searxng` is keyless self-hosted meta-search via settings.search.baseUrl;
+// `keenable` is keyless, and a Keenable key in SEARCH_API_KEY raises its limit;
+// `parallel` is keyless (anonymous MCP) and never reads SEARCH_API_KEY;
+// `firecrawl`, `outcrawl` and `specstream` read SEARCH_API_KEY.
 export const SEARCH_PROVIDERS = SETTINGS_SEARCH_PROVIDERS;
 
 // SEED mood vocabulary + each mood's CLAP sound-prompt. The operator edits the
@@ -822,9 +838,6 @@ export { GUESTS_PER_SHOW, PLAYLISTS_PER_SHOW, EXCLUDED_PLAYLISTS_PER_SHOW };
 // name every library tag it wants. Keep in lockstep with FILTER_VALUES_MAX in
 // web/components/admin/shows/types.ts.
 export { SHOW_FILTER_VALUES_MAX };
-// Must comfortably exceed a realistic skill library: unticking one skill on an
-// "all skills" (null) persona materialises the full catalog minus one.
-export const SKILLS_PER_PERSONA_LIMIT = PERSONA_SKILLS_LIMIT;
 // djPrompts text bounds; keep in lockstep with PROMPT_MIN/PROMPT_MAX in
 // web/components/admin/personas/constants.ts.
 export const DJ_PROMPT_LIMIT = DJ_PROMPT_LIMIT_VALUE;
@@ -912,7 +925,15 @@ export interface NormalizedShow {
   /** Full rotation (#1612): with playlistStrict on, every track in the anchor
    *  airs once before any of them repeats. Inert without it. */
   playlistExhaust: boolean;
+  /** Play in order: with playlistStrict on, picks walk the anchor in its own
+   *  order and resume across airings. Inert without it. */
+  playlistInOrder: boolean;
   excludedPlaylistIds: string[];
+  /** A clean show: tracks tagged explicit stay off air. Only a positive tag
+   *  counts. See music/explicit-policy.ts. */
+  excludeExplicit: boolean;
+  /** Album kinds (Library → Era) this show never plays, e.g. 'dj-mix'. */
+  excludedAlbumKinds: string[];
   /** Operator organisation tags. Filters the admin list; steers nothing on
    *  air, which is why resolveShow() does not carry them through. */
   tags: string[];

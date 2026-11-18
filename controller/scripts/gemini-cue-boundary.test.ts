@@ -169,15 +169,6 @@ test('Gemini still rejects bare, timed and compound production directions', asyn
     assert.equal(turn().annotations[0].style, '');
   }
 });
-test('multi-speaker dispatcher preserves each Gemini turn pause', async () => {
-  const file = await tts.speakExchange([
-    { persona: persona(), text: 'Wait. [short pause] Continue.' },
-    { persona: { ...persona(), tts: { engine: 'gemini', voice: 'Kore' } }, text: 'Yes. [medium pause] Indeed.' },
-  ], { outPath: join(root, 'exchange.wav') });
-  assert.equal(turn(0).text, 'Wait. <short pause> Continue.');
-  assert.equal(turn(1).text, 'Yes. <medium pause> Indeed.');
-  await unlink(file);
-});
 for (const preflight of [true, false]) {
   test(`${preflight ? 'preflight' : 'mid-render'} rescue removes Gemini cues`, async () => {
     settings.get().tts.fallback = { enabled: true, engine: 'remote', voice: 'rescue', cloudProvider: 'openai' };

@@ -30,9 +30,10 @@ export default function Observatory() {
         <p className="bs-eyebrow">THE MAP</p>
         <h2>Placed by genre, lit by energy.</h2>
         <p>
-          Each track is a point, clustered near others in its genre. Colour runs an ink-to-vermilion ramp by
-          energy: calmer tracks dark, higher-energy tracks bright. Faint lines wire each track to its nearest
-          neighbour in the same scene. Scroll to zoom, drag to pan.
+          Each track is a point, clustered near others in its genre. Colour runs from a quiet tone to the
+          theme&apos;s accent by energy: calmer tracks dim, higher-energy tracks bright. The sky is always night,
+          drawn in your theme&apos;s own colours. Faint lines wire each track to its nearest neighbour in the
+          same scene. Scroll to zoom, drag to pan.
         </p>
         <p>
           The left rail recolours and filters the whole map live. Recolour by <strong>energy</strong>,{' '}
@@ -42,6 +43,11 @@ export default function Observatory() {
           search by title, artist, or album. The panels on the right keep a running read of whatever is in view:
           the energy split, the mood field, tempo and loudness histograms, a Camelot key wheel, and the
           major/minor and vocal/instrumental balance.
+        </p>
+        <p>
+          Either side folds away to give the map the room: use the buttons at each end of the top bar, or press{' '}
+          <strong>[</strong> and <strong>]</strong>. A folded side stays a slim strip that names what it holds,
+          and the Observatory remembers the fold next time.
         </p>
         <ManualFigure
           src="/screenshots/observatory.webp"
@@ -65,7 +71,7 @@ export default function Observatory() {
         <p>
           <strong>Mix Next</strong> lists the closest tracks in vector space, the same similarity the DJ
           leans on when it reaches for what to play next. Those neighbours are wired back onto the map in
-          vermilion so you can see where they sit; picking one flies the camera to it.
+          the accent colour so you can see where they sit; picking one flies the camera to it.
         </p>
         <p>
           The dossier isn't just a viewer: <strong>QUEUE ON AIR</strong> pushes the open track straight to
@@ -88,13 +94,12 @@ export default function Observatory() {
         <h2>From a few hundred to tens of thousands.</h2>
         <p>
           The map draws up to <strong>25,000</strong> tracks by default and can be dialled to 100,000 with the{' '}
-          <strong>MAP SIZE</strong> control in the rail. Beyond the cap it shows a stratified sample spread
+          <strong>MAP SIZE</strong> control in the top bar. Beyond the cap it shows a stratified sample spread
           evenly across genres, so the shape stays honest rather than over-weighting whichever genres sort
           first; a header badge tells you when you are seeing a sample.
         </p>
         <p>
-          Small libraries render as crisp vector nodes; larger ones switch automatically to a canvas renderer
-          that stays smooth into the tens of thousands. You don't pick: it chooses the right one for the size.
+          The map draws on the GPU at every size, so it stays smooth into the tens of thousands.
         </p>
       </section>
     </ManualPage>

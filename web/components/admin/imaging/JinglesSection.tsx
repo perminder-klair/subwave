@@ -17,11 +17,15 @@ import {
   IMAGING_DESCRIPTION_MAX,
   JINGLE_RATIO_BOUNDS,
   JINGLE_ROTATE_OWNERS,
+  JINGLE_PLACEMENTS,
   JINGLE_TEXT_MAX,
   jingleCreateSchema,
   jingleImportSchema,
   jingleRatioSchema,
+  resolvePersonaVoiceSlot,
 } from '@/lib/schemas.generated';
+import { EngineVoiceFields, ENGINE_UNAVAILABLE, type VoiceSlot } from '../tts/EngineVoiceFields';
+import { INHERIT_ENGINE } from '../tts/engineMeta';
 import { useZodForm, applyServerFieldErrors } from '@/lib/form';
 import { TextField, TextareaField } from '@/lib/form-fields';
 import {
@@ -34,7 +38,7 @@ interface JinglesSectionProps {
   saveSettings: SaveSettings;
   jingleRatio: string;
   setJingleRatio: (v: string) => void;
-  createJingle: (values: { text: string }) => Promise<ImagingSubmitResult>;
+  createJingle: (values: { text: string; tts?: VoiceSlot }) => Promise<ImagingSubmitResult>;
   uploadJingle: (
     files: File[],
     label: string | undefined,
@@ -45,19 +49,26 @@ interface JinglesSectionProps {
 }
 
 function JingleCreateModal({
-  busy, createJingle, onClose,
+  busy, createJingle, onClose, data, adminFetch,
 }: {
   busy: boolean;
   createJingle: JinglesSectionProps['createJingle'];
   onClose: () => void;
+  data: SettingsData;
+  adminFetch: JinglesSectionProps['adminFetch'];
 }) {
   const form = useZodForm(jingleCreateSchema, { text: '' });
+  const [tts, setTts] = useState<VoiceSlot>({ engine: INHERIT_ENGINE.id, voice: '', cloudProvider: 'openai' });
   // text is a plain z.string(), so its z.input is a real string and
   // form.control needs no cast -- unlike every other field in this file.
   const textValue = useWatch({ control: form.control, name: 'text' }) || '';
+  // The voice is not a form field, so a server refusal of it lands here.
+  const ttsError = (form.formState.errors as Record<string, { message?: string } | undefined>).tts?.message;
 
   const onSubmit = form.handleSubmit(async (values) => {
-    const res = await createJingle(values);
+    // Station default with no voice of its own is the plain request.
+    const picked = tts.engine !== INHERIT_ENGINE.id || tts.voice;
+    const res = await createJingle(picked ? { ...values, tts } : values);
     if (res.ok) onClose();
     else applyServerFieldErrors(form, res.fieldErrors);
   });
@@ -67,7 +78,7 @@ function JingleCreateModal({
       open
       onOpenChange={(o) => { if (!o) onClose(); }}
       title="create jingle"
-      sub="we’ll voice it in your station’s configured TTS voice"
+      sub="read in the station voice, or pick another"
       footer={
         <>
           <Button variant="ghost" size="sm" className="min-h-9 sm:min-h-0" onClick={onClose}>Cancel</Button>
@@ -92,6 +103,24 @@ function JingleCreateModal({
           placeholder="You’re tuned to SUB/WAVE…"
         />
         <div className="text-right font-mono text-[11px] text-muted">{textValue.length} / {JINGLE_TEXT_MAX}</div>
+        <EngineVoiceFields
+          value={tts}
+          // Back on the station default, a voice left over from another engine
+          // would ride along as an inherit slot instead of the plain request.
+          onChange={patch => setTts(t => ({ ...t, ...patch, ...(patch.engine === INHERIT_ENGINE.id ? { voice: '' } : {}) }))}
+          data={data}
+          adminFetch={adminFetch}
+          allowInherit
+          inheritResolvesTo={resolvePersonaVoiceSlot(tts, data?.values?.tts ?? null) ?? null}
+          inheritNote={<>This jingle follows <strong>Settings → TTS voice</strong>.</>}
+          unavailableNote={engine => (
+            <>{ENGINE_UNAVAILABLE[engine]} The jingle would be read by the station’s
+              fallback or default engine instead, and saved that way.</>
+          )}
+        />
+        {ttsError ? (
+          <div role="alert" className="text-[11px] leading-[1.6] text-[var(--danger)]">{ttsError}</div>
+        ) : null}
       </div>
     </Modal>
   );
@@ -280,6 +309,7 @@ export function JinglesSection({
   // click like every other toggle. Un-hydrated reads as the default, which is
   // also what an older controller (no key in /settings) answers.
   const rotateOwner = data.values?.jingleRotate === 'controller' ? 'controller' : 'mixer';
+  const placement = data.values?.jinglePlacement ?? 'between';
   const jingles = data.jingles || [];
   const [modal, setModal] = useState<null | 'create' | 'import'>(null);
   const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(null);
@@ -290,7 +320,7 @@ export function JinglesSection({
     <section className="grid gap-[22px]">
       <SectionMasthead
         title="Jingles"
-        sub="Short station idents that play between tracks. One ships with the station and stays put — add as many of your own as you like alongside it."
+        sub="Station idents between songs, over their opening, or both. One ships with the station — add your own alongside it."
         metrics={
           <>
             <TabMetric n={pad2(jingles.length)} l="files" />
@@ -322,8 +352,8 @@ export function JinglesSection({
             <span className="font-mono text-[13px]">music tracks</span>
           </div>
           <p className="m-0 min-w-[220px] flex-1 text-[12px] leading-[1.55] text-muted">
-            Set it to 0 to switch jingles off altogether. Changes take effect once you restart
-            the mixer — that button lives in Settings → danger zone.
+            Set it to 0 to stop automatic jingles; manual jingles still work. In Both, each placement
+            gets this frequency. Busy song openings are skipped. Restart the mixer after saving.
           </p>
           <Btn
             sm
@@ -348,6 +378,29 @@ export function JinglesSection({
         </div>
         <div className="flex flex-wrap items-center gap-5 border-t border-separator-soft px-[18px] py-[18px]">
           <div className="flex flex-wrap items-center gap-2.5 sm:flex-none">
+            <span className="font-mono text-[13px]">placement</span>
+            <Seg
+              value={placement}
+              aria-label="Automatic jingle placement"
+              options={JINGLE_PLACEMENTS.map(id => ({
+                id,
+                label: id === 'between' ? 'Between songs' : id === 'over' ? 'Over music' : 'Both',
+              }))}
+              onChange={id => {
+                if (busy || id === placement) return;
+                void saveSettings({ jinglePlacement: id });
+              }}
+            />
+          </div>
+          <p className="m-0 min-w-[220px] flex-1 text-[12px] leading-[1.55] text-muted">
+            Over music plays an ID after the opening crossfade with the light talk-over duck.
+            Songs carrying DJ speech, busy openings, short tracks and IDs that do not fit are skipped.
+            Over music and Both let the controller count and draw the IDs.
+            {' '}<strong>Restart the mixer after switching</strong> in Settings → Broadcast &amp; mixer.
+          </p>
+        </div>
+        {placement === 'between' && <div className="flex flex-wrap items-center gap-5 border-t border-separator-soft px-[18px] py-[18px]">
+          <div className="flex flex-wrap items-center gap-2.5 sm:flex-none">
             <span className="font-mono text-[13px]">counted by</span>
             <Seg
               value={rotateOwner}
@@ -364,13 +417,13 @@ export function JinglesSection({
           </div>
           <p className="m-0 min-w-[220px] flex-1 text-[12px] leading-[1.55] text-muted">
             The mixer has always counted for itself, and the DJ only found out afterwards.
-            Hand the count to the controller and a jingle becomes part of the same running
+            For Between songs, hand the count to the controller and a jingle becomes part of the same running
             order as the station ID — nothing else speaks on the minute it takes, and it
             waits its turn behind anything already queued for the next track.
             {' '}<strong>Restart the mixer after switching</strong>, or both will count for a
-            while and you&rsquo;ll hear twice the jingles.
+            while and you may hear jingles more often than configured. Over music and Both always use the controller.
           </p>
-        </div>
+        </div>}
       </PanelBox>
 
       <PanelBox>
@@ -430,7 +483,7 @@ export function JinglesSection({
       </PanelBox>
 
       {modal === 'create' && (
-        <JingleCreateModal busy={busy} createJingle={createJingle} onClose={closeModal} />
+        <JingleCreateModal busy={busy} createJingle={createJingle} onClose={closeModal} data={data} adminFetch={adminFetch} />
       )}
       {modal === 'import' && (
         <JingleImportModal

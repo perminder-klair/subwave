@@ -3,7 +3,7 @@
 // lazy TTL sweep, and the concurrent-run cap. The store is what lets
 // /playlists/generate/jobs outlive Cloudflare's ~100s proxy timeout, so the
 // expiry/cap behaviour here is the contract the panel's poller relies on.
-// Run: `tsx scripts/playlist-jobs.test.ts`.
+// Run: `npm test -- playlist-jobs`.
 //
 // node:assert-via-tsx style, matching scripts/programme.test.ts.
 

@@ -1,5 +1,5 @@
 // Regression tests for the show-handoff boundary logic.
-// Run: `tsx scripts/handoff-boundary.test.ts`.
+// Run: `npm test -- handoff-boundary`.
 //
 // A persona handoff used to fire from the `0 * * * *` cron and duck the middle
 // of whatever song was playing. It now rides the TRACK grid: queue.onTrackStarted
@@ -30,8 +30,8 @@
 //                     mirrored reverse mic-pass, and voice the request intro as
 //                     the DJ who just signed off.
 //
-// node:assert-via-tsx style, matching scripts/stale-link.test.ts.
 
+import test from 'node:test';
 import assert from 'node:assert/strict';
 import { contextDate, handoffIsStale, rollIsBackward } from '../src/broadcast/session.js';
 import {
@@ -45,17 +45,6 @@ import {
 
 const MAX_AGE = 20 * 60_000;   // mirrors HANDOFF_MAX_AGE_MS in dj-agent.ts
 
-let failures = 0;
-function test(name: string, fn: () => void) {
-  try {
-    fn();
-    console.log(`  ✓ ${name}`);
-  } catch (err: any) {
-    failures++;
-    console.error(`  ✗ ${name}\n      ${err?.message || err}`);
-  }
-}
-
 // A date is "about now" if it's within a couple of seconds of it — the fallback
 // paths construct `new Date()` internally, so exact equality isn't available.
 function assertAboutNow(d: Date, label: string) {
@@ -63,236 +52,217 @@ function assertAboutNow(d: Date, label: string) {
   assert.ok(drift < 2000, `${label}: expected ~now, got ${d.toISOString()} (${drift}ms off)`);
 }
 
-function main() {
-  console.log('context date stamp (contextDate):');
+await test('reads the `at` stamp getFullContext writes', () => {
+  const at = '2026-07-18T09:58:30.000Z';
+  assert.equal(contextDate({ at }).toISOString(), at);
+});
 
-  test('reads the `at` stamp getFullContext writes', () => {
-    const at = '2026-07-18T09:58:30.000Z';
-    assert.equal(contextDate({ at }).toISOString(), at);
-  });
+await test('a look-ahead stamp is honoured, not collapsed to now', () => {
+  // The whole point: 09:58 real time, context describing 10:05. If this
+  // returned "now" the roll would resolve the outgoing persona and the
+  // mic-pass would never fire.
+  const ahead = new Date(Date.now() + 7 * 60_000).toISOString();
+  assert.equal(contextDate({ at: ahead }).toISOString(), ahead);
+});
 
-  test('a look-ahead stamp is honoured, not collapsed to now', () => {
-    // The whole point: 09:58 real time, context describing 10:05. If this
-    // returned "now" the roll would resolve the outgoing persona and the
-    // mic-pass would never fire.
-    const ahead = new Date(Date.now() + 7 * 60_000).toISOString();
-    assert.equal(contextDate({ at: ahead }).toISOString(), ahead);
-  });
+await test('missing `at` (context from another path) → now', () => {
+  assertAboutNow(contextDate({}), 'missing at');
+});
 
-  test('missing `at` (context from another path) → now', () => {
-    assertAboutNow(contextDate({}), 'missing at');
-  });
+await test('null/undefined context → now, never throws', () => {
+  assertAboutNow(contextDate(null), 'null ctx');
+  assertAboutNow(contextDate(undefined), 'undefined ctx');
+});
 
-  test('null/undefined context → now, never throws', () => {
-    assertAboutNow(contextDate(null), 'null ctx');
-    assertAboutNow(contextDate(undefined), 'undefined ctx');
-  });
+await test('unparseable or wrongly-typed `at` → now, never Invalid Date', () => {
+  // A session.json persisted before `at` existed, or a hand-edited one.
+  for (const bad of ['not-a-date', '', 12345, {}, []] as any[]) {
+    const d = contextDate({ at: bad });
+    assert.ok(!Number.isNaN(d.getTime()), `at=${JSON.stringify(bad)} produced an Invalid Date`);
+    assertAboutNow(d, `at=${JSON.stringify(bad)}`);
+  }
+});
 
-  test('unparseable or wrongly-typed `at` → now, never Invalid Date', () => {
-    // A session.json persisted before `at` existed, or a hand-edited one.
-    for (const bad of ['not-a-date', '', 12345, {}, []] as any[]) {
-      const d = contextDate({ at: bad });
-      assert.ok(!Number.isNaN(d.getTime()), `at=${JSON.stringify(bad)} produced an Invalid Date`);
-      assertAboutNow(d, `at=${JSON.stringify(bad)}`);
-    }
-  });
+const now = Date.parse('2026-07-18T10:00:00.000Z');
 
-  console.log('\npending mic-pass expiry (handoffIsStale):');
-  const now = Date.parse('2026-07-18T10:00:00.000Z');
+await test('no stamp (session rolled before `at` existed) → fresh, still airs', () => {
+  // Deliberate: an in-flight handoff across a deploy should not be swallowed.
+  assert.equal(handoffIsStale(undefined, now, MAX_AGE), false);
+  assert.equal(handoffIsStale(null, now, MAX_AGE), false);
+});
 
-  test('no stamp (session rolled before `at` existed) → fresh, still airs', () => {
-    // Deliberate: an in-flight handoff across a deploy should not be swallowed.
-    assert.equal(handoffIsStale(undefined, now, MAX_AGE), false);
-    assert.equal(handoffIsStale(null, now, MAX_AGE), false);
-  });
+await test('rolled seconds ago → fresh', () => {
+  assert.equal(handoffIsStale(now - 5_000, now, MAX_AGE), false);
+});
 
-  test('rolled seconds ago → fresh', () => {
-    assert.equal(handoffIsStale(now - 5_000, now, MAX_AGE), false);
-  });
+await test('rolled just inside the window → fresh', () => {
+  assert.equal(handoffIsStale(now - (MAX_AGE - 1), now, MAX_AGE), false);
+});
 
-  test('rolled just inside the window → fresh', () => {
-    assert.equal(handoffIsStale(now - (MAX_AGE - 1), now, MAX_AGE), false);
-  });
+await test('exactly at the window edge → fresh (strict >)', () => {
+  assert.equal(handoffIsStale(now - MAX_AGE, now, MAX_AGE), false);
+});
 
-  test('exactly at the window edge → fresh (strict >)', () => {
-    assert.equal(handoffIsStale(now - MAX_AGE, now, MAX_AGE), false);
-  });
+await test('past the window → stale, drop it', () => {
+  assert.equal(handoffIsStale(now - (MAX_AGE + 1), now, MAX_AGE), true);
+});
 
-  test('past the window → stale, drop it', () => {
-    assert.equal(handoffIsStale(now - (MAX_AGE + 1), now, MAX_AGE), true);
-  });
+await test('rolled an hour ago with nobody listening → stale', () => {
+  // The real scenario: cron rolls at 10:00 with airHandoff=false, no listener
+  // so no track boundary runs the pick block, someone tunes in at 11:00.
+  assert.equal(handoffIsStale(now - 60 * 60_000, now, MAX_AGE), true);
+});
 
-  test('rolled an hour ago with nobody listening → stale', () => {
-    // The real scenario: cron rolls at 10:00 with airHandoff=false, no listener
-    // so no track boundary runs the pick block, someone tunes in at 11:00.
-    assert.equal(handoffIsStale(now - 60 * 60_000, now, MAX_AGE), true);
-  });
+await test('a clock skew putting the roll in the future → not stale', () => {
+  assert.equal(handoffIsStale(now + 30_000, now, MAX_AGE), false);
+});
 
-  test('a clock skew putting the roll in the future → not stale', () => {
-    assert.equal(handoffIsStale(now + 30_000, now, MAX_AGE), false);
-  });
+await test('non-numeric stamp → treated as unstamped, not stale', () => {
+  for (const bad of ['2026-07-18T10:00:00.000Z', NaN, Infinity, {}] as any[]) {
+    assert.equal(handoffIsStale(bad, now, MAX_AGE), false, `at=${String(bad)}`);
+  }
+});
 
-  test('non-numeric stamp → treated as unstamped, not stale', () => {
-    for (const bad of ['2026-07-18T10:00:00.000Z', NaN, Infinity, {}] as any[]) {
-      assert.equal(handoffIsStale(bad, now, MAX_AGE), false, `at=${String(bad)}`);
-    }
-  });
+// The session was look-ahead-rolled for 10:02 at a real time of ~09:58.
+const sessionAt = '2026-07-18T10:02:00.000Z';
 
-  console.log('\nbackward-roll guard (rollIsBackward):');
-  // The session was look-ahead-rolled for 10:02 at a real time of ~09:58.
-  const sessionAt = '2026-07-18T10:02:00.000Z';
+await test('live-clock caller inside the look-ahead window → backward, skip', () => {
+  // A listener request at 09:58:30 still resolves the outgoing show.
+  assert.equal(rollIsBackward(new Date('2026-07-18T09:58:30.000Z'), sessionAt), true);
+});
 
-  test('live-clock caller inside the look-ahead window → backward, skip', () => {
-    // A listener request at 09:58:30 still resolves the outgoing show.
-    assert.equal(rollIsBackward(new Date('2026-07-18T09:58:30.000Z'), sessionAt), true);
-  });
+await test('caller past the described moment → forward, roll allowed', () => {
+  assert.equal(rollIsBackward(new Date('2026-07-18T10:02:00.001Z'), sessionAt), false);
+});
 
-  test('caller past the described moment → forward, roll allowed', () => {
-    assert.equal(rollIsBackward(new Date('2026-07-18T10:02:00.001Z'), sessionAt), false);
-  });
+await test('exactly the described moment → not backward (strict <)', () => {
+  assert.equal(rollIsBackward(new Date(sessionAt), sessionAt), false);
+});
 
-  test('exactly the described moment → not backward (strict <)', () => {
-    assert.equal(rollIsBackward(new Date(sessionAt), sessionAt), false);
-  });
+await test('session persisted before ctxAt existed → never blocks a roll', () => {
+  assert.equal(rollIsBackward(new Date('2020-01-01T00:00:00.000Z'), undefined), false);
+  assert.equal(rollIsBackward(new Date('2020-01-01T00:00:00.000Z'), null), false);
+});
 
-  test('session persisted before ctxAt existed → never blocks a roll', () => {
-    assert.equal(rollIsBackward(new Date('2020-01-01T00:00:00.000Z'), undefined), false);
-    assert.equal(rollIsBackward(new Date('2020-01-01T00:00:00.000Z'), null), false);
-  });
+await test('garbage stamp → never blocks a roll', () => {
+  for (const bad of ['not-a-date', '', 12345, {}] as any[]) {
+    assert.equal(rollIsBackward(new Date(), bad), false, `ctxAt=${JSON.stringify(bad)}`);
+  }
+});
 
-  test('garbage stamp → never blocks a roll', () => {
-    for (const bad of ['not-a-date', '', 12345, {}] as any[]) {
-      assert.equal(rollIsBackward(new Date(), bad), false, `ctxAt=${JSON.stringify(bad)}`);
-    }
-  });
+await test('no held predecessor → the on-air track REMAINING, not its duration', () => {
+  // A 7-minute track five minutes in: the next pick starts in 2 min.
+  assert.equal(pickLeadSec(120), 120);
+});
 
-  console.log('\nlook-ahead lead (pickLeadSec):');
+await test('#1205 — a part-played track cannot push showAt past the boundary', () => {
+  // Reported case: 20:00-22:00 After Hours → 22:00 Discovery. At 21:55 the
+  // deadline backstop fires the cycle with an empty queue; the on-air track
+  // started 21:50 and runs 7 min, so it ends at 21:57 and the next pick is
+  // still After Hours. The old full-duration lead (7 min) probed 22:04 and
+  // aired the handoff mid-song, five minutes early.
+  const now = Date.parse('2026-07-25T21:55:00.000Z');
+  const boundary = Date.parse('2026-07-25T22:00:00.000Z');
+  const lead = pickLeadSec(120);                       // 2 min left of the track
+  const showAt = now + ((lead as number) + PICK_SHOW_LOOKAHEAD_SEC) * 1000;
+  assert.ok(showAt < boundary, `showAt ${new Date(showAt).toISOString()} crossed the boundary`);
+  // The old arithmetic, kept as the thing being regressed against.
+  const oldShowAt = now + (7 * 60 + PICK_SHOW_LOOKAHEAD_SEC) * 1000;
+  assert.ok(oldShowAt > boundary, 'the pre-fix lead should have crossed it');
+});
 
-  test('no held predecessor → the on-air track REMAINING, not its duration', () => {
-    // A 7-minute track five minutes in: the next pick starts in 2 min.
-    assert.equal(pickLeadSec(120), 120);
-  });
+await test('a track ending genuinely inside the next show still rolls', () => {
+  // Same grid, but now it IS 21:58 with 90s left: the pick airs at 21:59:30
+  // and plays almost entirely inside Discovery. The look-ahead margin is
+  // what carries it over — that behaviour must survive the fix.
+  const now = Date.parse('2026-07-25T21:58:00.000Z');
+  const boundary = Date.parse('2026-07-25T22:00:00.000Z');
+  const showAt = now + ((pickLeadSec(90) as number) + PICK_SHOW_LOOKAHEAD_SEC) * 1000;
+  assert.ok(showAt > boundary, 'a changeover track should still resolve the incoming show');
+});
 
-  test('#1205 — a part-played track cannot push showAt past the boundary', () => {
-    // Reported case: 20:00-22:00 After Hours → 22:00 Discovery. At 21:55 the
-    // deadline backstop fires the cycle with an empty queue; the on-air track
-    // started 21:50 and runs 7 min, so it ends at 21:57 and the next pick is
-    // still After Hours. The old full-duration lead (7 min) probed 22:04 and
-    // aired the handoff mid-song, five minutes early.
-    const now = Date.parse('2026-07-25T21:55:00.000Z');
-    const boundary = Date.parse('2026-07-25T22:00:00.000Z');
-    const lead = pickLeadSec(120);                       // 2 min left of the track
-    const showAt = now + ((lead as number) + PICK_SHOW_LOOKAHEAD_SEC) * 1000;
-    assert.ok(showAt < boundary, `showAt ${new Date(showAt).toISOString()} crossed the boundary`);
-    // The old arithmetic, kept as the thing being regressed against.
-    const oldShowAt = now + (7 * 60 + PICK_SHOW_LOOKAHEAD_SEC) * 1000;
-    assert.ok(oldShowAt > boundary, 'the pre-fix lead should have crossed it');
-  });
+await test('#1672 — picker forecast cannot drift more than its attribution window past a boundary', () => {
+  const now = Date.parse('2026-09-14T13:48:00.000Z');
+  const boundary = Date.parse('2026-09-14T14:00:00.000Z');
+  const showAt = pickShowDate(now, 17 * 60, boundary);
+  assert.equal(showAt?.getTime(), boundary + PICK_SHOW_LOOKAHEAD_SEC * 1000);
+});
 
-  test('a track ending genuinely inside the next show still rolls', () => {
-    // Same grid, but now it IS 21:58 with 90s left: the pick airs at 21:59:30
-    // and plays almost entirely inside Discovery. The look-ahead margin is
-    // what carries it over — that behaviour must survive the fix.
-    const now = Date.parse('2026-07-25T21:58:00.000Z');
-    const boundary = Date.parse('2026-07-25T22:00:00.000Z');
-    const showAt = now + ((pickLeadSec(90) as number) + PICK_SHOW_LOOKAHEAD_SEC) * 1000;
-    assert.ok(showAt > boundary, 'a changeover track should still resolve the incoming show');
-  });
+await test('#1672 — a handoff anchor must itself reach the boundary', () => {
+  const now = Date.parse('2026-09-14T16:55:00.000Z');
+  const boundary = Date.parse('2026-09-14T17:00:00.000Z');
+  assert.equal(handoffAnchorReachesBoundary(now, 2 * 60, boundary), false,
+    'a final track ending at 16:57 cannot own a 17:00 handoff');
+  assert.equal(handoffAnchorReachesBoundary(now, 5 * 60, boundary), true);
+});
 
-  test('#1672 — picker forecast cannot drift more than its attribution window past a boundary', () => {
-    const now = Date.parse('2026-09-14T13:48:00.000Z');
-    const boundary = Date.parse('2026-09-14T14:00:00.000Z');
-    const showAt = pickShowDate(now, 17 * 60, boundary);
-    assert.equal(showAt?.getTime(), boundary + PICK_SHOW_LOOKAHEAD_SEC * 1000);
-  });
+await test('#1282 — linkAirDate inverts the showAt padding back to air time', () => {
+  // Reported case: logged 08:48:01, the on-air track has 2 min left, so the
+  // link airs at 08:50 — but showAt (air + the attribution padding) says
+  // 08:52 and the link announced "eight fifty-two"-adjacent times on air.
+  // The spoken clock must come from linkAirDate(showAt) = now + leadSec
+  // exactly, whatever the padding constant is set to.
+  const now = Date.parse('2026-08-03T08:48:01.000Z');
+  const lead = pickLeadSec(119) as number;
+  const showAt = new Date(now + (lead + PICK_SHOW_LOOKAHEAD_SEC) * 1000);
+  assert.equal(linkAirDate(showAt).getTime(), now + lead * 1000);
+});
 
-  test('#1672 — a handoff anchor must itself reach the boundary', () => {
-    const now = Date.parse('2026-09-14T16:55:00.000Z');
-    const boundary = Date.parse('2026-09-14T17:00:00.000Z');
-    assert.equal(handoffAnchorReachesBoundary(now, 2 * 60, boundary), false,
-      'a final track ending at 16:57 cannot own a 17:00 handoff');
-    assert.equal(handoffAnchorReachesBoundary(now, 5 * 60, boundary), true);
-  });
+await test('held predecessor (deadline path) → remaining + the held track', () => {
+  assert.equal(pickLeadSec(30, 240), 270);
+});
 
-  test('at a track start remaining ≈ duration → byte-for-byte the old lead', () => {
-    assert.equal(pickLeadSec(420), 420);
-  });
+await test('held predecessor of unknown length → no look-ahead', () => {
+  for (const bad of [0, NaN, Infinity, -5]) {
+    assert.equal(pickLeadSec(30, bad), null, `held=${bad}`);
+  }
+});
 
-  test('#1282 — linkAirDate inverts the showAt padding back to air time', () => {
-    // Reported case: logged 08:48:01, the on-air track has 2 min left, so the
-    // link airs at 08:50 — but showAt (air + the attribution padding) says
-    // 08:52 and the link announced "eight fifty-two"-adjacent times on air.
-    // The spoken clock must come from linkAirDate(showAt) = now + leadSec
-    // exactly, whatever the padding constant is set to.
-    const now = Date.parse('2026-08-03T08:48:01.000Z');
-    const lead = pickLeadSec(119) as number;
-    const showAt = new Date(now + (lead + PICK_SHOW_LOOKAHEAD_SEC) * 1000);
-    assert.equal(linkAirDate(showAt).getTime(), now + lead * 1000);
-  });
+await test('unknown clock → no look-ahead, never a bogus lead', () => {
+  for (const bad of [null, undefined, NaN, Infinity, '120'] as any[]) {
+    assert.equal(pickLeadSec(bad), null, `remaining=${String(bad)}`);
+    assert.equal(pickLeadSec(bad, 240), null, `remaining=${String(bad)} (held)`);
+  }
+});
 
-  test('held predecessor (deadline path) → remaining + the held track', () => {
-    assert.equal(pickLeadSec(30, 240), 270);
-  });
+await test('a track past its cue-out clamps at 0, never pulls showAt backwards', () => {
+  assert.equal(pickLeadSec(-12), 0);
+  assert.equal(pickLeadSec(-12, 240), 240);
+});
 
-  test('held predecessor of unknown length → no look-ahead', () => {
-    for (const bad of [0, NaN, Infinity, -5]) {
-      assert.equal(pickLeadSec(30, bad), null, `held=${bad}`);
-    }
-  });
+await test('a held continuous mix counts its CAPPED span, not its tagged length', () => {
+  // Reported case: Future Frequencies 18:00-20:00 → Shadowplay. At 18:00:39
+  // the deadline pick ran with 90s left on air and a 2h35 continuous mix
+  // held behind it under a 600s cap. The raw length probed 20:39, resolved
+  // Shadowplay and aired the handoff at 18:02; the capped span keeps the
+  // pick inside Future Frequencies.
+  const now = Date.parse('2026-09-28T15:00:39.000Z');
+  const boundary = Date.parse('2026-09-28T17:00:00.000Z');
+  const held = heldAnchorPlayableSec({ durationSec: 9300, maxTrackSec: 600 });
+  assert.equal(held, 600);
+  const showAt = now + ((pickLeadSec(90, held) as number) + PICK_SHOW_LOOKAHEAD_SEC) * 1000;
+  assert.ok(showAt < boundary, `showAt ${new Date(showAt).toISOString()} crossed the boundary`);
+  const oldShowAt = now + ((pickLeadSec(90, 9300) as number) + PICK_SHOW_LOOKAHEAD_SEC) * 1000;
+  assert.ok(oldShowAt > boundary, 'the pre-fix raw length should have crossed it');
+});
 
-  test('unknown clock → no look-ahead, never a bogus lead', () => {
-    for (const bad of [null, undefined, NaN, Infinity, '120'] as any[]) {
-      assert.equal(pickLeadSec(bad), null, `remaining=${String(bad)}`);
-      assert.equal(pickLeadSec(bad, 240), null, `remaining=${String(bad)} (held)`);
-    }
-  });
+await test('a held track under the cap keeps its full length', () => {
+  assert.equal(heldAnchorPlayableSec({ durationSec: 240, maxTrackSec: 600 }), 240);
+});
 
-  test('a track past its cue-out clamps at 0, never pulls showAt backwards', () => {
-    assert.equal(pickLeadSec(-12), 0);
-    assert.equal(pickLeadSec(-12, 240), 240);
-  });
+await test('no cap (null/0) or a listener request → the tagged length', () => {
+  assert.equal(heldAnchorPlayableSec({ durationSec: 9300, maxTrackSec: null }), 9300);
+  assert.equal(heldAnchorPlayableSec({ durationSec: 9300, maxTrackSec: 0 }), 9300);
+});
 
-  console.log('\nheld anchor length (heldAnchorPlayableSec):');
+await test('earliest cue wins: a trim tail inside the cap, then the head trim', () => {
+  assert.equal(heldAnchorPlayableSec({ durationSec: 700, maxTrackSec: 600, cueOutSecs: [540, null] }), 540);
+  assert.equal(heldAnchorPlayableSec({ durationSec: 700, maxTrackSec: 600, cueOutSecs: [null], cueInSec: 3 }), 597);
+});
 
-  test('a held continuous mix counts its CAPPED span, not its tagged length', () => {
-    // Reported case: Future Frequencies 18:00-20:00 → Shadowplay. At 18:00:39
-    // the deadline pick ran with 90s left on air and a 2h35 continuous mix
-    // held behind it under a 600s cap. The raw length probed 20:39, resolved
-    // Shadowplay and aired the handoff at 18:02; the capped span keeps the
-    // pick inside Future Frequencies.
-    const now = Date.parse('2026-09-28T15:00:39.000Z');
-    const boundary = Date.parse('2026-09-28T17:00:00.000Z');
-    const held = heldAnchorPlayableSec({ durationSec: 9300, maxTrackSec: 600 });
-    assert.equal(held, 600);
-    const showAt = now + ((pickLeadSec(90, held) as number) + PICK_SHOW_LOOKAHEAD_SEC) * 1000;
-    assert.ok(showAt < boundary, `showAt ${new Date(showAt).toISOString()} crossed the boundary`);
-    const oldShowAt = now + ((pickLeadSec(90, 9300) as number) + PICK_SHOW_LOOKAHEAD_SEC) * 1000;
-    assert.ok(oldShowAt > boundary, 'the pre-fix raw length should have crossed it');
-  });
-
-  test('a held track under the cap keeps its full length', () => {
-    assert.equal(heldAnchorPlayableSec({ durationSec: 240, maxTrackSec: 600 }), 240);
-  });
-
-  test('no cap (null/0) or a listener request → the tagged length', () => {
-    assert.equal(heldAnchorPlayableSec({ durationSec: 9300, maxTrackSec: null }), 9300);
-    assert.equal(heldAnchorPlayableSec({ durationSec: 9300, maxTrackSec: 0 }), 9300);
-  });
-
-  test('earliest cue wins: a trim tail inside the cap, then the head trim', () => {
-    assert.equal(heldAnchorPlayableSec({ durationSec: 700, maxTrackSec: 600, cueOutSecs: [540, null] }), 540);
-    assert.equal(heldAnchorPlayableSec({ durationSec: 700, maxTrackSec: 600, cueOutSecs: [null], cueInSec: 3 }), 597);
-  });
-
-  test('unknown length → null, which the caller hands pickLeadSec as 0 (no look-ahead)', () => {
-    for (const bad of [0, null, undefined, NaN]) {
-      assert.equal(heldAnchorPlayableSec({ durationSec: bad as any, maxTrackSec: 600 }), null, `dur=${String(bad)}`);
-    }
-    assert.equal(pickLeadSec(90, 0), null);
-  });
-
-  console.log(failures ? `\n${failures} failing` : '\nall passing');
-  if (failures) process.exit(1);
-}
-
-main();
+await test('unknown length → null, which the caller hands pickLeadSec as 0 (no look-ahead)', () => {
+  for (const bad of [0, null, undefined, NaN]) {
+    assert.equal(heldAnchorPlayableSec({ durationSec: bad as any, maxTrackSec: 600 }), null, `dur=${String(bad)}`);
+  }
+  assert.equal(pickLeadSec(90, 0), null);
+});

@@ -11,10 +11,11 @@
 
 import assert from 'node:assert/strict';
 import test, { after } from 'node:test';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer, type ServerResponse } from 'node:http';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const root = await mkdtemp(join(tmpdir(), 'subwave-picker-tool-bounds-'));
 
@@ -115,7 +116,7 @@ after(async () => {
   db.close();
   server.closeAllConnections();
   await new Promise<void>((resolve) => server.close(() => resolve()));
-  await rm(root, { recursive: true, force: true });
+  await removeTempDir(root);
 });
 
 const opts = (abortSignal?: AbortSignal) => ({ toolCallId: 't', messages: [], ...(abortSignal ? { abortSignal } : {}) });
@@ -230,10 +231,13 @@ test('searchLibrary: a named track filtered out keeps saying so when the vibe in
   assert.deepEqual(filtered.tracks.map((s: any) => s.id), ['vibe1']);
   assert.match(filtered.note, /1 matching track\(s\) exist but were all played recently/);
   assert.match(filtered.note, /not literal matches for what was searched/);
+  assert.equal(filtered.via, 'vibe');
 
+  // A pure vibe query is marked too, with no note: the request path's
+  // stand-in check (#1979) must not read lookalikes as the thing searched for.
   const vibe = await exec(buildPickerTools(ctxScope).tools.searchLibrary, { query: 'nothing literal matches' });
-  assert.ok(Array.isArray(vibe), 'a pure vibe query still returns plain tracks');
-  assert.deepEqual(vibe.map((s: any) => s.id), ['vibe1']);
+  assert.deepEqual(vibe, { tracks: vibe.tracks, via: 'vibe' });
+  assert.deepEqual(vibe.tracks.map((s: any) => s.id), ['vibe1']);
 });
 
 test('empty discovery answers carry a note and the rule, never a bare []', async () => {

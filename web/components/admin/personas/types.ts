@@ -13,6 +13,16 @@ export interface PersonaTts {
   speed: number;
 }
 
+// The persona's own rescue voice (#2029): what its lines take when its own
+// engine fails, tried before the station Fallback voice. Engine + voice only —
+// no level trims, credentials stay station-wide. Mirrors the controller's
+// PersonaFallbackVoice (schemas/persona.ts).
+export interface PersonaFallbackVoice {
+  engine: string;
+  cloudProvider: string;
+  voice: string;
+}
+
 export interface Persona {
   id: string;
   name: string;
@@ -40,6 +50,8 @@ export interface Persona {
   // /api/persona-avatar/<id>; the basename is held only so a save round-trips it.
   avatar: string;
   tts: PersonaTts;
+  // null = no rescue voice of its own; the station Fallback voice applies.
+  fallbackVoice: PersonaFallbackVoice | null;
   skills: string[];
   /** Operator organisation tags: they filter and group the roster and nothing
    *  else. */
@@ -109,6 +121,8 @@ export interface SettingsResponse {
     djPrompts?: Array<Partial<DjPromptPreset>>;
     activeDjPromptId?: string;
     djHouseRules?: string;
+    // Read only to warn what removing a persona takes with it.
+    shows?: Array<{ id?: string; name?: string; personaId?: string; guestPersonaIds?: string[] }>;
     // An 'inherit' persona takes its engine and station speed from this block;
     // when that engine is cloud it also takes the provider + voice. Kept in
     // step with the public /settings projection used by this editor.

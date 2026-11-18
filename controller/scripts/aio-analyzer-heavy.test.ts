@@ -1,29 +1,13 @@
-// Regression tests for the AIO supervisor's ANALYZER_HEAVY warning
-// (docker/aio/supervisor.sh: warn_if_analyzer_heavy_ignored).
-//
-// ANALYZER_HEAVY picks an image TAG, and it does it by docker-compose variable
-// interpolation (`subwave-analyzer${ANALYZER_HEAVY:+-heavy}`). The all-in-one
-// image has no analyzer service to select — CLAP and Demucs are baked into the
-// venv at build time — so the variable is unreachable there, not merely
-// unsupported. #1300 bug 9: operators set it, watch nothing change, and
-// conclude stem transitions are broken. The caveat existed in docs/unraid.md
-// and the doctor; nothing said it at the moment they were looking.
-//
-// The load-bearing properties:
-//   1. Set + lean build  -> a warning that names the -aio-heavy IMAGE, since
-//      that is the only thing that actually changes the outcome.
-//   2. Set + heavy build -> a note, not a warning. The variable is still inert,
-//      but the capability the operator wanted is present, so there is nothing
-//      to fix and a red herring would send them chasing it.
-//   3. Unset             -> silence on both builds. This runs on every AIO boot.
-//
-// Run: `tsx scripts/aio-analyzer-heavy.test.ts`.
-//
-// node:assert-via-tsx style, matching scripts/aio-log-link.test.ts.
-
+// AIO compose-only analyzer knobs are inert. ANALYZER_HEAVY (#1300 bug 9)
+// needs an image swap for CLAP/Demucs; ANALYZER_REPLICAS=0 (#1570) still spends
+// RAM and CPU unless ANALYZE_PYTHON is cleared or ANALYZE_URL offloads the work.
+// Set values warn only when the requested outcome differs from this image.
+// Unset or empty values stay silent on every boot.
 import assert from 'node:assert/strict';
+import test from 'node:test';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -36,18 +20,18 @@ assert.ok(existsSync(SUPERVISOR), `supervisor.sh not found at ${SUPERVISOR}`);
 // Drive warn_if_analyzer_heavy_ignored() against a scratch venv by sourcing the
 // supervisor in library mode. Returns its stderr (the log lines the operator
 // would see in `docker logs`), folded into stdout.
-function runWarn(venvDir: string, analyzerHeavy: string | null): string {
+function runWarn(variable: 'ANALYZER_HEAVY' | 'ANALYZER_REPLICAS', value: string | null, venvDir = ''): string {
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),
     SUBWAVE_ANALYZER_VENV: venvDir,
   };
-  if (analyzerHeavy === null) delete env.ANALYZER_HEAVY;
-  else env.ANALYZER_HEAVY = analyzerHeavy;
+  if (value === null) delete env[variable];
+  else env[variable] = value;
   return execFileSync(
     'bash',
     [
       '-c',
-      `set -u; SUBWAVE_SUPERVISOR_LIB=1 source "$1"; warn_if_analyzer_heavy_ignored 2>&1`,
+      `set -u; SUBWAVE_SUPERVISOR_LIB=1 source "$1"; ${variable === 'ANALYZER_HEAVY' ? 'warn_if_analyzer_heavy_ignored' : 'warn_if_analyzer_replicas_ignored'} 2>&1`,
       'bash',
       SUPERVISOR,
     ],
@@ -71,27 +55,13 @@ function heavyVenv(root: string): string {
   return venv;
 }
 
-const tmp = mkdtempSync(join(tmpdir(), 'subwave-aio-heavy-'));
-let failures = 0;
-
-function scenario(name: string, fn: () => void) {
-  try {
-    fn();
-    console.log(`  ok  ${name}`);
-  } catch (err) {
-    failures++;
-    console.error(`  FAIL ${name}`);
-    console.error(`       ${(err as Error).message}`);
-  }
-}
-
-console.log('aio ANALYZER_HEAVY warning');
+const tmp = createTempDir(join(tmpdir(), 'subwave-aio-heavy-'));
 
 // 1. The reported case: set on a lean AIO. Must warn, and must name the image
 //    swap — the variable itself is a dead end, so repeating it would be the
 //    same non-advice the operator already followed.
-scenario('set on a lean build warns and names the -aio-heavy image', () => {
-  const out = runWarn(leanVenv(mkdtempSync(join(tmp, 'lean-'))), '1');
+test('set on a lean build warns and names the -aio-heavy image', () => {
+  const out = runWarn('ANALYZER_HEAVY', '1', leanVenv(createTempDir(join(tmp, 'lean-'))));
   assert.match(out, /WARNING: ANALYZER_HEAVY is set, and it does NOTHING/);
   assert.match(out, /subwave-aio-heavy/);
   // Pointing an AIO operator at the bare analyzer image replaces their whole
@@ -103,8 +73,8 @@ scenario('set on a lean build warns and names the -aio-heavy image', () => {
 // 2. Set on a heavy build. Still inert, but the capability is there — so this
 //    is a note, not a warning. Anything alarming here sends an operator whose
 //    setup is FINE looking for a problem.
-scenario('set on a heavy build notes without warning', () => {
-  const out = runWarn(heavyVenv(mkdtempSync(join(tmp, 'heavy-'))), '1');
+test('set on a heavy build notes without warning', () => {
+  const out = runWarn('ANALYZER_HEAVY', '1', heavyVenv(createTempDir(join(tmp, 'heavy-'))));
   assert.match(out, /no effect on/);
   assert.doesNotMatch(out, /WARNING/);
   assert.doesNotMatch(out, /###/);
@@ -112,25 +82,72 @@ scenario('set on a heavy build notes without warning', () => {
 
 // 3. Unset is the overwhelmingly common case and runs on every boot. Both
 //    builds must say nothing at all.
-scenario('unset stays silent on a lean build', () => {
-  assert.equal(runWarn(leanVenv(mkdtempSync(join(tmp, 'lean-quiet-'))), null).trim(), '');
+test('unset stays silent on a lean build', () => {
+  assert.equal(runWarn('ANALYZER_HEAVY', null, leanVenv(createTempDir(join(tmp, 'lean-quiet-')))).trim(), '');
 });
-scenario('unset stays silent on a heavy build', () => {
-  assert.equal(runWarn(heavyVenv(mkdtempSync(join(tmp, 'heavy-quiet-'))), null).trim(), '');
+test('unset stays silent on a heavy build', () => {
+  assert.equal(runWarn('ANALYZER_HEAVY', null, heavyVenv(createTempDir(join(tmp, 'heavy-quiet-')))).trim(), '');
 });
 
 // 4. An empty value is what `ANALYZER_HEAVY=` in a .env file yields, and it is
 //    also what compose treats as unset (`${ANALYZER_HEAVY:+-heavy}` expands to
 //    nothing). Warning there would contradict the compose semantics the
 //    variable is named after.
-scenario('empty value is treated as unset', () => {
-  assert.equal(runWarn(leanVenv(mkdtempSync(join(tmp, 'lean-empty-'))), '').trim(), '');
+test('empty value is treated as unset', () => {
+  assert.equal(runWarn('ANALYZER_HEAVY', '', leanVenv(createTempDir(join(tmp, 'lean-empty-')))).trim(), '');
 });
 
-rmSync(tmp, { recursive: true, force: true });
+// 1. The trap case. Must warn, and must name ANALYZE_PYTHON — pointing the
+//    operator back at ANALYZER_REPLICAS is the non-advice they already tried.
+test('0 warns and names ANALYZE_PYTHON as the real off switch', () => {
+  const out = runWarn('ANALYZER_REPLICAS', '0');
+  assert.match(out, /WARNING: ANALYZER_REPLICAS=0 is set, and it does NOTHING/);
+  assert.match(out, /ANALYZE_PYTHON/);
+  // The specific misconception: they think they stopped paying for analysis.
+  assert.match(out, /still running and still using RAM/);
+  // The admin panel disagreeing with them is what makes this look like a bug.
+  assert.match(out, /acoustic engine as ON/);
+});
 
-if (failures) {
-  console.error(`\n${failures} scenario(s) failed`);
-  process.exit(1);
-}
-console.log('\nall scenarios passed');
+// 2. ANALYZE_URL is the other honest answer for an AIO operator who wants the
+//    work to happen elsewhere, so the warning has to offer it rather than leave
+//    "turn it off entirely" as the only exit.
+test('the warning offers ANALYZE_URL for offloading', () => {
+  assert.match(runWarn('ANALYZER_REPLICAS', '0'), /ANALYZE_URL/);
+});
+
+// 3. Asking for the analyzer to RUN is what an AIO already does. Inert, but the
+//    outcome matches — a note, never the box.
+test('1 notes without warning', () => {
+  const out = runWarn('ANALYZER_REPLICAS', '1');
+  assert.match(out, /no effect/);
+  assert.doesNotMatch(out, /WARNING/);
+  assert.doesNotMatch(out, /###/);
+});
+
+// 4. Values compose would REJECT (a fixed container_name forbids >1 replica, and
+//    a non-integer is an interpolation error) still mean "run it" here. The AIO
+//    must not adopt compose's hard failure — this is PID 1, and refusing to boot
+//    over an inert variable would take the whole station down. Quiet note only.
+test('2 is inert here and does not fail the boot', () => {
+  const out = runWarn('ANALYZER_REPLICAS', '2');
+  assert.match(out, /no effect/);
+  assert.doesNotMatch(out, /WARNING/);
+});
+test('a non-integer is inert here and does not fail the boot', () => {
+  const out = runWarn('ANALYZER_REPLICAS', 'false');
+  assert.match(out, /no effect/);
+  assert.doesNotMatch(out, /WARNING/);
+});
+
+// 5. Unset is the overwhelmingly common case and runs on every boot.
+test('unset stays silent', () => {
+  assert.equal(runWarn('ANALYZER_REPLICAS', null).trim(), '');
+});
+
+// 6. An empty value is what `ANALYZER_REPLICAS=` in a .env yields, and it is
+//    what compose treats as unset (`${ANALYZER_REPLICAS:-1}` renders 1).
+//    Warning there would contradict the compose semantics it is named after.
+test('empty value is treated as unset', () => {
+  assert.equal(runWarn('ANALYZER_REPLICAS', '').trim(), '');
+});

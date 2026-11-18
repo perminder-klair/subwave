@@ -41,8 +41,9 @@ import { ELEVENLABS_VS_DEFAULTS, FISH_TTS_DEFAULTS } from './form-state';
 import { decideCloudSave } from './cloudSavePayload';
 import { ModelCombobox } from '../llm/ModelCombobox';
 import { cn } from '../../../lib/cn';
+import { fieldAria } from '../../../lib/form';
 import {
-  SectionHeader, SaveBar,
+  SectionHeader, SaveBar, NowBanner,
   KeyStatus, KeyTestResult, KEY_HINTS,
   type SectionProps, type FormState, type FormUpdater, type CloudTtsCfg,
   type TtsFallbackForm, type TtsForm,
@@ -476,9 +477,14 @@ function HeavyEngineSetupGuide({ engine, buildArg }: { engine: 'Chatterbox' | 'P
 interface TtsSectionProps extends SectionProps {
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
   refresh: () => Promise<void>;
+  // Run by SUB/WAVE Cloud: the engine (and each engine's provider config) is the
+  // box agent's, so only what the operator still owns is shown. The controller
+  // drops managed keys on save regardless (setup/hosted.ts).
+  hosted?: boolean;
 }
 
-export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refresh }: TtsSectionProps) {
+export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refresh, hosted = false }: TtsSectionProps) {
+  const levellingAria = fieldAria('tts-voice-levelling', undefined, { hasDescription: true });
   const [cloudKeyInput, setCloudKeyInput] = useState('');
   const [cloudKeyTest, setCloudKeyTest] = useState<{ ok: boolean; message: string; latencyMs: number } | null>(null);
   const [cloudKeyTesting, setCloudKeyTesting] = useState(false);
@@ -677,6 +683,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
         // Always sent — the server clamps and drops unknown keys. Keyed by engine
         // id, `pocket-tts` with the hyphen.
         gainDb: form.tts.gainDb,
+        voiceLevelling: form.tts.voiceLevelling,
         // Same contract as gainDb; inert for the engines that ignore speed.
         speed: form.tts.speed,
       },
@@ -740,6 +747,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
   };
   const savedTts: {
     enabled?: boolean;
+    voiceLevelling?: boolean;
     defaultEngine?: string;
     kokoro?: { voice?: string; lang?: string };
     chatterbox?: { referenceVoice?: string };
@@ -789,6 +797,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
     // Absent reads as ON, matching the controller's coercion — so an untouched
     // pre-upgrade settings.json never shows up as dirty.
     form.tts.enabled !== (savedTts.enabled !== false)
+    || form.tts.voiceLevelling !== (savedTts.voiceLevelling === true)
     || form.tts.defaultEngine !== savedEngine
     || (form.tts.kokoro?.voice || '') !== savedKokoroVoice
     || (form.kokoroLang || '') !== savedKokoroLang
@@ -845,8 +854,12 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
     <>
       <SectionHeader
         eyebrow="tts voice"
-        title="Pick a voice engine, then configure it."
-        sub={<>
+        title={hosted ? 'Your DJ’s voice.' : 'Pick a voice engine, then configure it.'}
+        sub={hosted ? <>
+          SUB/WAVE Cloud runs the voice engine for this station. Here you choose whether
+          the DJ speaks and tune how it sounds; each persona’s own voice is set on the
+          Personas page.
+        </> : <>
           Every spoken segment is voiced by the <strong>persona on air</strong>. Set each
           persona’s engine and voice on the Personas page. Here you pick the station’s
           default engine (used for jingles and as the fallback) and configure whichever
@@ -898,20 +911,18 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
 
       <Card title="Voice engine" sub="active default">
         <div className="grid gap-[18px]">
-          <div className="flex items-start gap-2.5 border border-[var(--accent)] bg-[var(--ink-softer)] p-3">
-            <span className="mt-1 size-1.5 flex-none rounded-full bg-vermilion" />
-            <div className="grid min-w-0 gap-0.5">
-              <span className="text-[11px] font-bold tracking-[0.12em] text-vermilion uppercase">
-                Default engine now · {savedEngineLabel}
-              </span>
-              <span className="text-[14px] leading-[1.5] text-muted">
-                {activeDetail} {ttsDirty ? 'Your edits below aren’t live until you Save.' : 'This is the saved, running config.'}
-                {savedEngineMissing && (
-                  <span className="text-[var(--danger)]"> This engine isn’t installed in this build, so segments fall back to Piper. See the setup steps below.</span>
-                )}
-              </span>
-            </div>
-          </div>
+          {hosted ? (
+            <NowBanner label={<>Voice engine · {savedEngineLabel}</>}>
+              Managed by SUB/WAVE Cloud. The engine and its provider settings are set for you
+              and can’t be changed here.
+            </NowBanner>
+          ) : (<>
+          <NowBanner label={<>Default engine now · {savedEngineLabel}</>}>
+            {activeDetail} {ttsDirty ? 'Your edits below aren’t live until you Save.' : 'This is the saved, running config.'}
+            {savedEngineMissing && (
+              <span className="text-[var(--danger)]"> This engine isn’t installed in this build, so segments fall back to Piper. See the setup steps below.</span>
+            )}
+          </NowBanner>
 
           <div className="field">
             <div className="flex items-center gap-2">
@@ -938,8 +949,22 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
                 : <>The station default. Renders jingles and is the fallback when a persona’s own engine fails. Per-segment voice still comes from the persona on air.</>}
             </div>
           </div>
+          </>)}
 
-        {form.tts.defaultEngine === 'piper' && (
+          <div className="field">
+            <Label {...levellingAria.labelledByProps}>Voice levelling</Label>
+            <Seg
+              {...levellingAria.groupProps}
+              value={form.tts.voiceLevelling ? 'on' : 'off'}
+              options={[{ id: 'off', label: 'Off' }, { id: 'on', label: 'On' }]}
+              onChange={v => setForm(f => ({ ...f, tts: { ...f.tts, voiceLevelling: v === 'on' } }))}
+            />
+            <p {...levellingAria.descriptionProps} className="field-hint">
+              Lifts quiet takes and cuts loud ones toward -18 LUFS.
+            </p>
+          </div>
+
+        {!hosted && form.tts.defaultEngine === 'piper' && (
           <>
             <div className="field mt-4">
               <div className="field-hint">
@@ -949,6 +974,17 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
             </div>
             <TtsGainField engineId="piper" form={form} setForm={setForm} />
             <TtsSpeedField engineId="piper" form={form} setForm={setForm} />
+          </>
+        )}
+
+        {/* Hosted: the engine's own panel is the box agent's, but its level and
+            pace stay the operator's (tts.gainDb / tts.speed aren't managed).
+            Kokoro's panel below carries them already. */}
+        {hosted && form.tts.defaultEngine !== 'kokoro'
+          && (TTS_GAIN_ENGINES as readonly string[]).includes(form.tts.defaultEngine) && (
+          <>
+            <TtsGainField engineId={form.tts.defaultEngine} form={form} setForm={setForm} />
+            <TtsSpeedField engineId={form.tts.defaultEngine} form={form} setForm={setForm} />
           </>
         )}
 
@@ -1046,7 +1082,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
           );
         })()}
 
-        {form.tts.defaultEngine === 'chatterbox' && (
+        {!hosted && form.tts.defaultEngine === 'chatterbox' && (
           <>
             <div className="field mt-4">
               <Label>Chatterbox reference voice</Label>
@@ -1092,7 +1128,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
           </>
         )}
 
-        {form.tts.defaultEngine === 'pocket-tts' && (
+        {!hosted && form.tts.defaultEngine === 'pocket-tts' && (
           <>
             <div className="field mt-4">
               <Label>PocketTTS voice</Label>
@@ -1142,6 +1178,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
           </>
         )}
 
+        {!hosted && (<>
         {geminiSelected && (() => {
           const geminiAvail = data.tts?.available?.gemini;
           // Keyed off the shared TtsForm shape rather than restating the three
@@ -1386,20 +1423,27 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
                         value={form.tts.cloud.model}
                         onChange={v => setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, model: v } } }))}
                         placeholder="Select a model"
+                        allowCustom
                       />
                     ) : (
-                      <Input
-                        value={form.tts.cloud.model}
-                        onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                          setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, model: e.target.value } } }))
-                        }
-                        placeholder={
-                          isCompat
-                            ? 'chatterbox'
-                            : (CLOUD_MODELS[form.tts.cloud.provider as keyof typeof CLOUD_MODELS]?.[0] || 'gpt-4o-mini-tts')
-                        }
-                        className="max-w-[360px]"
-                      />
+                      <>
+                        <Input
+                          list="cloud-tts-models"
+                          value={form.tts.cloud.model}
+                          onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                            setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, model: e.target.value } } }))
+                          }
+                          placeholder={
+                            isCompat
+                              ? 'chatterbox'
+                              : (CLOUD_MODELS[form.tts.cloud.provider as keyof typeof CLOUD_MODELS]?.[0] || 'gpt-4o-mini-tts')
+                          }
+                          className="max-w-[360px]"
+                        />
+                        <datalist id="cloud-tts-models">
+                          {(CLOUD_MODELS[form.tts.cloud.provider as keyof typeof CLOUD_MODELS] || []).map(model => <option key={model} value={model} />)}
+                        </datalist>
+                      </>
                     )}
                     {ttsDiscovery.loading
                       ? <span className="animate-pulse text-[11px] whitespace-nowrap text-muted">discovering…</span>
@@ -1523,8 +1567,9 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
           </div>
           );
         })()}
+        </>)}
 
-        {form.tts.defaultEngine === 'remote' && (() => {
+        {!hosted && form.tts.defaultEngine === 'remote' && (() => {
           const remoteAvail = available.remote;
           return (
           <div className="mt-4">
@@ -1603,6 +1648,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
         </div>
       </Card>
 
+      {!hosted && (
       <Advanced note="the rescue voice for a persona whose own engine fails">
       <Card
         title="Fallback voice"
@@ -1624,7 +1670,9 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
             rescues the segment so the DJ never goes silent. Off, it rescues onto
             the default engine above and whatever voice that engine happens to
             carry. On, it uses the engine <em>and voice</em> you pick here first,
-            and only falls through to Piper if that can’t speak either.
+            and only falls through to Piper if that can’t speak either. A
+            persona with its own <strong>Rescue voice</strong> (Personas → Voice)
+            tries that first, so co-hosts don’t all share this one voice.
           </div>
         </div>
 
@@ -1665,6 +1713,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
         )}
       </Card>
       </Advanced>
+      )}
 
       <SaveBar
         note={ttsDirty

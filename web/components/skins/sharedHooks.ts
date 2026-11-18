@@ -4,11 +4,15 @@
 // here reads only the core contexts, per the skin contract (see types.ts);
 // wording and layout stay with each skin.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { RefObject } from 'react';
 import { useReducedMotion } from 'motion/react';
 import { usePlayerActions, usePlayerFeed } from '@/components/player/PlayerCore';
 import { useLiteMode } from '@/hooks/useLiteMode';
+import { isRefusedOutcome } from '@/lib/request-outcome';
 import { lastVoiceLine, voiceOnAirMs } from './shared';
+import { crossfadeSettled, crossfadeStart, crossfadeTo, type Crossfade } from './crossfade';
+import { fitSvgTexts } from './svgTextFit';
 
 /** Whether a skin may run a JS-driven (motion) transition right now. Lite
  *  mode's `animation: none !important` reaches only CSS keyframes, so a skin
@@ -101,7 +105,7 @@ export function useRequestSlip(copy: RequestSlipCopy): RequestSlip {
     const deadline = Date.now() + POLL_DEADLINE_MS;
     const tick = async () => {
       if (pollStopRef.current) return;
-      if (Date.now() > deadline) return; // give up quietly; accepted line stands
+      if (Date.now() > deadline) return;
       const data = await pollRequest(requestId);
       if (pollStopRef.current) return;
       if (data?.status === 'resolved') {
@@ -110,12 +114,10 @@ export function useRequestSlip(copy: RequestSlipCopy): RequestSlip {
           typeof data.queuePosition === 'number' && data.queuePosition > 0
             ? ` — #${data.queuePosition} in the queue`
             : '';
-        setAck(
-          data.ack ||
-            (t?.title
-              ? `Lining up “${t.title}”${t.artist ? ` by ${t.artist}` : ''}${pos}.`
-              : copy.sent),
-        );
+        const refused = isRefusedOutcome(data.outcome);
+        const identity = t?.title ? `“${t.title}”${t.artist ? ` by ${t.artist}` : ''}` : '';
+        setAck([data.ack || (identity ? `Lining up ${identity}${pos}.` : copy.sent), data.ack && identity ? identity : ''].filter(Boolean).join(' '));
+        setOutcome(refused ? 'refused' : 'sent');
         return;
       }
       if (data?.status === 'failed') {
@@ -255,6 +257,27 @@ export function useDjOnAir(): boolean {
   return onAir;
 }
 
+/** Which of two stacked layers shows `value`, for a colour change done as an
+ *  opacity crossfade (see crossfade.ts). `fadeMs` must match the layers' CSS
+ *  opacity transition; 0 means they have none (lite, reduced motion) and the
+ *  swap is instant. */
+export function useCrossfade<T>(value: T, fadeMs: number): Crossfade<T> {
+  const [state, setState] = useState(() => crossfadeStart(value));
+  // Adjusted during render, not in an effect, so the new layer is painted in
+  // the same commit that starts its fade.
+  const next = crossfadeTo(state, value, fadeMs <= 0);
+  if (next !== state) setState(next);
+  // Keyed on `front` as well: a fade queued behind another starts in the same
+  // render that settles the first, so `fading` alone would never re-arm.
+  const { fading, front } = next;
+  useEffect(() => {
+    if (!fading) return;
+    const id = window.setTimeout(() => setState(crossfadeSettled), fadeMs);
+    return () => window.clearTimeout(id);
+  }, [fading, front, fadeMs]);
+  return next;
+}
+
 /** Keyboard/button volume nudge — clamps to [0, 1] on whole-percent steps. */
 export function useVolumeNudge(): (delta: number) => void {
   const { setVolume } = usePlayerActions();
@@ -263,4 +286,27 @@ export function useVolumeNudge(): (delta: number) => void {
       setVolume(v => Math.min(1, Math.max(0, Math.round((v + delta) * 100) / 100))),
     [setVolume],
   );
+}
+
+/** Squeeze any SVG `<text>` under `rootRef` that carries `data-fit="<room>"`
+ *  and runs past that room (svgTextFit.ts). A skin that sets legends inside a
+ *  drawing lays them out by character budget, which can't know the theme's
+ *  face, so each row is measured once drawn. Re-measures when `key` changes,
+ *  and again once web fonts land if they haven't yet; an empty key skips.
+ *  Key it on what the fitted rows say, never on a running clock: a pass
+ *  forces a layout and rewrites the squeezed rows, which repaints them and
+ *  re-runs any filter over them. Measuring isn't motion, so this runs in lite
+ *  and reduced motion too. A hidden tree measures zero and is left alone. */
+export function useSvgTextFit(rootRef: RefObject<Element | null>, key: string): void {
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    if (!root || !key) return;
+    const fit = () => fitSvgTexts(Array.from(root.querySelectorAll<SVGTextElement>('[data-fit]')));
+    fit();
+    const fonts = document.fonts;
+    if (!fonts || fonts.status === 'loaded') return;
+    let alive = true;
+    void fonts.ready.then(() => { if (alive) fit(); });
+    return () => { alive = false; };
+  }, [rootRef, key]);
 }

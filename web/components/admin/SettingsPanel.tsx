@@ -2,8 +2,8 @@
 
 import type { ChangeEvent } from 'react';
 import { settingsForm } from './settings/form-state';
-import { atPath, samePath, sameForm, countLeafDiffs, dirtyPaths, ownsErrorPath, mergePatchErrors } from './settings/form-diff';
-import { archivesSavePayload, dangerSavePayload } from './settings/save-payload';
+import { atPath, samePath, sameForm, countLeafDiffs, dirtyPaths, restorePaths, ownsErrorPath, mergePatchErrors, unsavedAnywhere } from './settings/form-diff';
+import { archivesSavePayload, dangerSavePayload, stemsSavePayload } from './settings/save-payload';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { notify, errorMessage } from '../../lib/notify';
@@ -25,6 +25,7 @@ import { cn } from '../../lib/cn';
 import { fieldAria } from '../../lib/form';
 import ArchivesPanel from './ArchivesPanel';
 import BackupPanel from './BackupPanel';
+import OrphanStemsPanel from './OrphanStemsPanel';
 import {
   SETTINGS_AAC_BITRATES,
   SETTINGS_MP3_BITRATES,
@@ -32,15 +33,17 @@ import {
 } from '@/lib/schemas.generated';
 import { AlertTriangle } from 'lucide-react';
 import {
-  SectionHeader, SaveBar, SettingsFieldError,
+  SectionHeader, SaveBar, SettingsFieldError, NowBanner,
   type FormState, type FormUpdater, type SettingsData, type SaveSettings,
   type LoudnessSource, type TransitionEffect,
 } from './settings/shared';
+import { useHosted } from './HostedContext';
 import {
-  SECTIONS, SECTION_GROUPS, RESTART_PATHS, sectionById, type SectionId,
+  SECTIONS, SECTION_GROUPS, RESTART_PATHS, STEM_FORM_KEYS, sectionById, type SectionId,
 } from './settings/registry';
 import { Advanced, SectionChromeProvider } from './settings/section-chrome';
 import { SettingsSearch, type SettingsJump } from './settings/SettingsSearch';
+import { deepLinkJump, type SettingsQuery } from './settings/settings-link';
 import { TtsSection } from './settings/TtsSection';
 import { DjBehaviourSection } from './settings/DjBehaviourSection';
 import { LlmSection } from './settings/LlmSection';
@@ -49,16 +52,20 @@ import { SearchSection } from './settings/SearchSection';
 import { LibrarySection } from './settings/LibrarySection';
 import { StationSection } from './settings/StationSection';
 import { ThemeSection } from './settings/ThemeSection';
-import { ScrobbleSection } from './settings/ScrobbleSection';
-import { LikesSection } from './settings/LikesSection';
+import { ListenersSection } from './settings/ListenersSection';
 import { NavidromeSection } from './settings/NavidromeSection';
+import { MusicSelectionSection } from './settings/MusicSelectionSection';
 import {
+  useLlmSwapMutation,
   useSettingsMutation,
   useSettingsQuery,
+  useStemUsageQuery,
 } from './settings/queries';
+import { fmtGb, fmtMeasured, pickTimeOvershoot, stemBudgetImpact, usageCaveat } from './settings/stem-budget';
 import {
   cloudSaveSnapshot, cloudSaveReadReady, rebaselineSavedPatch, reconcileSavedCloud,
-  type PendingCloudSave,
+  adoptServerPaths, committedReadReady, LLM_SWAP_FORM_KEYS,
+  type PendingCloudSave, type PendingCommittedRead,
 } from './settings/form-reconciliation';
 
 // Operator copy for the shared transition vocabulary. The drift test keeps
@@ -113,10 +120,20 @@ const AAC_BITRATES = SETTINGS_AAC_BITRATES;
  */
 const JUMP_MAX_FRAMES = 60;
 
-export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabled?: boolean }) {
+export default function SettingsPanel({ djBrainEnabled = false, hosted = false }: { djBrainEnabled?: boolean; hosted?: boolean }) {
+  // Hosted: the box agent owns max listeners (no editable field, and no number:
+  // the listener and bitrate ceilings are guards for the box's shared port,
+  // not published plan limits, so no copy presents them as one). The
+  // stream pickers offer only bitrates under the ceiling (the controller drops
+  // anything higher on save) and FLAC is off.
+  const { maxBitrate } = useHosted();
+  const underCeiling = (values: readonly number[]) => (maxBitrate ? values.filter(br => br <= maxBitrate) : values);
+  const ceilingHint = maxBitrate ? <> Up to {maxBitrate} kbps, the highest quality available on this station · Managed by SUB/WAVE Cloud.</> : null;
+  // Hosted (SUB/WAVE Cloud): the LLM provider page is the agent's, so it goes;
+  // the voice page stays for what the operator still owns (see TtsSection).
   const sections = useMemo(
-    () => SECTIONS.filter(s => s.id !== 'brain' || djBrainEnabled),
-    [djBrainEnabled],
+    () => SECTIONS.filter(s => (s.id !== 'brain' || djBrainEnabled) && (s.id !== 'llm' || !hosted)),
+    [djBrainEnabled, hosted],
   );
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
   const settingsQuery = useSettingsQuery<SettingsData>({
@@ -126,12 +143,20 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
   });
   const data = settingsQuery.data ?? null;
   const err = settingsQuery.error ? errorMessage(settingsQuery.error) : null;
+  // The stem cache's stored size, for the budget field's "cache used"
+  // line and the lowered-budget warning. The snapshot, never a walk.
+  const stemUsageResponse = useStemUsageQuery({ adminFetch, enabled: hydrated && !needsAuth }).data;
+  const stemUsage = stemUsageResponse?.usage ?? null;
+  const [confirmStemBudget, setConfirmStemBudget] = useState(false);
   const [commandBusy, setBusy] = useState(false);
   const [form, setForm] = useState<FormState | null>(null);
   const formBaselineRef = useRef<FormState | null>(null);
   const appliedRevisionRef = useRef(0);
   const pendingFormRevisionRef = useRef<{ revision: number; form: FormState } | null>(null);
   const [pendingCloudSave, setPendingCloudSave] = useState<PendingCloudSave | null>(null);
+  // A committed LLM swap whose llm/embedding keys still have to be adopted from
+  // a read that reflects it (see the hydration effect).
+  const [pendingSwapRead, setPendingSwapRead] = useState<PendingCommittedRead | null>(null);
   const [pendingRestart, setPendingRestart] = useState(false);
   const [confirmRestart, setConfirmRestart] = useState(false);
   const [confirmStop, setConfirmStop] = useState(false);
@@ -156,7 +181,8 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
   const refresh = async () => { await settingsQuery.refetch(); };
 
   const saveMutation = useSettingsMutation<SettingsData>({ adminFetch });
-  const busy = commandBusy || saveMutation.isPending;
+  const swapMutation = useLlmSwapMutation<SettingsData>({ adminFetch });
+  const busy = commandBusy || saveMutation.isPending || swapMutation.isPending;
 
   // Jingles / SFX / Beds now live on /admin/imaging; their old ?section
   // deep-links are forwarded so existing bookmarks survive. Read through
@@ -165,11 +191,14 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
   // only the query changes.
   const searchParams = useSearchParams();
   useEffect(() => {
-    const s = searchParams.get('section');
-    if (s === 'jingles' || s === 'sfx' || s === 'beds') {
-      router.replace(`/admin/imaging?tab=${s}`);
+    const requested = searchParams.get('section');
+    if (requested === 'jingles' || requested === 'sfx' || requested === 'beds') {
+      router.replace(`/admin/imaging?tab=${requested}`);
       return;
     }
+    // Retired tab ids, so an old bookmark or doc link still lands somewhere.
+    const RENAMED: Record<string, SectionId> = { danger: 'broadcast', likes: 'listeners', scrobble: 'listeners', orphans: 'stems' };
+    const s = requested && RENAMED[requested] ? RENAMED[requested] : requested;
     if (s === 'brain' && !djBrainEnabled) {
       setActiveSection('station');
       return;
@@ -196,6 +225,17 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
       formBaselineRef.current = reconciled.baseline;
       setPendingCloudSave(null);
     }
+    // The swap wrote llm/embedding on the server. Adopt them now even when
+    // another section's unsaved edit is holding this revision back: left
+    // stale, the LLM page would show the pre-swap legs and the next save of
+    // either section would post them straight back over the swap.
+    if (displayed && formBaselineRef.current && pendingSwapRead
+      && committedReadReady(pendingSwapRead, revision)) {
+      const adopted = adoptServerPaths(formBaselineRef.current, displayed, nextForm, LLM_SWAP_FORM_KEYS);
+      displayed = adopted.form;
+      formBaselineRef.current = adopted.baseline;
+      setPendingSwapRead(null);
+    }
     const baseline = formBaselineRef.current;
     const clean = !displayed || !baseline || sameForm(displayed, baseline);
     if (!clean) {
@@ -208,7 +248,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
     formBaselineRef.current = pending.form;
     appliedRevisionRef.current = pending.revision;
     pendingFormRevisionRef.current = null;
-  }, [data, form, settingsQuery.dataUpdatedAt, pendingCloudSave]);
+  }, [data, form, settingsQuery.dataUpdatedAt, pendingCloudSave, pendingSwapRead]);
 
   const saveSettings: SaveSettings = async (patch) => {
     const submitted = form;
@@ -242,6 +282,29 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
         : undefined;
       setFieldErrors((prev) => mergePatchErrors(prev, patch, body?.fieldErrors));
       notify.err(errorMessage(e));
+      return false;
+    }
+  };
+
+  /**
+   * "Swap with primary". The controller builds and saves the swap, so there is
+   * no submitted patch to re-baseline: the swapped keys are adopted from the
+   * authoritative read instead (pendingSwapRead, applied in the hydration
+   * effect, or by a later poll if that read failed).
+   */
+  const swapLlmLegs = async (): Promise<boolean> => {
+    try {
+      const j = await swapMutation.mutateAsync();
+      setPendingSwapRead({ refreshedAt: j.refreshedAt, refreshAfter: Date.now() });
+      if (j.requiresRestart) setPendingRestart(true);
+      if (j.refreshError) notify.err(`swapped, but refresh failed: ${j.refreshError}`);
+      else notify.ok('swapped: the backup is now the primary');
+      if (j.keyNotPinned) {
+        notify.err('swapped, but the Library tagger could not keep the primary’s API key (too long to store): if embeddings stop working, set an embedding key in Library tagger');
+      }
+      return true;
+    } catch (e) {
+      notify.err(`swap failed: ${errorMessage(e)}`);
       return false;
     }
   };
@@ -289,7 +352,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
    * Post a whole-block patch — unless a number box in it was left blank, in
    * which case name the box and save nothing. See `save-payload.ts`.
    */
-  const saveBlock = ({ patch, fieldErrors }: ReturnType<typeof dangerSavePayload> | ReturnType<typeof archivesSavePayload>) => {
+  const saveBlock = ({ patch, fieldErrors }: ReturnType<typeof dangerSavePayload> | ReturnType<typeof archivesSavePayload> | ReturnType<typeof stemsSavePayload>) => {
     const blanks = Object.keys(fieldErrors);
     if (blanks.length > 0) {
       setFieldErrors(prev => mergePatchErrors(prev, patch, fieldErrors));
@@ -302,7 +365,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
   };
 
   /**
-   * Archives and the danger zone used to carry a Save button per card — one for
+   * Archives and Broadcast & mixer used to carry a Save button per card — one for
    * the bitrate, one for the retention window, one for each stream mount. Each
    * now folds into the section's one save.
    *
@@ -316,8 +379,24 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
     if (form) saveBlock(archivesSavePayload(form));
   };
 
-  const saveDanger = () => {
+  const saveBroadcast = () => {
     if (form) saveBlock(dangerSavePayload(form));
+  };
+  const saveStems = () => {
+    if (form) saveBlock(stemsSavePayload(form));
+  };
+  // The budget's save path: a budget lowered under what the cache holds
+  // makes the next hourly sweep delete the difference, so that save asks
+  // first. An unchanged budget (even one already under the cache) and a
+  // raised one save straight through.
+  const stemBudgetCut = form
+    && formBaselineRef.current
+    && Number(form.transitions.stemCacheGb) < Number(formBaselineRef.current.transitions.stemCacheGb)
+    ? stemBudgetImpact(stemUsage, Number(form.transitions.stemCacheGb))
+    : null;
+  const saveStemsGuarded = () => {
+    if (stemBudgetCut) setConfirmStemBudget(true);
+    else saveStems();
   };
 
   const activeSpec = sectionById(activeSection);
@@ -346,12 +425,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
   /** Roll this section's fields back to the last saved baseline, nothing else. */
   const discardSection = () => {
     if (!form || !baseline || !activeSpec) return;
-    const next = JSON.parse(JSON.stringify(form)) as Record<string, unknown>;
-    const from = baseline as unknown as Record<string, unknown>;
-    for (const key of activeSpec.formKeys) {
-      if (key in from) next[key] = JSON.parse(JSON.stringify(from[key] ?? null));
-    }
-    setForm(next as unknown as FormState);
+    setForm(restorePaths(form, baseline, activeSpec.formKeys));
     // The errors belonged to values that no longer exist — same ownership rule
     // the save path uses, so an unrelated section's message survives.
     setFieldErrors(prev => {
@@ -386,6 +460,22 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
     };
     window.requestAnimationFrame(settle);
   }, [sections]);
+
+  // `?section=…&card=…` deep-links to one card (settings-link.ts), opening the
+  // section's Advanced disclosure when the card sits behind it: once the cards
+  // exist, then drops `card` from the address so the next click on the link is
+  // a new URL and nothing later can jump again (deepLinkJump has why).
+  // history.replaceState, not router.replace: Next syncs useSearchParams from
+  // it without a server round trip on this force-dynamic page.
+  const jumpedForRef = useRef<SettingsQuery | null>(null);
+  const cardsReady = !!data && !!form;
+  useEffect(() => {
+    const step = deepLinkJump(searchParams, cardsReady, id => sections.some(s => s.id === id), jumpedForRef.current);
+    if (!step) return;
+    jumpedForRef.current = searchParams;
+    jumpTo(step.jump);
+    window.history.replaceState(null, '', `${window.location.pathname}${step.search}${window.location.hash}`);
+  }, [searchParams, sections, jumpTo, cardsReady]);
 
   const chrome = useMemo(() => ({
     saveSlot,
@@ -495,10 +585,17 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
             setForm(prev => (prev ? updater(prev) : prev));
           return (
           <>
+            {activeSection === 'selection' && (
+              <MusicSelectionSection
+                data={data} form={form} setForm={updateForm} busy={busy}
+                saveSettings={saveSettings} fieldErrors={fieldErrors}
+              />
+            )}
             {activeSection === 'tts' && data.tts && (
               <TtsSection
                 data={data} form={form} setForm={updateForm} busy={busy}
                 saveSettings={saveSettings} fieldErrors={fieldErrors} adminFetch={adminFetch} refresh={refresh}
+                hosted={hosted}
               />
             )}
             {activeSection === 'behaviour' && (
@@ -513,10 +610,11 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                 saveSettings={saveSettings} fieldErrors={fieldErrors} adminFetch={adminFetch} refresh={refresh}
               />
             )}
-            {activeSection === 'llm' && data.llm && (
+            {!hosted && activeSection === 'llm' && data.llm && (
               <LlmSection
                 data={data} form={form} setForm={updateForm} busy={busy}
                 saveSettings={saveSettings} fieldErrors={fieldErrors} adminFetch={adminFetch} refresh={refresh}
+                unsavedChanges={unsavedAnywhere(form, baseline, hasLocalDirty)} swapLegs={swapLlmLegs}
               />
             )}
             {activeSection === 'search' && (
@@ -546,16 +644,10 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                 adminFetch={adminFetch}
               />
             )}
-            {activeSection === 'scrobble' && (
-              <ScrobbleSection
+            {activeSection === 'listeners' && (
+              <ListenersSection
                 data={data} form={form} setForm={updateForm} busy={busy}
                 saveSettings={saveSettings} fieldErrors={fieldErrors} adminFetch={adminFetch} refresh={refresh}
-              />
-            )}
-            {activeSection === 'likes' && (
-              <LikesSection
-                data={data} form={form} setForm={updateForm} busy={busy}
-                saveSettings={saveSettings} fieldErrors={fieldErrors}
               />
             )}
           </>
@@ -669,180 +761,16 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
           </>
         )}
         {activeSection === 'backup' && <BackupPanel />}
-        {activeSection === 'danger' && (
+        {activeSection === 'stems' && (
           <>
             <SectionHeader
-              eyebrow="danger zone"
-              title="Crossfade, stream control, and mixer restart."
-              sub="Crossfade is grouped here because it needs a mixer restart to apply. Stream stop and mixer restart both affect every current listener."
+              eyebrow="stems"
+              title="The Demucs side of the station."
+              sub="The stem cache, the rendered-blend seam, and what happens to cached dirs when their track leaves the library. Everything here applies live; no mixer restart."
               metrics={[
-                {
-                  n: data?.streamOnAir == null ? '—' : data.streamOnAir ? 'on air' : 'off air',
-                  l: 'broadcast',
-                  accent: data?.streamOnAir === true,
-                },
-                { n: `${data?.values?.crossfadeDuration ?? '—'}s`, l: 'crossfade' },
+                { n: data?.values?.audio?.stemCache ? 'on' : 'off', l: 'stem cache', accent: data?.values?.audio?.stemCache === true },
               ]}
             />
-
-            <Card title="Broadcast" sub={data?.streamOnAir === false ? 'currently off air' : 'currently on air'}>
-              <div className="grid gap-2">
-                {data?.streamOnAir === false ? (
-                  <Btn sm tone="accent" onClick={startStream} disabled={busy || !data}>
-                    Start stream
-                  </Btn>
-                ) : (
-                  <Btn sm tone="danger" onClick={() => setConfirmStop(true)} disabled={busy || !data || data?.streamOnAir == null}>
-                    Stop stream
-                  </Btn>
-                )}
-                <div className="field-hint">
-                  Takes the station off air by disconnecting the Icecast mount. A mixer restart brings it back on air.
-                </div>
-              </div>
-            </Card>
-
-            {form && (
-              <Card title="Idle pause" sub="silence the programme when nobody is listening">
-                <div className="field">
-                  <Label>Pause when the room is empty</Label>
-                  <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap">
-                    <Seg
-                      options={[
-                        { id: 'on', label: 'On' },
-                        { id: 'off', label: 'Off' },
-                      ]}
-                      value={form.stream.idleWhenEmpty ? 'on' : 'off'}
-                      onChange={id =>
-                        setForm(f =>
-                          f ? { ...f, stream: { ...f.stream, idleWhenEmpty: id === 'on' } } : f,
-                        )
-                      }
-                    />
-                    <span className="text-[12px] text-muted">after</span>
-                    <Input
-                      className="mono-num w-24"
-                      aria-label="Pause after (minutes)"
-                      type="number"
-                      step={1}
-                      min={1}
-                      max={1440}
-                      value={form.stream.idleAfterMinutes}
-                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                        setForm(f =>
-                          f
-                            ? { ...f, stream: { ...f.stream, idleAfterMinutes: e.target.value } }
-                            : f,
-                        )
-                      }
-                    />
-                    <span className="text-[12px] text-muted">min</span>
-                  </div>
-                  <div className="field-hint">
-                    After this long with zero listeners the programme pauses mid-track and the DJ
-                    goes quiet: no track pulls from Navidrome, no LLM or TTS work. The stream
-                    mounts stay up, so any player (VLC, Sonos, the web player) connects normally;
-                    playback resumes where it left off within a few seconds of the first listener
-                    tuning in. Applies live, no mixer restart.
-                  </div>
-                </div>
-              </Card>
-            )}
-
-            <Advanced note="crossfade, duck depth, transitions, loudness and the extra stream mounts">
-            {form && (
-              <Card title="Crossfade" sub="track transition overlap">
-                <div className="field">
-                  <div className="flex items-center gap-2">
-                    <Label>Crossfade duration</Label>
-                    <Pill tone="ink">restart required</Pill>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Input
-                      className="mono-num w-28"
-                      aria-label="Crossfade duration (seconds)"
-                      type="number"
-                      step={0.5}
-                      max={30}
-                      value={form.crossfadeDuration}
-                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                        setForm(f => (f ? { ...f, crossfadeDuration: e.target.value } : f))
-                      }
-                    />
-                    <span className="text-[12px] text-muted">sec</span>
-                  </div>
-                  <SettingsFieldError path="crossfadeDuration" errors={fieldErrors} />
-                  <div className="field-hint">
-                    Seconds of overlap between tracks (current: {data?.values?.crossfadeDuration}s).
-                    Saving flags a pending restart. Apply it with the Mixer card below.
-                  </div>
-                </div>
-              </Card>
-            )}
-
-            {form && (
-              <Card title="Duck depth" sub="how far the music drops under the DJ">
-                <div className="grid gap-3">
-                  <div className="field">
-                    <div className="flex items-center gap-2">
-                      <Label>DJ over silence</Label>
-                      <Pill tone="ink">restart required</Pill>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Input
-                        className="mono-num w-28"
-                        aria-label="Duck depth for solo DJ speech"
-                        type="number"
-                        step={0.01}
-                        min={0}
-                        max={1}
-                        value={form.ducking.voice}
-                        onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                          setForm(f => (f ? { ...f, ducking: { ...f.ducking, voice: e.target.value } } : f))
-                        }
-                      />
-                      <span className="text-[12px] text-muted">× music</span>
-                    </div>
-                    <SettingsFieldError path="ducking.voice" errors={fieldErrors} />
-                    <div className="field-hint">
-                      The heavy duck: station IDs, the hourly time, weather and request intros
-                      (current: {data?.values?.ducking?.voice}). It is the fraction of the music
-                      LEFT UP, so smaller is deeper — 0.22 is about −13 dB, 1 is no duck at all
-                      and 0 mutes the music while the DJ talks. Saving flags a pending restart;
-                      apply it with the Mixer card below.
-                    </div>
-                  </div>
-
-                  <div className="field">
-                    <div className="flex items-center gap-2">
-                      <Label>DJ over a track</Label>
-                      <Pill tone="ink">restart required</Pill>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Input
-                        className="mono-num w-28"
-                        aria-label="Duck depth for talk-over links"
-                        type="number"
-                        step={0.01}
-                        min={0}
-                        max={1}
-                        value={form.ducking.intro}
-                        onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                          setForm(f => (f ? { ...f, ducking: { ...f.ducking, intro: e.target.value } } : f))
-                        }
-                      />
-                      <span className="text-[12px] text-muted">× music</span>
-                    </div>
-                    <SettingsFieldError path="ducking.intro" errors={fieldErrors} />
-                    <div className="field-hint">
-                      The light duck for between-track links, which talk over the song rather
-                      than replacing it (current: {data?.values?.ducking?.intro}). Keep it above
-                      the heavy duck — 0.30 is about −10 dB. Saving flags a pending restart.
-                    </div>
-                  </div>
-                </div>
-              </Card>
-            )}
 
             {form && (
               <Card title="Stem transitions" sub="pair-aware scheduling + rendered blends">
@@ -927,9 +855,47 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                         tracks
                       </span>
                     </div>
+                    {(() => {
+                      if (!stemUsage) {
+                        return (
+                          <div className="field-hint">
+                            Cache used: not measured yet (the hourly sweep records it).
+                          </div>
+                        );
+                      }
+                      const impact = stemBudgetImpact(stemUsage, Number(form.transitions.stemCacheGb));
+                      // Pick-time stems runs the cache over its budget between
+                      // sweeps by design: not a fault while it stays inside that.
+                      const pickTimeOver = pickTimeOvershoot(stemUsageResponse, Number(form.transitions.stemCacheGb));
+                      const at = fmtMeasured(stemUsage.measuredAt);
+                      return (
+                        <>
+                          <div className="field-hint">
+                            Cache used: <span className="mono-num">{fmtGb(stemUsage.bytes)}</span>
+                            {' '}&middot; {stemUsage.dirs.toLocaleString('en-GB')} tracks
+                            {at ? ` (measured ${at}${usageCaveat(stemUsage)})` : ''}
+                          </div>
+                          {pickTimeOver !== null ? (
+                            <div className="field-hint" role="status">
+                              Pick-time stems has taken the cache{' '}
+                              <span className="mono-num">{fmtGb(pickTimeOver)}</span> over this budget,
+                              as it may; the next hourly sweep trims it back, lowest stem priority
+                              first.
+                            </div>
+                          ) : impact && (
+                            <div className="field-hint text-destructive" role="status">
+                              This budget is below what the cache holds: the next hourly sweep
+                              deletes about <strong>{fmtGb(impact.deleteBytes)}</strong>, the stems
+                              of ~{impact.deleteTracks.toLocaleString('en-GB')} tracks (lowest
+                              stem priority first), keeping ~{impact.keepTracks.toLocaleString('en-GB')}.
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
                     <div className="field-hint">
                       How much disk the stem cache may use before the oldest entries are evicted
-                      (1&ndash;500&nbsp;GB). A blend only fires when BOTH tracks of a pair are
+                      (1&ndash;1,000&nbsp;GB). A blend only fires when BOTH tracks of a pair are
                       cached, so a budget well under your library size means most seams stay
                       plain crossfades. The backfill stops once the budget is full rather than
                       separating tracks it would immediately evict.
@@ -958,6 +924,333 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                       incoming intro until its own beat drops. Falls back to a plain crossfade on
                       any miss. Needs pair-aware transitions + the stem cache; the Doctor flags a
                       config that can&rsquo;t deliver.
+                    </div>
+                  </div>
+
+                  <div className="field">
+                    <Label>Separate stems when a track is picked</Label>
+                    <div className="flex items-center gap-2">
+                      <Seg
+                        options={[
+                          { id: 'on', label: 'On' },
+                          { id: 'off', label: 'Off' },
+                        ]}
+                        value={form.transitions.pickTimeStems ? 'on' : 'off'}
+                        onChange={id =>
+                          setForm(f =>
+                            f ? { ...f, transitions: { ...f.transitions, pickTimeStems: id === 'on' } } : f,
+                          )
+                        }
+                      />
+                    </div>
+                    <div className="field-hint">
+                      While a picked track waits behind the one about to air, separate whatever stems
+                      it is missing, so the cache turns over to what the station actually plays. A
+                      full cache may run a little over its budget for this (about an hour of picks, or
+                      5% of a small budget, plus the track being separated) until the hourly cleanup
+                      trims it back, lowest stem priority first, leaving tracks still waiting to air
+                      until last. Its tail is usually ready for the seam out of it; the seam into it
+                      renders before this starts, so its head pays off the next time it is picked.
+                      This runs Demucs on air, one track at a time, on the same analyzer the blends
+                      use, and keeps the model loaded, so on a GPU its memory stays in use. Not
+                      recommended below about 4 CPU cores: watch the stream for dropouts before
+                      leaving it on. Needs stem-blend seams and the stem cache, and only separates
+                      tracks the analysis pass has already measured.
+                    </div>
+                    {form.transitions.pickTimeStems && data?.values?.audio?.analyzeQuietOnly === true && (
+                      <div className="field-hint text-destructive" role="status">
+                        Quiet-only analysis is on (Library), so nothing is separated at pick time.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            <OrphanStemsPanel />
+            <SaveBar
+              note="Stem cache, budget and blend settings apply to the next pick — no restart."
+              busy={busy}
+              onSave={saveStemsGuarded}
+              saveLabel="Save stems"
+              errors={fieldErrors}
+              ownedKeys={STEM_FORM_KEYS}
+            />
+          </>
+        )}
+        {activeSection === 'broadcast' && (
+          <>
+            <SectionHeader
+              eyebrow="broadcast & mixer"
+              title="How the station sounds on every stream."
+              sub="Crossfade, ducking, transitions, levelling and the stream mounts. Most are read by the mixer at startup, so the save bar warns before a change that needs a restart. Stopping the stream and restarting the mixer affect every current listener and ask before they run."
+              metrics={[
+                {
+                  n: data?.streamOnAir == null ? '—' : data.streamOnAir ? 'on air' : 'off air',
+                  l: 'broadcast',
+                  accent: data?.streamOnAir === true,
+                },
+                { n: `${data?.values?.crossfadeDuration ?? '—'}s`, l: 'crossfade' },
+              ]}
+            />
+
+            <Card title="Broadcast" sub={data?.streamOnAir === false ? 'currently off air' : 'currently on air'}>
+              <div className="grid gap-2">
+                {data?.streamOnAir === false ? (
+                  <Btn sm tone="accent" onClick={startStream} disabled={busy || !data}>
+                    Start stream
+                  </Btn>
+                ) : (
+                  <Btn sm tone="danger" onClick={() => setConfirmStop(true)} disabled={busy || !data || data?.streamOnAir == null}>
+                    Stop stream
+                  </Btn>
+                )}
+                <div className="field-hint">
+                  Takes the station off air by disconnecting the Icecast mount. A mixer restart brings it back on air.
+                </div>
+              </div>
+            </Card>
+
+            {form && (
+              <Card title="Idle pause" sub="silence the programme when nobody is listening">
+                <div className="field">
+                  <Label>Pause when the room is empty</Label>
+                  <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap">
+                    <Seg
+                      options={[
+                        { id: 'on', label: 'On' },
+                        { id: 'off', label: 'Off' },
+                      ]}
+                      value={form.stream.idleWhenEmpty ? 'on' : 'off'}
+                      onChange={id =>
+                        setForm(f =>
+                          f ? { ...f, stream: { ...f.stream, idleWhenEmpty: id === 'on' } } : f,
+                        )
+                      }
+                    />
+                    <span className="text-[12px] text-muted">after</span>
+                    <Input
+                      className="mono-num w-24"
+                      aria-label="Pause after (minutes)"
+                      type="number"
+                      step={1}
+                      min={1}
+                      max={1440}
+                      value={form.stream.idleAfterMinutes}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                        setForm(f =>
+                          f
+                            ? { ...f, stream: { ...f.stream, idleAfterMinutes: e.target.value } }
+                            : f,
+                        )
+                      }
+                    />
+                    <span className="text-[12px] text-muted">min</span>
+                  </div>
+                  <div className="field-hint">
+                    After this long with zero listeners the programme pauses mid-track and the DJ
+                    goes quiet: no track pulls from Navidrome, no LLM or TTS work. The stream
+                    mounts stay up, so any player (VLC, Sonos, the web player) connects normally;
+                    playback resumes where it left off within a few seconds of the first listener
+                    tuning in. Applies live, no mixer restart.
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            <Advanced note="crossfade, duck depth, transitions, loudness and the extra stream mounts">
+            {form && (
+              <Card title="Crossfade" sub="track transition overlap">
+                <div className="grid gap-3">
+                <div className="field">
+                  <div className="flex items-center gap-2">
+                    <Label>Crossfade duration</Label>
+                    <Pill tone="ink">restart required</Pill>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      className="mono-num w-28"
+                      aria-label="Crossfade duration (seconds)"
+                      type="number"
+                      step={0.5}
+                      max={30}
+                      value={form.crossfadeDuration}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                        setForm(f => (f ? { ...f, crossfadeDuration: e.target.value } : f))
+                      }
+                    />
+                    <span className="text-[12px] text-muted">sec</span>
+                  </div>
+                  <SettingsFieldError path="crossfadeDuration" errors={fieldErrors} />
+                  <div className="field-hint">
+                    Seconds of overlap between tracks (current: {data?.values?.crossfadeDuration}s).
+                    Saving flags a pending restart. Apply it with the Mixer card below.
+                  </div>
+                </div>
+                <div className="field">
+                  <div className="flex items-center gap-2">
+                    <Label>Crossfade curve</Label>
+                    <Pill tone="ink">restart required</Pill>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Seg
+                      options={[
+                        { id: 'linear', label: 'Linear' },
+                        { id: 'equal-power', label: 'Equal-power' },
+                      ]}
+                      value={form.transitions.equalPowerCrossfade ? 'equal-power' : 'linear'}
+                      onChange={id =>
+                        setForm(f =>
+                          f ? { ...f, transitions: { ...f.transitions, equalPowerCrossfade: id === 'equal-power' } } : f,
+                        )
+                      }
+                    />
+                  </div>
+                  <SettingsFieldError path="transitions.equalPowerCrossfade" errors={fieldErrors} />
+                  <div className="field-hint">
+                    Linear fades dip about 3&nbsp;dB in the middle of a crossfade between two songs,
+                    because the two halves add up in amplitude, not in power. Equal-power keeps the
+                    level steady through the overlap. Applies to plain song-to-song crossfades only:
+                    effects, stem blends, jingles and beds keep their own curves.
+                  </div>
+                </div>
+                <div className="field">
+                  <Label>Cut fade endings at their audible end</Label>
+                  <div className="flex items-center gap-2">
+                    <Seg
+                      options={[
+                        { id: 'off', label: 'Off' },
+                        { id: 'on', label: 'On' },
+                      ]}
+                      value={form.transitions.fadeAudibleEnd ? 'on' : 'off'}
+                      onChange={id =>
+                        setForm(f =>
+                          f ? { ...f, transitions: { ...f.transitions, fadeAudibleEnd: id === 'on' } } : f,
+                        )
+                      }
+                    />
+                  </div>
+                  <SettingsFieldError path="transitions.fadeAudibleEnd" errors={fieldErrors} />
+                  <div className="field-hint">
+                    A song that fades out keeps playing well after you can hear it: the dead-air
+                    trim waits for true silence, so the next track starts over a near-silent tail.
+                    With this on, a fade is cut where it stops being audible and the crossfade
+                    spans the fade up to that point. Applies from the next queued track, no mixer
+                    restart. Tracks not yet re-analysed keep today&apos;s cut.
+                  </div>
+                </div>
+                <div className="field">
+                  <Label>Audible end (dB under the track&apos;s loudness)</Label>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      className="mono-num w-28"
+                      aria-label="Audible end (dB under the track's loudness)"
+                      type="number"
+                      step={1}
+                      min={15}
+                      max={35}
+                      value={form.transitions.fadeAudibleEndDb}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                        const v = e.currentTarget.value;
+                        setForm(f => (f ? { ...f, transitions: { ...f.transitions, fadeAudibleEndDb: v } } : f));
+                      }}
+                    />
+                    <span className="text-[12px] text-muted">dB</span>
+                  </div>
+                  <SettingsFieldError path="transitions.fadeAudibleEndDb" errors={fieldErrors} />
+                  <div className="field-hint">
+                    How far under the song&apos;s own loudness its fade counts as gone, from 15 to 35
+                    (default 20). A smaller number cuts earlier. Applies from the next queued track,
+                    no mixer restart; tracks not yet re-analysed keep today&apos;s cut.
+                  </div>
+                </div>
+                <div className="field">
+                  <Label>Read endings from the loudness curve</Label>
+                  <div className="flex items-center gap-2">
+                    <Seg
+                      options={[
+                        { id: 'off', label: 'Off' },
+                        { id: 'on', label: 'On' },
+                      ]}
+                      value={form.transitions.tailFromCurve ? 'on' : 'off'}
+                      onChange={id =>
+                        setForm(f =>
+                          f ? { ...f, transitions: { ...f.transitions, tailFromCurve: id === 'on' } } : f,
+                        )
+                      }
+                    />
+                  </div>
+                  <SettingsFieldError path="transitions.tailFromCurve" errors={fieldErrors} />
+                  <div className="field-hint">
+                    Whether a song fades or stops cold, where it starts winding down and how loud
+                    its last seconds are, read from the whole-track loudness measurement instead of
+                    the older tail analysis. With the audible-end cut on, a fade followed by a drone
+                    or room noise is also cut where the music stops. Applies from the next queued
+                    track, no mixer restart; tracks without the measurement keep today&apos;s readings.
+                  </div>
+                </div>
+                </div>
+              </Card>
+            )}
+
+            {form && (
+              <Card title="Duck depth" sub="how far the music drops under the DJ">
+                <div className="grid gap-3">
+                  <div className="field">
+                    <div className="flex items-center gap-2">
+                      <Label>DJ over silence</Label>
+                      <Pill tone="ink">restart required</Pill>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        className="mono-num w-28"
+                        aria-label="Duck depth for solo DJ speech"
+                        type="number"
+                        step={0.01}
+                        min={0}
+                        max={1}
+                        value={form.ducking.voice}
+                        onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                          setForm(f => (f ? { ...f, ducking: { ...f.ducking, voice: e.target.value } } : f))
+                        }
+                      />
+                      <span className="text-[12px] text-muted">× music</span>
+                    </div>
+                    <SettingsFieldError path="ducking.voice" errors={fieldErrors} />
+                    <div className="field-hint">
+                      The heavy duck: station IDs, the hourly time, weather and request intros
+                      (current: {data?.values?.ducking?.voice}). It is the fraction of the music
+                      LEFT UP, so smaller is deeper — 0.22 is about −13 dB, 1 is no duck at all
+                      and 0 mutes the music while the DJ talks. Saving flags a pending restart;
+                      apply it with the Mixer card below.
+                    </div>
+                  </div>
+
+                  <div className="field">
+                    <div className="flex items-center gap-2">
+                      <Label>DJ over a track</Label>
+                      <Pill tone="ink">restart required</Pill>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        className="mono-num w-28"
+                        aria-label="Duck depth for talk-over links"
+                        type="number"
+                        step={0.01}
+                        min={0}
+                        max={1}
+                        value={form.ducking.intro}
+                        onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                          setForm(f => (f ? { ...f, ducking: { ...f.ducking, intro: e.target.value } } : f))
+                        }
+                      />
+                      <span className="text-[12px] text-muted">× music</span>
+                    </div>
+                    <SettingsFieldError path="ducking.intro" errors={fieldErrors} />
+                    <div className="field-hint">
+                      The light duck for between-track links, which talk over the song rather
+                      than replacing it (current: {data?.values?.ducking?.intro}). Keep it above
+                      the heavy duck — 0.30 is about −10 dB. Saving flags a pending restart.
                     </div>
                   </div>
                 </div>
@@ -1244,9 +1537,10 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                       Cap on how far a quiet track is turned up (0 = level down only). Boost is
                       also limited by each track&rsquo;s own measured peak headroom, so raising
                       this won&rsquo;t distort dynamic material; very quiet, dynamic masters
-                      simply can&rsquo;t reach the target cleanly. Loud tracks are turned down as
-                      far as needed. Applies from the next queued track; no restart, tracks need
-                      acoustic analysis (Library → Analyze).
+                      simply can&rsquo;t reach the target cleanly. A track whose peak is unknown
+                      is not turned up at all. Loud tracks are turned down as far as needed.
+                      Applies from the next queued track; no restart, tracks need acoustic
+                      analysis (Library → Analyze).
                     </div>
                   </div>
                 </div>
@@ -1301,7 +1595,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          {OPUS_BITRATES.map(br => (
+                          {underCeiling(OPUS_BITRATES).map(br => (
                             <SelectItem key={br} value={String(br)}>
                               {br} kbps
                             </SelectItem>
@@ -1310,6 +1604,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                       </Select>
                     </div>
                     <SettingsFieldError path="stream.opusBitrate" errors={fieldErrors} />
+                    {ceilingHint && <div className="field-hint">{ceilingHint}</div>}
                     <div className="field-hint">
                       96 kbps is transparent for most music; 256/320 suits hifi listeners
                       (current: {data?.values?.stream?.opusBitrate ?? '—'} kbps). Raising it
@@ -1321,7 +1616,16 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
               </Card>
             )}
 
-            {form && (
+            {form && maxBitrate && (
+              <Card title="FLAC stream" sub="/stream.flac (Ogg FLAC, lossless)">
+                <NowBanner label={<>FLAC stream · Managed by SUB/WAVE Cloud</>}>
+                  The lossless mount runs near 1 Mbps a listener, so it isn&apos;t available on
+                  this station (streams go up to {maxBitrate} kbps). MP3, Opus and AAC serve
+                  everyone.
+                </NowBanner>
+              </Card>
+            )}
+            {form && !maxBitrate && (
               <Card title="FLAC stream" sub="/stream.flac (Ogg FLAC, lossless)">
                 <div className="field">
                   <div className="flex items-center gap-2">
@@ -1456,7 +1760,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          {AAC_BITRATES.map(br => (
+                          {underCeiling(AAC_BITRATES).map(br => (
                             <SelectItem key={br} value={String(br)}>
                               {br} kbps
                             </SelectItem>
@@ -1465,6 +1769,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                       </Select>
                     </div>
                     <SettingsFieldError path="stream.aacBitrate" errors={fieldErrors} />
+                    {ceilingHint && <div className="field-hint">{ceilingHint}</div>}
                     <div className="field-hint">
                       AAC-LC is transparent around 256 kbps (current:{' '}
                       {data?.values?.stream?.aacBitrate ?? '—'} kbps).
@@ -1492,7 +1797,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {MP3_BITRATES.map(br => (
+                        {underCeiling(MP3_BITRATES).map(br => (
                           <SelectItem key={br} value={String(br)}>
                             {br} kbps
                           </SelectItem>
@@ -1501,6 +1806,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                     </Select>
                   </div>
                   <SettingsFieldError path="stream.bitrate" errors={fieldErrors} />
+                  {ceilingHint && <div className="field-hint">{ceilingHint}</div>}
                   <div className="field-hint">
                     Higher bitrate = better quality, more listener bandwidth
                     (current: {data?.values?.stream?.bitrate ?? '—'} kbps). 192 kbps is the
@@ -1539,16 +1845,25 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                   <SettingsFieldError path="stream.bufferSeconds" errors={fieldErrors} />
                   <div className="field-hint">
                     Icecast primes this much audio when a listener connects. Lower values start
-                    closer to live and shorten idle wake-up, but leave less immediate cushion
+                    closer to live and shorten idle wake-up on radios and apps (the web player
+                    skips most of it on MP3 in Chrome and Firefox), but leave less immediate cushion
                     for network stalls; 0 disables the connect burst. Applies on the next
-                    broadcast restart. Current: {data?.values?.stream?.bufferSeconds ?? '—'}
+                    broadcast restart; until then listeners keep, and players are told, the
+                    buffer the stream started with. Saved: {data?.values?.stream?.bufferSeconds ?? '—'}
                     {' '}seconds.
                   </div>
                 </div>
               </Card>
             )}
 
-            {form && (
+            {form && hosted && (
+              <Card title="Max listeners" sub="Icecast concurrent-connection ceiling">
+                <NowBanner label={<>Max listeners · Managed by SUB/WAVE Cloud</>}>
+                  SUB/WAVE Cloud manages this station&apos;s listener connections.
+                </NowBanner>
+              </Card>
+            )}
+            {form && !hosted && (
               <Card title="Max listeners" sub="Icecast concurrent-connection ceiling">
                 <div className="field">
                   <div className="flex items-center gap-2">
@@ -1671,16 +1986,27 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
             <SaveBar
               note="Crossfade, the encoder settings and the listener buffer only reach the stream after a mixer restart. Idle pause, loudness, dead-air trim and the track-length cap apply live."
               busy={busy}
-              onSave={saveDanger}
-              saveLabel="Save danger zone"
+              onSave={saveBroadcast}
+              saveLabel="Save broadcast & mixer"
               errors={fieldErrors}
-              ownedKeys={['crossfadeDuration', 'ducking', 'maxTrackSeconds', 'maxTrackLengthMode', 'fadeAtShowEnd', 'silenceTrim', 'transitions', 'audio', 'loudness', 'stream']}
+              ownedKeys={['crossfadeDuration', 'ducking', 'maxTrackSeconds', 'maxTrackLengthMode', 'fadeAtShowEnd', 'silenceTrim', 'loudness', 'stream', 'transitions.equalPowerCrossfade', 'transitions.fadeAudibleEnd', 'transitions.fadeAudibleEndDb', 'transitions.effects']}
             />
           </>
         )}
         </SectionChromeProvider>
       </div>
 
+      <V3AlertDialog
+        open={confirmStemBudget}
+        onOpenChange={setConfirmStemBudget}
+        title="Lower the stem cache budget"
+        description={stemBudgetCut
+          ? `The cache holds ${fmtGb(stemUsage?.bytes ?? 0)}. At ${form?.transitions.stemCacheGb} GB, the next hourly sweep deletes about ${fmtGb(stemBudgetCut.deleteBytes)}: the stems of ~${stemBudgetCut.deleteTracks.toLocaleString('en-GB')} tracks, lowest stem priority first. Re-separating them later takes hours of analysis.`
+          : ''}
+        confirmLabel="save and delete"
+        danger
+        onConfirm={saveStems}
+      />
       <V3AlertDialog
         open={confirmRestart}
         onOpenChange={setConfirmRestart}

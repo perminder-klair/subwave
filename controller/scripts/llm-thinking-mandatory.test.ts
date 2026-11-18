@@ -13,6 +13,7 @@
 // a control model from the previous generation, which proves the capture sees
 // the forced shape when we do ask for it.
 import assert from 'node:assert/strict';
+import { chatCompletion } from './test-utils/llm.js';
 import test from 'node:test';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
@@ -55,14 +56,9 @@ async function compatibleCall(model: string): Promise<any> {
     apiKey: 'test',
     fetch: openAICompatibleFetch(cfg, async (_url: any, init: any) => {
       sent = JSON.parse(init.body);
-      return json({
-        id: 'c1', object: 'chat.completion', created: 0, model,
-        choices: [{
-          index: 0, finish_reason: 'tool_calls',
-          message: { role: 'assistant', content: null, tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'emit', arguments: JSON.stringify(ANSWER) } }] },
-        }],
-        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-      });
+      return json(chatCompletion({ id: 'c1', created: 0, model,
+        message: { role: 'assistant', content: null, tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'emit', arguments: JSON.stringify(ANSWER) } }] },
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }));
     }, true),
   });
   const out = await objectViaToolCall({ cfg, model: provider.chat(model) }, { prompt: 'pick', schema, temperature: 0.5, maxOutputTokens: 500 });
@@ -70,17 +66,13 @@ async function compatibleCall(model: string): Promise<any> {
   return sent;
 }
 
-test('native anthropic, claude-sonnet-5-5: tool_choice auto and thinking never disabled', async () => {
-  const body = await anthropicCall('claude-sonnet-5-5');
-  assert.equal(body.tool_choice?.type, 'auto');
-  assert.notEqual(body.thinking?.type, 'disabled');
-});
-
-test('native anthropic, claude-opus-5-5: tool_choice auto and thinking never disabled', async () => {
-  const body = await anthropicCall('claude-opus-5-5');
-  assert.equal(body.tool_choice?.type, 'auto');
-  assert.notEqual(body.thinking?.type, 'disabled');
-});
+for (const model of ['claude-sonnet-5-5', 'claude-opus-5-5']) {
+  test(`native anthropic, ${model}: tool_choice auto and thinking never disabled`, async () => {
+    const body = await anthropicCall(model);
+    assert.equal(body.tool_choice?.type, 'auto');
+    assert.notEqual(body.thinking?.type, 'disabled');
+  });
+}
 
 test('native anthropic control, claude-sonnet-5: still forced with thinking disabled', async () => {
   const body = await anthropicCall('claude-sonnet-5');

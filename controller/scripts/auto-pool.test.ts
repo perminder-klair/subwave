@@ -1,7 +1,7 @@
 // Regression test for the auto.m3u fallback pool builder (broadcast/auto-pool.ts)
 // — the recency / dedup / artist-cap guards that keep the LLM-free coast from
 // re-airing just-played tracks and from stacking duplicate library copies (#874).
-// Run: `tsx scripts/auto-pool.test.ts`.
+// Run: `npm test -- auto-pool`.
 //
 // node:assert-via-tsx style, matching scripts/recent-plays.test.ts.
 

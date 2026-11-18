@@ -26,7 +26,7 @@ export { reviewReport } from './doctor/review.js';
 // finding via `safe`, so one failing subsystem never blanks the report. Data so
 // the batch runner and the streaming generator drive the same list.
 const SECTION_CHECKS: Array<{ name: string; run: (s: StationSettings | null) => Promise<Finding[]> }> = [
-  { name: 'LLM', run: (s) => checkLlm(s) },
+  { name: 'LLM', run: (s) => checkLlm(s, { candidatePoolMigrated: settings.migratedFromCandidatePool() }) },
   { name: 'Navidrome & library', run: () => checkNavidrome() },
   { name: 'Broadcast', run: () => checkBroadcast() },
   { name: 'Voice (TTS)', run: (s) => checkTts(s) },

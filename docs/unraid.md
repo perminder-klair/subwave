@@ -195,8 +195,12 @@ that isn't in the lean image (the `-heavy` images are ~1.9 GB):
   features, GPU-fast: add `docker-compose.analyzer-gpu.yml` from the repo as a
   second compose file in the stack (it swaps the analyzer to
   `subwave-analyzer-cuda` and reserves the GPU; `ANALYZER_HEAVY` is then
-  irrelevant). Needs the Unraid **Nvidia Driver** plugin; if the GPU isn't
-  visible the analyzer just falls back to CPU.
+  irrelevant). On a card older than Turing (a GTX 10-series, say) also add
+  `ANALYZER_CUDA_TAG=pascal`, or the tag named for your card
+  ([every tag](internals/infrastructure.md#aio-cuda-tags)), to the **.env**.
+  Needs the Unraid **Nvidia Driver** plugin; if the GPU isn't
+  visible, or can't run the image's kernels, the analyzer logs a warning and
+  falls back to CPU.
 - **All-in-one (one-click from Community Applications).** The heavy/lean split
   is baked into the image, so you switch by pointing the container at the heavy
   tag — **`ANALYZER_HEAVY` does nothing here** (it's the split-stack toggle):
@@ -221,7 +225,11 @@ that isn't in the lean image (the `-heavy` images are ~1.9 GB):
      Driver*) and reboot if it asks. Note your GPU's UUID from
      **Settings → Nvidia Driver**.
   2. **Docker** tab → **subwave** → **Edit** (*Advanced View* on).
-  3. **Repository** → `ghcr.io/perminder-klair/subwave-aio-cuda:latest`.
+  3. **Repository** → `ghcr.io/perminder-klair/subwave-aio-cuda:<arch>`, with
+     the tag named for your card's GPU architecture: `:pascal` for a GTX
+     10-series, `:ampere` for an RTX 30-series, and so on
+     ([every tag](internals/infrastructure.md#aio-cuda-tags)). `:latest` works
+     only on Turing (RTX 20-series) and newer.
   4. **Extra Parameters** → append `--runtime=nvidia` (keep the existing
      `--add-host` value; the field takes both).
   5. Set the two variables the template already ships (both blank by default):
@@ -231,10 +239,12 @@ that isn't in the lean image (the `-heavy` images are ~1.9 GB):
 
   Nothing else changes — no separate analyzer container, no compose overlay
   (that's the split stack's route). The analyze worker picks the device itself:
-  it uses the GPU when it can see one and otherwise logs a warning and carries
-  on with the CPU, so a half-finished setup degrades rather than breaking the
+  it uses the GPU when it can see one and a test op runs on it, and otherwise
+  logs a warning and carries on with the CPU, so a half-finished setup, or a
+  tag built without kernels for your card, degrades rather than breaking the
   station. Pin it explicitly with the `ANALYZE_DEVICE` variable (`auto`, the
-  default, `cuda`, or `cpu`) if you'd rather be sure. Between passes the models
+  default, `cuda`, or `cpu`) if you'd rather be sure; `cuda` still falls back
+  when the test op fails. Between passes the models
   drop out of VRAM after ~5 idle minutes, so a co-resident Ollama gets the card
   back (`ANALYZE_IDLE_UNLOAD_S` tunes that; `0` keeps them resident). The same
   release runs on CPU-only boxes, with a longer default window (30 minutes):
@@ -393,14 +403,14 @@ path. For most people the single-upstream setup above is the easier win.
   Update**. Compose stack → stack menu → **Pull & Up**. To pin or roll back to
   a specific release, point the container's **Repository** field at a tag
   (`ghcr.io/perminder-klair/subwave-aio:1.4.2`) instead of `:latest`.
-- **Max concurrent listeners:** **admin → Settings → Danger zone → Max
+- **Max concurrent listeners:** **admin → Settings → Broadcast & mixer → Max
   listeners**, then restart the container so Icecast re-renders its config.
   This used to be reachable only through `ICECAST_MAX_CLIENTS`, which the
   one-click template does not expose and the AIO image has no `.env` for —
   so on Unraid it was unsettable. It is a station setting now. (Adding
   `ICECAST_MAX_CLIENTS` as a custom container variable still overrides the
   field; the broadcast log names which source it used on every boot.)
-- **Listener country in Stats:** **admin → Settings → Danger zone → Listener
+- **Listener country in Stats:** **admin → Settings → Broadcast & mixer → Listener
   country**. `CF-IPCountry` only exists behind Cloudflare, so a station reached
   over the LAN or a plain reverse proxy shows sessions with no geography. Name
   your proxy's own country header there, or point the same card at an offline

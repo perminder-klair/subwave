@@ -18,7 +18,7 @@ import { AiFill } from '../AiFill';
 import { cn } from '../../../lib/cn';
 import { SkinGallery } from './SkinGallery';
 import { DEFAULT_SKIN_ID, SKINS } from '../../skins';
-import { THEME_TOKENS, THEME_TOKEN_KEYS, SWATCH_KEYS, DISPLAY_FONT_IDS, MONO_FONT_IDS } from '../../../lib/theme-tokens.generated';
+import { THEME_TOKENS, THEME_TOKEN_KEYS, SWATCH_KEYS, DISPLAY_FONT_IDS, MONO_FONT_IDS, TEXTURE_IDS, FINISH_IDS } from '../../../lib/theme-tokens.generated';
 import {
   SectionHeader,
   type SettingsData, type SaveSettings, type SettingsFieldErrors,
@@ -220,7 +220,7 @@ function ThemeEditorModal({
           />
         </div>
         <div className="grid gap-1.5">
-          {THEME_TOKENS.map(({ key, label, type, group, fontSet }, i) => (
+          {THEME_TOKENS.map(({ key, label, type, group, fontSet, keywordSet }, i) => (
             <div key={key} className="grid gap-1.5">
               {group !== (i > 0 ? THEME_TOKENS[i - 1]?.group : null) && (
                 <div className="mt-2 text-[10px] tracking-[0.16em] text-ink-faint uppercase first:mt-0">{group}</div>
@@ -238,6 +238,15 @@ function ThemeEditorModal({
                   >
                     <option value="">default ({fontSet === 'mono' ? 'jetbrains' : 'fraunces'})</option>
                     {(fontSet === 'mono' ? MONO_FONT_IDS : DISPLAY_FONT_IDS).map(id => <option key={id} value={id}>{id}</option>)}
+                  </select>
+                ) : type === 'keyword' ? (
+                  <select
+                    value={tokens[key] || ''}
+                    onChange={(e: ChangeEvent<HTMLSelectElement>) => setTokens(prev => ({ ...prev, [key]: e.target.value }))}
+                    className="border border-ink bg-field px-2 py-1.5 font-mono text-[12px] text-ink"
+                  >
+                    <option value="">none</option>
+                    {(keywordSet === 'finish' ? FINISH_IDS : TEXTURE_IDS).map(id => <option key={id} value={id}>{id}</option>)}
                   </select>
                 ) : type === 'grain' ? (
                   <div className="flex items-center gap-2">

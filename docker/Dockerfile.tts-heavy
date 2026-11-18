@@ -25,9 +25,18 @@ FROM python:3.11-slim-bookworm
 # build-essential: chatterbox-tts pulls pkuseg, which has no py≥3.9 wheel and
 # source-builds a Cython extension. Purged after both venvs are built.
 # libsndfile1: soundfile/torchaudio WAV write. curl: operator healthchecks.
+# libgomp1: torchaudio's native library links the OpenMP runtime by soname,
+# libgomp.so.1. torch bundles its own copy on both arches, and on amd64 that
+# copy keeps the soname libgomp.so.1, so once torch is loaded it satisfies
+# torchaudio too. The arm64 wheel renames its copy (libgomp-<hash>.so.1.0.0),
+# so there only this package does; PocketTTS has no torchaudio and never needed
+# it. It arrives with build-essential, so the purge's --auto-remove took it too
+# and Chatterbox failed to import on an arm64 build; naming it here marks it
+# manually installed, which the purge leaves alone.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates \
     libsndfile1 \
+    libgomp1 \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
@@ -77,8 +86,9 @@ RUN python3 -m venv /opt/chatterbox/venv && \
     rm -rf "$SP/torch/include" "$SP/torch/test"
 
 # --- PocketTTS venv --------------------------------------------------------
-# Separate venv so its resolution doesn't fight chatterbox's. pocket-tts 2.1.0
-# needs torch>=2.5 / numpy>=2; torch held at the same 2.6.0 CPU wheel.
+# Separate venv so its resolution doesn't fight chatterbox's. pocket-tts 4.0.1
+# needs torch>=2.5 / numpy>=2; torch held at the same 2.6.0 CPU wheel. Its
+# default "english" model is english_2026-10 (2.1.0's was english_2026-04).
 #
 # Voice cloning (#238) is a pure RUNTIME concern: the gated kyutai/pocket-tts
 # weights download lazily on first /speak once HF_TOKEN is set in the compose
@@ -89,7 +99,7 @@ RUN python3 -m venv /opt/pocket-tts/venv && \
     /opt/pocket-tts/venv/bin/pip install --no-cache-dir \
       --index-url https://download.pytorch.org/whl/cpu \
       --extra-index-url https://pypi.org/simple \
-      torch==2.6.0 scipy==1.17.1 pocket-tts==2.1.0 && \
+      torch==2.6.0 scipy==1.17.1 pocket-tts==4.0.1 && \
     /opt/pocket-tts/venv/bin/python -c \
       "from pocket_tts import TTSModel" && \
     find /opt/pocket-tts/venv -depth -type d -name __pycache__ -exec rm -rf {} + && \
@@ -115,9 +125,22 @@ ENV PATH=/opt/server/venv/bin:$PATH \
 WORKDIR /app
 COPY docker/tts-heavy/server.py /app/server.py
 # The SAME workers the controller runs in-process — single source of truth,
-# including the PocketTTS RMS normalisation.
+# including the on-air leveller both import from beside them.
 COPY controller/scripts/chatterbox_worker.py /app/workers/chatterbox_worker.py
 COPY controller/scripts/pocket_tts_worker.py /app/workers/pocket_tts_worker.py
+COPY controller/scripts/voice_level.py /app/workers/voice_level.py
+# Import check against the FINAL system libraries: each venv's own smoke test
+# runs before the toolchain purge, so a runtime library the purge's
+# --auto-remove takes (libgomp1 on arm64) passed it and failed only at boot.
+# torchaudio is named because its native library is the one that needed
+# libgomp1. -B and a throwaway NUMBA_CACHE_DIR keep it from writing bytecode
+# or librosa's JIT cache back into the venvs stripped above.
+RUN export NUMBA_CACHE_DIR=/tmp/import-check && \
+    /opt/chatterbox/venv/bin/python -B -c "import sys; sys.path.insert(0, '/app/workers'); \
+      import voice_level, torchaudio; from chatterbox.tts_turbo import ChatterboxTurboTTS" && \
+    /opt/pocket-tts/venv/bin/python -B -c "import sys; sys.path.insert(0, '/app/workers'); \
+      import voice_level; from pocket_tts import TTSModel" && \
+    rm -rf /tmp/import-check
 
 # Shared state mount — WAVs land in /var/sub-wave/voice/* and the controller
 # hands the paths to Liquidsoap. mkdir'd here so the image runs standalone too.

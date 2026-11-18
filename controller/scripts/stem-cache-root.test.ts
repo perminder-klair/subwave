@@ -18,7 +18,7 @@
 //      shared root would let station B render a transition from station A's
 //      audio.
 //
-// Run: `tsx scripts/stem-cache-root.test.ts` (auto-discovered by npm test).
+// Run: `npm test -- stem-cache-root`.
 
 import assert from 'node:assert/strict';
 import test from 'node:test';

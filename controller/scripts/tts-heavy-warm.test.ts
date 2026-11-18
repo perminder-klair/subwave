@@ -12,7 +12,7 @@
 // quietly rather than reject. An unhandled rejection from a `void`-ed call is
 // how a memory optimisation takes the station down.
 //
-// globalThis.fetch swap, matching scripts/weather-settings-live.test.ts.
+// globalThis.fetch swap, matching scripts/weather-geocode-upstream.test.ts.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';

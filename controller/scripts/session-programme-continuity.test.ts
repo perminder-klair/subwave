@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { deferred } from './test-utils/async.js';
 import { after, test } from 'node:test';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -218,11 +219,6 @@ test('an old aired boundary record cannot restore a later airing\'s programme on
   assert.equal((await session.recover(ctx(friday))).programme, null);
 });
 
-function deferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>(done => { resolve = done; });
-  return { promise, resolve };
-}
 
 function deferredPlan() {
   const started = deferred<void>();

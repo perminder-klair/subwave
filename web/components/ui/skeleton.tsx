@@ -117,26 +117,6 @@ function SkeletonCards({
   )
 }
 
-function SkeletonTiles({
-  tiles = 4,
-  className,
-  label,
-}: { tiles?: number } & ShapeProps) {
-  return (
-    <LoadingBox
-      label={label}
-      className={cn("grid grid-cols-2 gap-3 sm:grid-cols-4", className)}
-    >
-      {Array.from({ length: tiles }).map((_, i) => (
-        <div key={i} aria-hidden className="border border-separator-strong p-3">
-          <Skeleton className="h-6 w-[60%]" />
-          <Skeleton className="mt-2 h-2.5 w-[80%]" />
-        </div>
-      ))}
-    </LoadingBox>
-  )
-}
-
 function SkeletonForm({
   fields = 4,
   className,
@@ -159,6 +139,5 @@ export {
   SkeletonText,
   SkeletonRows,
   SkeletonCards,
-  SkeletonTiles,
   SkeletonForm,
 }

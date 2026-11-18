@@ -1,5 +1,5 @@
 // Boot-time pointer resolution — the function config.ts calls at module load.
-// Run: npx tsx scripts/stations-resolve.test.ts
+// Run: `npm test -- stations-resolve`.
 
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';

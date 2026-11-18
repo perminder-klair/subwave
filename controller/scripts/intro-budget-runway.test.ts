@@ -10,15 +10,16 @@
 // Run: npm test -- intro-budget-runway
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test, { after } from 'node:test';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const stateRoot = mkdtempSync(path.join(tmpdir(), 'subwave-intro-budget-runway-'));
 process.env.STATE_DIR = stateRoot;
 const { introBudgetPhrase, enforceIntroBudget, firstVocalMsFor } = await import('../src/llm/internal/prompts/intro-budget.js');
-after(() => rmSync(stateRoot, { recursive: true, force: true }));
+after(() => removeTempDir(stateRoot));
 
 const words = (n: number) => Array.from({ length: n }, (_, i) => `word${i}`).join(' ') + '.';
 

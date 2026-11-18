@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Render station idents into ${STATE_DIR}/jingles via the controller's Piper.
-# Liquidsoap's playlist reloads automatically (no restart needed) once the
-# M3U is rewritten.
+# Once the M3U is rewritten the mixer is told to reload it, so no restart is
+# needed.
 #
 # Edit the JINGLES array below and re-run any time you want to refresh idents.
 
@@ -77,3 +77,21 @@ done
 
 echo "✓ Rendered ${#JINGLES[@]} jingles to ${JINGLE_DIR_HOST}"
 echo "✓ Wrote playlist ${M3U_HOST}"
+
+# The playlist's file watch cannot be trusted with this write: on Liquidsoap
+# 2.4.5 it follows the inode the controller's atomic rewrites replace, so it is
+# deaf once the controller has written the file (#2008). The renders are
+# written by now, so a failed reload only warns.
+reload_reply=$("${COMPOSE[@]}" exec -T broadcast timeout 5 bash -c \
+  'exec 3<>/dev/tcp/127.0.0.1/1234 && printf "jingles.reload\nquit\n" >&3 && cat <&3' \
+  2>/dev/null || true)
+if grep -q '^OK' <<< "$reload_reply"; then
+  echo "✓ Mixer reloaded the playlist"
+elif grep -q 'unknown command' <<< "$reload_reply"; then
+  # jingleRatio 0, or jingleRotate 'controller', whose rotate draws from
+  # jingles.json, which this script never writes.
+  echo "! The mixer runs no jingle rotate of its own, so this playlist does not air" >&2
+else
+  echo "! Could not reach the mixer to reload the playlist. If the new idents do not air, restart it:" >&2
+  echo "  ${COMPOSE[*]} restart broadcast" >&2
+fi

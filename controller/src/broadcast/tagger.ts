@@ -10,10 +10,18 @@ import { clearPoolCache } from '../music/picker.js';
 import { clearPlaylistCache } from '../music/show-playlist.js';
 import { syncAllAfterTag } from '../music/playlist-sync.js';
 import { applyPendingRotation } from '../music/id-rotation.js';
+import { followMovedHearts } from '../music/heart-follow.js';
+import { recordWalk } from '../music/library-walk.js';
 import { createIdRotationRecovery, type RotationRecoveryResult, type RotatedIdEvidence } from '../music/id-rotation-recovery.js';
 import { refreshTaggerFallback, runTaggerFollowups, type MaintenanceMode } from './tagger-followups.js';
 import { PROGRESS_PREFIX, EVENT_PREFIX, ROTATION_PREFIX, CATALOGUE_PREFIX, type TaggerProgress, type TaggerEvent, type TaggerRotation } from '../music/tagger-progress.js';
 import { writePidfile, clearPidfile, readPidfile, isPidAlive, MANAGED_ENV } from '../music/tagger-lock.js';
+import path from 'node:path';
+import { STATE_DIR } from '../config.js';
+import {
+  openRunLog, listRunLogs, runLogPath, RUN_LOG_DIR_NAME,
+  type RunLog, type RunLogPage, type RunLogFileInfo,
+} from './tagger-run-log.js';
 
 type TaggerMode = MaintenanceMode;
 
@@ -41,11 +49,41 @@ type TaggerState = {
   // Latest [progress] sentinel; left in place after exit, UI gates display on `running`.
   progress: TaggerProgress | null;
   lastRun: TaggerLastRun | null;
+  // Id of the current (or last) run's full log: the cursor feed below and its
+  // file under state/tagger-logs/. null before the first run of this process.
+  runLogId: string | null;
+  // What the current (or last) run held back for the operator, in its words. A
+  // held run exits 0, so this outlives it, until the next run starts.
+  holds: string[];
 };
 
 export const tagger: TaggerState = {
   running: false, startedAt: null, pid: null, lastLog: [], mode: null, progress: null, lastRun: null,
+  runLogId: null, holds: [],
 };
+
+// The full run log. `lastLog` above stays the short tail every snapshot carries;
+// this one is read by sequence number, so a page polling every few seconds gets
+// every line however fast the child prints, and each run is also kept on disk.
+const RUN_LOG_DIR = path.join(STATE_DIR, RUN_LOG_DIR_NAME);
+let runLog: RunLog | null = null;
+
+// Lines after `after` for the run `runId`. A cursor from another run (the page
+// was open across a new start) reads from the beginning. null = no run yet.
+export function taggerLogSince(after: number, runId?: string | null): RunLogPage | null {
+  if (!runLog) return null;
+  return runLog.since(runId && runId !== runLog.runId ? 0 : after);
+}
+
+export function taggerLogFiles(): RunLogFileInfo[] {
+  return listRunLogs(RUN_LOG_DIR);
+}
+
+// Absolute, so the route can split it into sendFile's root and name.
+export function taggerLogFile(id: unknown): string | null {
+  const p = runLogPath(RUN_LOG_DIR, id);
+  return p ? path.resolve(p) : null;
+}
 
 const idRotationRecovery = createIdRotationRecovery({
   maintenanceRunning: () => tagger.running,
@@ -117,12 +155,83 @@ async function applyRotationNow(): Promise<boolean> {
   }
 }
 
+// How a run ended, for a caller that started it and wants to know (the
+// scheduled run, broadcast/tag-schedule.ts). Called once, after the slot is
+// free; `holds` is what the run held back for the operator, in its words.
+export type TaggerRunEnd = TaggerLastRun & { holds: string[]; runLogId: string | null };
+type OnExit = (end: TaggerRunEnd) => void;
+
+// How long a run's end waits for 'close' after 'exit' before it is reported
+// with the output it has. 'close' comes once every pipe has drained, which is
+// normally milliseconds; a grandchild still holding a pipe open must not keep
+// the caller waiting for ever.
+export const RUN_END_CLOSE_GRACE_MS = 60_000;
+
+/**
+ * One run's end, reported once to `onExit`. A hold is read from the child's
+ * stdout, and 'exit' can fire while its last lines are still in the pipe, so
+ * an exit is reported on 'close', when every line is in; a spawn that failed
+ * has no output coming and is reported at once. The holds are this run's own,
+ * not `tagger.holds`, which the next run resets as soon as 'exit' frees the
+ * slot.
+ */
+export function createRunEndReporter(
+  onExit: OnExit | undefined,
+  runLogId: string | null,
+  logError: (message: string) => void,
+  closeGraceMs = RUN_END_CLOSE_GRACE_MS,
+) {
+  const holds: string[] = [];
+  let exited: TaggerLastRun | null = null;
+  let reported = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const report = (last: TaggerLastRun) => {
+    if (reported) return;
+    reported = true;
+    if (timer) clearTimeout(timer);
+    if (!onExit) return;
+    try {
+      onExit({ ...last, holds: [...holds], runLogId });
+    } catch (err: any) {
+      logError(`exit callback failed: ${err?.message || err}`);
+    }
+  };
+  return {
+    hold(text: string) { holds.push(text); },
+    /** The spawn failed ('error' with no process): nothing more is coming. */
+    failed(last: TaggerLastRun) { report(last); },
+    /** 'exit': the slot is free, but output may still be in the pipes. */
+    exited(last: TaggerLastRun) {
+      if (reported || exited) return;
+      exited = last;
+      if (onExit) {
+        timer = setTimeout(() => report(last), closeGraceMs);
+        timer.unref?.();
+      }
+    },
+    /** 'close': every line of output is in. */
+    closed() { if (exited) report(exited); },
+  };
+}
+
+// The operator's answer to a replaced-file hold (music/replaced-file-policy.ts),
+// for the two runs that walk. The admin UI sends neither: both are API-only.
+type ReplacedAnswer = { confirmReplaced?: boolean; acceptReplaced?: boolean };
+
+function replacedFlags({ confirmReplaced, acceptReplaced }: ReplacedAnswer): string[] {
+  return [
+    ...(confirmReplaced ? ['--confirm-replaced'] : []),
+    ...(acceptReplaced ? ['--accept-replaced'] : []),
+  ];
+}
+
 // Spawn the tagger as a detached-from-our-event-loop child process. Caller is
 // responsible for rejecting the request if `tagger.running` is already true.
 // The re-* flags map straight to music/tag-library.ts: `reseed` drops + rebuilds
 // track_vectors and re-embeds from scratch (embedding-model-swap recovery),
 // `reEnrich` re-fetches Last.fm tags + lyrics, `reAnalyze` redoes acoustic
-// bpm/key, `upgrade` re-LLM-tags rows whose prompt/model is stale. A "full
+// bpm/key, `upgrade` re-LLM-tags rows whose prompt/model is stale (with
+// `upgradeBlind`, only the rows tagged blind and measured since, #2281). A "full
 // re-scan" from the admin UI is reseed + reEnrich + reAnalyze together.
 export function startTagger(
   opts: {
@@ -131,6 +240,8 @@ export function startTagger(
     reEnrich?: boolean;
     reAnalyze?: boolean;
     upgrade?: boolean;
+    // Narrows `upgrade` to blind rows (--upgrade-blind); ignored without it.
+    upgradeBlind?: boolean;
     // "Re-embed, then continue tagging". Only honoured when reseed is the sole re-* pass.
     thenTag?: boolean;
     // Step toggles: undefined = run the step; false emits the skip flag.
@@ -140,15 +251,17 @@ export function startTagger(
     analyze?: boolean;
     // Per-run Demucs override; undefined defers to the setting.
     vocal?: boolean;
-  } = {},
+    onExit?: OnExit;
+  } & ReplacedAnswer = {},
 ) {
-  const { limit, reseed, reEnrich, reAnalyze, upgrade, thenTag, reconcile, enrich, tagMoods, analyze, vocal } = opts;
+  const { limit, reseed, reEnrich, reAnalyze, upgrade, upgradeBlind, thenTag, reconcile, enrich, tagMoods, analyze, vocal } = opts;
   const args = ['src/music/tag-library.ts'];
   if (Number.isFinite(limit) && (limit as number) > 0) args.push('--limit', String(limit));
   if (reseed) args.push('--reseed');
   if (reEnrich) args.push('--re-enrich');
   if (reAnalyze) args.push('--re-analyze');
   if (upgrade) args.push('--upgrade');
+  if (upgrade && upgradeBlind === true) args.push('--upgrade-blind');
   // Any re-* pass adds --rescan, which scopes every pass to already-done tracks and
   // suppresses forward discovery. Exception: a reseed-only "then tag" chain drops
   // --rescan so the forward pass also tags the untagged remainder. Any other re-*
@@ -164,6 +277,8 @@ export function startTagger(
   if (reconcile === false) args.push('--no-prune');
   if (analyze !== false && vocal === true) args.push('--vocal');
   if (analyze !== false && vocal === false) args.push('--no-vocal');
+  const replaced = replacedFlags(opts);
+  args.push(...replaced);
 
   const detail = [
     Number.isFinite(limit) && (limit as number) > 0 ? `limit=${limit}` : null,
@@ -173,16 +288,18 @@ export function startTagger(
     reEnrich ? 're-enrich' : null,
     reAnalyze ? 're-analyze' : null,
     upgrade ? 'upgrade' : null,
+    upgrade && upgradeBlind === true ? 'upgrade-blind' : null,
     enrich === false ? 'skip-enrich' : null,
     tagMoods === false ? 'skip-tag' : null,
     analyze === false ? 'skip-analyze' : null,
     reconcile === false ? 'no-prune' : null,
     analyze !== false && vocal === true ? 'vocal' : null,
     analyze !== false && vocal === false ? 'no-vocal' : null,
+    ...replaced,
   ]
     .filter(Boolean)
     .join(', ');
-  spawnChild('tag', args, detail);
+  spawnChild('tag', args, detail, { onExit: opts.onExit });
 }
 
 // Standalone analysis pass (bpm/key/intro + CLAP audio embeddings). `audio` and
@@ -207,11 +324,12 @@ export function startAnalyzer(opts: { limit?: number; audio?: boolean; vocal?: b
 // Walk Navidrome and prune library rows it no longer contains. No embeddings, no
 // LLM. The walk stamps era verdicts (#1418) and chains the incremental MusicBrainz
 // original-year backfill. Same single-flight slot; caller rejects when running.
-export function startReconcile(opts: { automaticIdRotation?: RotatedIdEvidence } = {}) {
+export function startReconcile(opts: { automaticIdRotation?: RotatedIdEvidence; onExit?: OnExit } & ReplacedAnswer = {}) {
+  const replaced = replacedFlags(opts);
   spawnChild(
     'reconcile',
-    ['src/music/tag-library.ts', '--reconcile-only'],
-    opts.automaticIdRotation ? 'automatic Navidrome ID-rotation recovery' : '',
+    ['src/music/tag-library.ts', '--reconcile-only', ...replaced],
+    opts.automaticIdRotation ? 'automatic Navidrome ID-rotation recovery' : replaced.join(', '),
     opts,
   );
 }
@@ -220,7 +338,7 @@ function spawnChild(
   mode: TaggerMode,
   args: string[],
   detail: string,
-  opts: { automaticIdRotation?: RotatedIdEvidence } = {},
+  opts: { automaticIdRotation?: RotatedIdEvidence; onExit?: OnExit } = {},
 ) {
   const label = mode === 'tag' ? 'tagger' : mode === 'analyze' ? 'analyzer' : 'reconcile';
   // detached:true makes the child a process-GROUP leader so stopTagger can signal the
@@ -234,12 +352,32 @@ function spawnChild(
   });
   activeChild = child;
   const startedAt = new Date().toISOString();
+  // Tag and reconcile runs walk the whole catalogue: until one ends cleanly the
+  // table may be part-walked (music/library-walk.ts).
+  const walks = mode !== 'analyze';
+  if (walks) recordWalk(mode, 'running');
   tagger.running = true;
   tagger.startedAt = startedAt;
   tagger.pid = child.pid ?? null;
   tagger.lastLog = [];
   tagger.mode = mode;
   tagger.progress = null;
+  tagger.holds = [];
+  // One log and one file per run; openRunLog owns the id, retention and the
+  // refused-file fallback. The previous id is passed so a run started in the
+  // same second never shares it. The previous log is left open: 'exit' (which
+  // frees the slot) can come before its child's last output has drained, and
+  // its own 'close' handler below closes it once that output is in the file.
+  runLog = openRunLog(RUN_LOG_DIR, new Date(startedAt), mode, runLog?.runId ?? null);
+  tagger.runLogId = runLog.runId;
+  const thisRunLog = runLog;
+
+  // One report per run, on 'close' (createRunEndReporter says why).
+  const runEnd = createRunEndReporter(
+    opts.onExit,
+    thisRunLog.runId,
+    (message) => queue.log('error', `${label} ${message}`),
+  );
 
   let catalogueReady = false;
   let earlyRefresh: Promise<boolean> | null = null;
@@ -315,10 +453,16 @@ function spawnChild(
             const last = tagger.lastLog[tagger.lastLog.length - 1];
             if (typeof last === 'string' && stripLogPrefix(last) === ev.text) tagger.lastLog.pop();
             tagger.lastLog.push({ kind: ev.kind, text: ev.text, at: ev.at });
+            if (ev.hold) {
+              tagger.holds.push(ev.text);
+              runEnd.hold(ev.text);
+            }
+            thisRunLog.event(ev, (raw) => stripLogPrefix(raw) === ev.text);
           } catch { /* malformed sentinel — drop */ }
           continue;
         }
         tagger.lastLog.push(line);
+        thisRunLog.raw(line);
       }
       if (tagger.lastLog.length > 100) tagger.lastLog = tagger.lastLog.slice(-100);
     };
@@ -335,6 +479,9 @@ function spawnChild(
     activeChild = null;
     clearPidfile();
     tagger.lastLog.push(`[error] ${err.message}`);
+    thisRunLog.raw(`[error] ${err.message}`);
+    thisRunLog.close();
+    if (walks) recordWalk(mode, 'failed');
     tagger.lastRun = {
       mode,
       outcome: 'failed',
@@ -345,6 +492,14 @@ function spawnChild(
       finishedAt: new Date().toISOString(),
     };
     queue.log('error', `${label} could not start: ${err.message}`);
+    runEnd.failed(tagger.lastRun);
+  });
+  // The run log closes on 'close', not 'exit': 'exit' can fire while the
+  // child's last output is still in the pipes, and the file must hold it.
+  child.on('close', (code, signal) => {
+    thisRunLog.raw(`[exit ${signal || code}]`);
+    thisRunLog.close();
+    runEnd.closed();
   });
   child.on('exit', (code, signal) => {
     tagger.running = false;
@@ -354,6 +509,7 @@ function spawnChild(
     // Signal (incl. Stop / restart-kill) → 'stopped'; exit 0 → 'ok'; else 'failed'.
     const outcome: TaggerLastRun['outcome'] = signal ? 'stopped' : code === 0 ? 'ok' : 'failed';
     if (opts.automaticIdRotation && outcome !== 'ok') idRotationRecovery.automaticReconcileFailed();
+    if (walks) recordWalk(mode, outcome);
     tagger.lastRun = {
       mode,
       outcome,
@@ -378,6 +534,13 @@ function spawnChild(
           if (opts.automaticIdRotation && outcome === 'ok') idRotationRecovery.automaticReconcileFailed();
           return;
         }
+        // The walk may have pruned a hearted song's old id: move the heart to
+        // the same song under its new one (music/heart-follow.ts), which stands
+        // down unless the last walk finished cleanly. Not awaited, as at boot:
+        // its Navidrome lookups must not hold the fallback refresh and the
+        // playlist sync below behind a timeout. It runs one pass at a time.
+        void followMovedHearts().catch((err: unknown) =>
+          queue.log('error', `following moved hearts failed (will retry): ${err instanceof Error ? err.message : String(err)}`));
         const fallbackRestored = await runTaggerFollowups({
           mode,
           outcome,
@@ -404,6 +567,7 @@ function spawnChild(
         if (opts.automaticIdRotation && outcome === 'ok') idRotationRecovery.automaticReconcileFailed();
       });
     queue.log('scheduler', `${label} finished (${signal ? `signal ${signal}` : `exit ${code}`})`);
+    runEnd.exited(tagger.lastRun);
   });
   queue.log('scheduler', `${label} started${detail ? ` (${detail})` : ''}`);
 }

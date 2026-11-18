@@ -105,8 +105,10 @@ naturally bursty around decisions and quiet between them.
   `agent → fallback` rate means the conversational picker keeps erroring or
   returning invalid track ids — cross-reference the failed-LLM errors in the
   health section. Frequent fallback means the agent is paying its cost without
-  delivering; the model or provider may be too weak, or `settings.llm.pickerAgent`
-  could be turned off to just use the reliable pool picker.
+  delivering; the model or provider may be too weak, or switch
+  `settings.llm.trackSelection` to `shortlist` (Admin → Settings → Music
+  selection → Track Shortlist), which needs only one bounded call per pick.
+  On a Shortlist station the report shows `shortlist ok/failed` instead.
 - **Tool mix.** A wildly skewed mix (one tool doing everything) hints the agent
   has a blind spot — e.g. never using `tracksByMood` may mean mood tags are
   sparse, so that tool returns nothing and the agent learned to avoid it.
@@ -183,7 +185,7 @@ points — reason from the specific data, do not paste them verbatim.
 | Errors clustered on a Navidrome endpoint (esp. `522`) | Controller's `NAVIDROME_URL` is the Cloudflare origin | Point `NAVIDROME_URL` in `controller/.env` at the internal/Tailscale Navidrome address |
 | Narrow pool: short head of most-returned songs, few distinct artists | Library small, or mood tags sparse, or pool sources thin | Check library size; run the library tagger (`npm run tag`) so `tracksByMood` has data; review the 7 picker pool sources in `music/picker.js` |
 | High artist repetition despite a wide library | Candidate pool narrow at decision time | Same as above — broaden the pool; verify the recently-played exclusion window isn't starving choices |
-| High `agent → fallback` rate | Agent erroring or returning invalid ids | Read the failed-LLM errors; consider a stronger model/provider in `settings.llm`, or disable `settings.llm.pickerAgent` to rely on the pool picker |
+| High `agent → fallback` rate | Agent erroring or returning invalid ids | Read the failed-LLM errors; consider a stronger model/provider in `settings.llm`, or set `settings.llm.trackSelection` to `shortlist` |
 | Decision latency p95 approaching track length | Slow LLM provider or slow Navidrome | Faster provider/model; or reduce tool calls per decision |
 | Many `ai-sdk:recovery` events | Model weak at structured JSON output | Switch to a more capable model in `settings.llm` |
 | `ECONNREFUSED` / connection errors to the LLM host | Ollama box down or wrong URL | Check the LLM host is up and `settings.llm` (provider/model/URL) is correct |

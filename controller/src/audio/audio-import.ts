@@ -112,7 +112,8 @@ function runFfmpeg(args: string[]): Promise<void> {
 // piped) so seek-dependent containers like m4a/mp4 decode correctly. `loudnorm`
 // is EBU R128 levelling, on for speech-length jingles and off for short
 // transient effects where one-pass loudnorm under 2s is unreliable.
-// `sampleRate`/`channels` pin the output shape.
+// `sampleRate`/`channels` pin the output shape. With loudnorm, set sampleRate:
+// its dynamic mode upsamples to 192 kHz, including the output unless -ar is set.
 export async function transcodeAudio(
   input: Buffer,
   { outPath, format, loudnorm = false, atempo, sampleRate, channels }: {

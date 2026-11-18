@@ -14,6 +14,8 @@ import Waveform from './Waveform';
 import TransportBar from './TransportBar';
 import TuneInOverlay from './TuneInOverlay';
 import DotRail from './DotRail';
+import CoverAmbient from './CoverAmbient';
+import AmbientLyrics from './AmbientLyrics';
 import CommandPalette, { type PlayerDrawer } from './CommandPalette';
 import ShortcutsDialog from './ShortcutsDialog';
 import TimelineDrawer from './drawers/TimelineDrawer';
@@ -28,9 +30,7 @@ import {
 } from '@/components/player/PlayerCore';
 import { useTuneInGate } from '@/components/player/useTuneInGate';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
-import { useCoverColors } from '@/hooks/useCoverColors';
-import { useDynamicStyle } from '@/hooks/useDynamicStyle';
-import { cn } from '@/lib/cn';
+import { useLyricsPreference, useTrackLyrics } from '@/components/skins/lyrics';
 import { useStationClient } from '@/lib/stationClient';
 import type { SkinProps } from '@/components/skins/types';
 import type { QueueEntry, RequestResult } from '@/lib/types';
@@ -41,6 +41,7 @@ const DRAWER_TITLES: Record<PlayerDrawer, string> = {
   request: 'Make a request',
   schedule: 'Schedule',
 };
+
 
 // Hoisted so the DotRail counts memo below keeps stable element references —
 // recreating these per render would defeat DotRail's React.memo.
@@ -68,12 +69,6 @@ export default function ClassicSkin({ portalNode }: SkinProps) {
   // cached proxy.
   const coverSubsonicId = nowPlaying?.subsonic_id ?? null;
   const coverSrc = coverSubsonicId ? client.coverUrl(coverSubsonicId) : null;
-  const coverColors = useCoverColors(coverSrc);
-  const ambientRef = useRef<HTMLDivElement | null>(null);
-  useDynamicStyle(ambientRef, {
-    '--cover-tint': coverColors.vibrant,
-    '--cover-tint-2': coverColors.average ?? coverColors.vibrant,
-  });
 
   const [requestText, setRequestText] = useState('');
   const [requesterName, setRequesterName] = useState('');
@@ -105,6 +100,27 @@ export default function ClassicSkin({ portalNode }: SkinProps) {
   const [tickerOn, setTickerOn] = useState(true);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+
+  // Lyrics show on the stage itself (AmbientLyrics), never in a drawer. The
+  // operator's switch rides GET /state; within it, L toggles this listener's
+  // own choice, and the stage makes room only while lines are showing.
+  // One answer per track feeds both the stage and the lyrics settings that
+  // the button beside the heart opens.
+  const lyricsOn = state.lyrics?.enabled === true;
+  const lyricsPref = useLyricsPreference();
+  const [lyricsPresent, setLyricsPresent] = useState(false);
+  const showLyrics = lyricsOn && lyricsPref.shown && !offline;
+  const lyricsTrack = useTrackLyrics(showLyrics ? nowPlaying?.subsonic_id : null);
+  const { toggle: flipLyrics } = lyricsPref;
+  const toggleLyrics = useCallback(() => {
+    toast(flipLyrics() ? 'Lyrics on' : 'Lyrics hidden', { duration: 1600 });
+  }, [flipLyrics]);
+  // Stable while nothing changes, for the memoized stage. The settings' own
+  // switch shows what it did, so it needs no toast.
+  const stageLyrics = useMemo(
+    () => (lyricsOn ? { shown: lyricsPref.shown, onToggle: flipLyrics, track: lyricsTrack } : null),
+    [lyricsOn, lyricsPref.shown, flipLyrics, lyricsTrack],
+  );
 
   // Haptics live here rather than at each call site so every entry point
   // (DotRail, shortcut, palette, swipe-dismiss) feels the same.
@@ -148,6 +164,7 @@ export default function ClassicSkin({ portalNode }: SkinProps) {
       '2': () => setDrawer('booth'),
       '3': () => setDrawer('request'),
       '4': () => setDrawer('schedule'),
+      ...(lyricsOn ? { l: toggleLyrics } : {}),
       r: () => setDrawer('request'),
       '?': () => setShortcutsOpen(true),
       'mod+k': () => setPaletteOpen(o => !o),
@@ -174,11 +191,7 @@ export default function ClassicSkin({ portalNode }: SkinProps) {
 
   return (
     <>
-      <div
-        ref={ambientRef}
-        aria-hidden="true"
-        className={cn('v3-cover-ambient', coverColors.vibrant && 'v3-cover-ambient-on')}
-      />
+      <CoverAmbient coverSrc={coverSrc} />
 
       <TopBar
         tunedIn={tunedIn}
@@ -187,6 +200,7 @@ export default function ClassicSkin({ portalNode }: SkinProps) {
         djName={typeof dj?.name === 'string' ? dj.name : undefined}
         activeShow={activeShow}
         onOpenSchedule={openSchedule}
+        lyricsLive={showLyrics && lyricsPresent}
       />
 
       <CenterStage
@@ -198,9 +212,19 @@ export default function ClassicSkin({ portalNode }: SkinProps) {
         boothBuddyOn={state.ui?.boothBuddy === true}
         offline={offline}
         upNext={upNext}
+        lyricsShown={showLyrics && lyricsPresent}
+        lyrics={stageLyrics}
         onOpenBooth={openBooth}
         onOpenTimeline={openTimeline}
       />
+
+      {showLyrics && (
+        <AmbientLyrics
+          track={lyricsTrack}
+          trackStartedAt={trackStartedAt}
+          onPresenceChange={setLyricsPresent}
+        />
+      )}
 
       <Waveform
         audioRef={audioRef}
@@ -267,12 +291,16 @@ export default function ClassicSkin({ portalNode }: SkinProps) {
         onOpenDrawer={setDrawer}
         onToggleMute={toggleMute}
         onShowShortcuts={() => setShortcutsOpen(true)}
+        lyrics={lyricsOn}
+        lyricsShown={lyricsPref.shown}
+        onToggleLyrics={toggleLyrics}
       />
 
       <ShortcutsDialog
         open={shortcutsOpen}
         onOpenChange={setShortcutsOpen}
         container={portalNode}
+        lyrics={lyricsOn}
       />
     </>
   );

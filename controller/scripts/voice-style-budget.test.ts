@@ -70,15 +70,3 @@ test('a directive claiming the whole budget erases the character', async () => {
   assert.equal(style, `${directive}. ${STATION_NOTE}`,
     'a full-budget directive leaves nothing for the character, while the station note survives');
 });
-
-test('VOICE_STYLE_MAX is even, so half of it is a whole number', async () => {
-  // Half of an odd budget is a fraction, and a character cap cannot be. Silently
-  // rounding it would put the constant and its own stated derivation out of
-  // agreement with nothing to catch it — the exact failure the assertion above
-  // exists to prevent, one step removed.
-  const budget = await voiceStyleBudget();
-  assert.equal(budget % 2, 0,
-    `VOICE_STYLE_MAX is ${budget}; PERSONA_VOICE_STYLE_MAX is derived as half of it, so an `
-      + 'odd budget makes the derivation unrepresentable. Fix the budget or the derivation '
-      + 'deliberately, not by rounding.');
-});

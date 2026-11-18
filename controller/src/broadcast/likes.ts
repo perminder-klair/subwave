@@ -124,9 +124,11 @@ export async function load({ readOnly = false }: { readOnly?: boolean } = {}): P
   return loadPromise;
 }
 
-// Rewrite record ids after a Navidrome ID rotation (music/id-rotation.ts),
-// via the adoption-confirmed old→new map only. The airingKey keeps its
-// `${songId}|${startedAt}` shape (split at the FIRST `|` — startedAt is an ISO
+// Rewrite record ids through an old→new map, from its two callers: an id
+// rotation (music/id-rotation.ts), with the walk's adoption-confirmed map, and a
+// heart following its file (music/heart-follow.ts), with the moves its policy
+// planned and Navidrome confirmed. Nothing else picks the ids. The airingKey
+// keeps its `${songId}|${startedAt}` shape (split at the FIRST `|` — startedAt is an ISO
 // timestamp and never contains one before the offset marker — which also keeps
 // the operator heart's synthetic `${songId}|operator` key intact). Flushes
 // through flushStrict: the caller deletes the rotation manifest right after, so
@@ -159,6 +161,17 @@ export async function remapTrackIds(trackMap: ReadonlyMap<string, string>): Prom
     }
     if (touched) changed++;
   }
+  // Two old ids can land on one new id (hearts on two copies of a re-imported
+  // song, music/heart-follow.ts): keep one operator heart per song, so
+  // operatorLike stays idempotent and an unlike leaves no second heart behind.
+  // Listener likes all stay, each its own airing.
+  const operatorSongs = new Set<string>();
+  records = records.filter((r) => {
+    if (!isOperator(r)) return true;
+    if (operatorSongs.has(r.songId)) return false;
+    operatorSongs.add(r.songId);
+    return true;
+  });
   // Retry the write even when an earlier attempt already changed the cache.
   await flushStrict();
   return changed;
@@ -256,10 +269,6 @@ export async function operatorUnlike(songId: string): Promise<{ removed: boolean
   return { removed, count: countForSong(songId) };
 }
 
-export function operatorLiked(songId: string): boolean {
-  return records.some((r) => r.songId === songId && isOperator(r));
-}
-
 // Decorates the heart on every admin library row, whatever its source.
 export function index(): Record<string, { count: number; operator: boolean }> {
   const out: Record<string, { count: number; operator: boolean }> = Object.create(null);
@@ -348,13 +357,24 @@ export function topLiked({ windowDays = 30, limit = 10 }: { windowDays?: number;
     .slice(0, Math.max(1, limit));
 }
 
+export type DjFavouritesConfig = { enabled?: boolean; influenceDj?: boolean; windowDays?: number; maxTracks?: number } | null | undefined;
+
+// The favourites the DJ may lean on, or [] when likes do not influence picks.
+// One gate for every reader — the Agentic pick event's clause, the Shortlist's
+// selection context, the pool's listener-liked source and the listenerFavourites
+// discovery tool — so the selection routes cannot disagree about whether likes
+// steer the DJ (#991).
+export function djFavourites(cfg: DjFavouritesConfig): TopLikedEntry[] {
+  if (!cfg?.enabled || !cfg?.influenceDj) return [];
+  return topLiked({ windowDays: cfg.windowDays, limit: cfg.maxTracks });
+}
+
 // The listener-favourites clause for the pick EVENT turn (#991). Deliberately NOT
 // part of pickSystem: the list changes as likes land, and re-rendering it there
 // would break the byte-stable prefix prompt caching keys on. Returns '' when not
 // opted in or nothing is liked, so the event turn stays byte-identical.
-export function favouritesClause(cfg: { enabled?: boolean; influenceDj?: boolean; windowDays?: number; maxTracks?: number } | null | undefined): string {
-  if (!cfg?.enabled || !cfg?.influenceDj) return '';
-  const favs = topLiked({ windowDays: cfg.windowDays, limit: cfg.maxTracks });
+export function favouritesClause(cfg: DjFavouritesConfig): string {
+  const favs = djFavourites(cfg);
   if (!favs.length) return '';
   return ` Listener favourites — the most-liked tracks on this station recently: ${favs
     .map((f) => `"${f.track.title}" by ${f.track.artist || 'unknown'} (${f.count})`)

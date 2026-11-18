@@ -33,9 +33,6 @@ const VOICE_STYLE_MAX = 300;
 // cannot crowd the character out of the prompt.
 export const GEMINI_PRONUNCIATION_MAX = 300;
 
-// Multi-speaker single-request cap for prebuilt voices (Google docs).
-const MULTI_VOICE_CAP = 2;
-
 export function apiKey(): string {
   return process.env.GOOGLE_GENERATIVE_AI_API_KEY || '';
 }
@@ -407,90 +404,4 @@ export function usableVoice(name: unknown): string | undefined {
   // the fallback chain. See that module for why the index is prewarmed at boot.
   if (isLibraryVoice(raw)) return raw;
   return undefined;
-}
-
-// ── Multi-line ────────────────────────────────────────────────────────────────
-interface MultiLine {
-  text: string;
-  voice?: string;
-  style?: string;
-  /** The speaker's own persona character, composed into that turn's style. */
-  soul?: string;
-}
-
-/** One conversational call for the whole exchange. Throws when more than
- *  MULTI_VOICE_CAP distinct voices are present — the caller falls back to
- *  per-line renders, same as the remote fast-path rule. */
-export async function speakMulti(
-  lines: MultiLine[],
-  { outPath: customPath, signal, model, soul }: { outPath?: string; signal?: AbortSignal; model?: string; soul?: unknown } = {},
-): Promise<string> {
-  if (!lines || lines.length === 0) throw new Error('Empty TTS lines');
-  const seen = new Map<string, string>();
-  const turns: { text: string; style: string; alias: string }[] = [];
-  for (const line of lines) {
-    const { text: clean, styles } = splitCues(line.text);
-    const voice = usableVoice(line.voice) || 'Puck';
-    const alias = voice.toLowerCase();
-    if (!seen.has(alias)) {
-      if (seen.size >= MULTI_VOICE_CAP) {
-        throw new Error(`speakMulti supports ${MULTI_VOICE_CAP} voices per call`);
-      }
-      seen.set(alias, voice);
-    }
-    // Each turn gets ITS OWN persona's soul + voiceStyle, and the station-level
-    // `soul` is only the fallback for a line that carries neither — a caller's
-    // broadcast-wide default must not be pasted over a guest's own character.
-    turns.push({
-      text: clean,
-      style: geminiStyle(
-        { soul: line.soul ?? soul, voiceStyle: line.style, pronunciation: stationPronunciation() },
-        styles,
-      ),
-      alias,
-    });
-  }
-
-  // The request shape depends on how many DISTINCT voices the lines resolve to,
-  // and this is not cosmetic — each shape 400s on the other. Measured against
-  // the engine:
-  //   • 2 voices → `speakers` + `mode: conversational`, and every turn must
-  //     carry a `speaker` naming one of them.
-  //   • 1 voice  → that object form 400s with "the number of
-  //     speaker_voice_configs must equal 2", because `conversational` means two.
-  //     The single-speaker ARRAY form takes any number of turns on one voice and
-  //     still honours each turn's own `style`.
-  // Two personas on the SAME voice is the common case, not an edge one: it is
-  // exactly what a station default voice produces for every persona that leaves
-  // its own voice blank, so it has to render rather than throw.
-  const oneVoice = seen.size === 1;
-  const speakers = [...seen.entries()].map(([, voice]) => ({ speaker: voice, voice }));
-  const speakerOf = (alias: string) => speakers.find((s) => s.speaker.toLowerCase() === alias)?.speaker;
-  // A speaker name that Google would reject (`speaker` and `voice` are both the
-  // name) has to go before it is put in EITHER slot, so an unusable value
-  // collapses the same way it does on the single-speaker path.
-  const body = {
-    input: [{
-      type: 'user_input',
-      content: turns.map((t) => ({
-        type: 'text',
-        text: t.text,
-        annotations: [{
-          type: 'speech_metadata',
-          // Required on every turn of a multi-speaker request; on a
-          // single-speaker one the voice comes from speech_config instead.
-          ...(oneVoice ? {} : { speaker: speakerOf(t.alias) }),
-          style: t.style,
-        }],
-      })),
-    }],
-    response_format: { type: 'audio' },
-    generation_config: oneVoice
-      ? { speech_config: [{ voice: speakers[0].voice }] }
-      : { speech_config: { mode: 'conversational', speakers } },
-  };
-  const audio = await postInteraction(body, signal, model);
-  const outPath = await outFile(customPath);
-  await writeFile(outPath, audio);
-  return outPath;
 }

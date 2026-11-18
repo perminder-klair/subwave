@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const stateDir = mkdtempSync(join(tmpdir(), 'subwave-show-candidates-'));
 process.env.STATE_DIR = stateDir;
@@ -13,9 +14,9 @@ const { candidateCoverage } = await import('../src/music/show-candidates.js');
 
 await db.open({ embeddingDim: 768 });
 
-after(() => {
+after(async () => {
   db.close();
-  rmSync(stateDir, { recursive: true, force: true });
+  await removeTempDir(stateDir);
 });
 
 test('candidate projection preserves vocal analysis as unknown, instrumental, or vocal', () => {

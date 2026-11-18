@@ -33,7 +33,7 @@ here stays complete and free either way.
 
 - **Project site** — [getsubwave.com](https://www.getsubwave.com/)
 - **Demo player** — [getsubwave.com/listen](https://www.getsubwave.com/listen)
-- **Mobile apps** — native players — [iOS on the App Store](https://apps.apple.com/app/sub-wave/id6778786696), [Android on Google Play](https://play.google.com/store/apps/details?id=com.getsubwave.app)
+- **Mobile apps** — native players — [iOS on the App Store](https://apps.apple.com/app/sub-wave/id6778786696), [Android on Google Play](https://play.google.com/store/apps/details?id=com.getsubwave.app) ([source](https://github.com/getsubwave/app))
 - **Desktop app** — native macOS / Windows / Linux player — [latest release](https://github.com/getsubwave/subwave-desktop/releases/latest) ([source](https://github.com/getsubwave/subwave-desktop))
 - **Setup walkthrough** — [getsubwave.com/setup](https://www.getsubwave.com/setup)
 - **Operator manual** — [getsubwave.com/manual](https://www.getsubwave.com/manual)
@@ -71,18 +71,18 @@ here stays complete and free either way.
 - **AI DJ that picks and talks.** Curates tracks, writes intros, and reads station idents, the time, and the weather.
 - **Plain-language requests.** "Play something more upbeat" or "anything by Radiohead" works.
 - **Your own music library.** Pulls from Navidrome over the Subsonic API. No external catalogue.
-- **Swappable LLM provider.** Ollama, Anthropic, OpenAI, Google, DeepSeek, OpenRouter, Requesty, Vercel AI Gateway, or any OpenAI-compatible server. Change it from the admin UI with no redeploy. A daily token budget can cap hosted-model spend; past the cap the music keeps playing without the chatter.
+- **Swappable LLM provider.** Ollama, Anthropic, OpenAI, Google, DeepSeek, OpenRouter, Requesty, Cheaper Inference, Vercel AI Gateway, or any OpenAI-compatible server. Change it from the admin UI with no redeploy. A daily token budget can cap hosted-model spend; past the cap the music keeps playing without the chatter.
 - **Six TTS engines.** Piper and Kokoro (multilingual) in-process for fast local speech, plus an optional `tts-heavy` sidecar (`docker compose --profile tts-heavy up -d`) that adds Chatterbox (zero-shot voice cloning) and PocketTTS (6× real-time, EN/FR/DE/IT/ES/PT). Cloud (OpenAI / ElevenLabs) and a Remote engine (any self-hosted HTTP endpoint, audio over the wire) round it out. Pick a different engine per kind of speech.
 - **Multiple DJ personas.** Up to 24 in the roster, each with its own voice and writing style. A show can seat up to three guest co-hosts who trade scripted banter with the host, and ready-made personas install from the [community catalog](https://www.getsubwave.com/personas).
 - **Multi-format broadcast.** MP3 always served (configurable bitrate) for Sonos, hardware radios, and cars; optional Opus, AAC, and lossless FLAC mounts, each toggleable from the admin UI. The web player picks automatically.
-- **Native apps and PWA.** Native iOS (on the App Store) and Android (on Google Play) players — background audio, lock-screen / CarPlay / Android Auto controls, multi-station — a [native desktop player](https://github.com/getsubwave/subwave-desktop) for macOS / Windows / Linux with a menu-bar mini player and live spectrum, plus an installable PWA on phone and desktop.
+- **Native apps and PWA.** [Native iOS and Android players](https://github.com/getsubwave/app) (on the App Store and Google Play) — background audio, lock-screen / CarPlay / Android Auto controls, multi-station — a [native desktop player](https://github.com/getsubwave/subwave-desktop) for macOS / Windows / Linux with a menu-bar mini player and live spectrum, plus an installable PWA on phone and desktop.
 - **Scheduled shows.** A 24×7 grid; each slot has its own persona, mood, and skills, or anchors to a Navidrome playlist. Ready-made show templates install from the [community catalog](https://www.getsubwave.com/shows).
 - **Programmes.** A show can air as a produced episode: the DJ drafts a per-episode plan — an angle, one feature beat each hour, an intro and an outro — so a three-hour slot hangs together instead of being three hours of unrelated links.
 - **Pluggable skills.** The DJ's between-track segments — weather, news, traffic, and your own — are skills. The built-ins are scaffolded as editable files under `state/skills/<kind>/` on first boot, so you can rewrite a brief or change the news feed (BBC → your own RSS) right from the admin console — no code, no redeploy. Add your own by dropping a `SKILL.md` (plus optional data-fetching code) into `state/skills/`, hitting Rescan, and enabling it — or write one in the admin UI's built-in editor, or install one other operators shared on the [community exchange](https://www.getsubwave.com/skills). See [`docs/custom-skills.md`](docs/custom-skills.md).
 - **Mood-aware rotation.** Time of day, weather, and festival days bias what gets played and how the DJ talks — and the mood vocabulary itself is yours to edit on a dedicated admin page (words, "sounds like" descriptions, and which mood each moment of the day leans into).
 - **Ending-aware transitions.** The bundled analyzer measures BPM, key, loudness, and how every track actually ends, so crossfades size themselves to the material: a real fade rides out long, a cold ending cuts tight. Vocal detection keeps the DJ from talking over a sung intro, and opt-in stem blends mix the outgoing tail into the incoming head for a produced-sounding seam. DJ speech ducks the music and lifts it back up.
 - **Playlist builder.** Describe a playlist in plain language at `/admin/playlists` and the builder turns it into a recipe, resolves it against your library, and keeps recipe-backed playlists topped up as new music lands.
-- **Station imaging.** Jingles, SFX stingers, and instrumental talk-over beds on one admin page — render them through the DJ's voice, generate them from a text prompt, or upload your own audio.
+- **Station imaging.** Jingles, SFX stingers, and instrumental talk-over beds on one admin page — render them through the DJ's voice, generate them from a text prompt, or upload your own audio. See [jingle import formats and existing-file recovery](docs/jingle-audio.md).
 - **Player skins + themes.** Eight player faces — Classic, Unit SW-9, Platter, Drift, Subamp, TTY, AXO-1 and Cipher-3 — with a station default and a per-listener override, plus a theme editor with live preview for colours and type.
 - **Private station mode.** Two independent locks over one station password: hide the web player behind a prompt, and/or require listener auth on every stream mount.
 - **Multi-station profiles.** Keep several stations in one install — each with its own library pool, DJ roster, schedule, and settings — and switch which one is live from the admin.
@@ -202,8 +202,13 @@ The next `docker compose up -d` removes it and it stays gone. This is a Compose
 setting, so it does nothing on the all-in-one image, which runs the analyzer
 in-process. See [`docs/tts-heavy.md`](docs/tts-heavy.md#turning-the-analyzer-off).
 
-Hosts with an NVIDIA GPU can run the heavy stack on CUDA instead. For a one-off
-run, layer the `docker-compose.analyzer-gpu.yml` overlay:
+Hosts with an NVIDIA GPU can run the heavy stack on CUDA instead. The
+split-stack CUDA analyzer's default build uses torch/torchaudio 2.7.1 with
+CUDA 12.8 wheels, which cover Turing (RTX 20-series) through RTX 50-series
+Blackwell GPUs. An older card (a GTX 10-series, say) needs the cu124 build:
+add `ANALYZER_CUDA_TAG=pascal` to `.env`, or the tag named for your card's
+architecture ([every tag](docs/internals/infrastructure.md#aio-cuda-tags)).
+For a one-off run, layer the `docker-compose.analyzer-gpu.yml` overlay:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.analyzer-gpu.yml up -d
@@ -213,8 +218,12 @@ To keep the overlay across normal rebuilds and restarts, set `COMPOSE_FILE` in
 `.env` to `docker-compose.yml:docker-compose.analyzer-gpu.yml`.
 
 All-in-one installs have no `analyzer` service to swap, so they take the GPU on
-the image instead: pull `subwave-aio-cuda` and hand the container the card
-(`--gpus all`, or the Unraid steps in [`docs/unraid.md`](docs/unraid.md)).
+the image instead: pull `subwave-aio-cuda` at the tag named for your card's
+architecture (`:pascal` for a GTX 10-series, `:ampere` for an RTX 30-series;
+[every tag](docs/internals/infrastructure.md#aio-cuda-tags)) and hand the
+container the card (`--gpus all`, or the Unraid steps in
+[`docs/unraid.md`](docs/unraid.md)). `:latest` needs Turing (RTX 20-series) or
+newer.
 
 ### Local dev (contributors)
 
@@ -340,7 +349,7 @@ bin/subwave        Operator CLI entry: setup, status, doctor, lifecycle
 
 - **[`DEPLOY.md`](DEPLOY.md):** production deployment, updates, backup.
 - **[`docs/updating.md`](docs/updating.md):** updating on every install shape, and the half people need at 2am — how to roll back to a previous version, and how to recover a broken login, a silent stream or a restart-looping controller.
-- **[`docs/concepts.md`](docs/concepts.md):** the seven things that get asked over and over — the persona tone dials, candidate pool vs the agent picker, playlists vs shows, the stem cache, private player vs stream password, dayparts at high latitude, and what a heart actually does to rotation.
+- **[`docs/concepts.md`](docs/concepts.md):** the seven things that get asked over and over — the persona tone dials, Track Shortlist vs Agentic Tools, playlists vs shows, the stem cache, private player vs stream password, dayparts at high latitude, and what a heart actually does to rotation.
 - **[`docs/reverse-proxy.md`](docs/reverse-proxy.md):** complete nginx, Nginx Proxy Manager, Traefik, and Cloudflare Tunnel route recipes — including [public stream, LAN-only admin](docs/reverse-proxy.md#public-stream-lan-only-admin).
 - **[`docs/unraid.md`](docs/unraid.md):** running on Unraid — one-click from Community Applications, or the Compose Manager Plus stack.
 - **[`docs/tts-heavy.md`](docs/tts-heavy.md):** the opt-in `tts-heavy` voices and the default-on acoustic `analyzer` service — what each does and how to toggle them, including [running analysis on another machine](docs/tts-heavy.md#running-the-analyzer-on-another-machine) (a GPU box elsewhere on the network).
@@ -349,13 +358,16 @@ bin/subwave        Operator CLI entry: setup, status, doctor, lifecycle
 - **[`docs/private-station.md`](docs/private-station.md):** locking the player and the stream behind a password — and how to tune in from apps, VLC and hardware once it's on, including a station behind reverse-proxy HTTP Basic Auth.
 - **[`docs/navidrome-libraries.md`](docs/navidrome-libraries.md):** keeping audiobooks / seasonal collections off air with a dedicated, library-scoped Navidrome user.
 - **[`docs/navidrome-traffic.md`](docs/navidrome-traffic.md):** DNS counts versus HTTP requests, the two empty-room controls, and how to identify catalogue, analysis and playback traffic.
-- **[`CLAUDE.md`](CLAUDE.md):** deep architecture reference and the
-  non-obvious constraints behind each subsystem.
+- **[`CLAUDE.md`](CLAUDE.md):** the architecture map and one line per
+  non-obvious constraint, each pointing at its reasoning in
+  [`docs/internals/`](docs/internals/).
 - **[`CONTRIBUTING.md`](CONTRIBUTING.md):** how to contribute.
 - **[`docs/community.md`](docs/community.md):** the community catalog — sharing and installing DJ skills, personas, and shows, plus the public station map. The content itself lives in [`getsubwave/community`](https://github.com/getsubwave/community).
+- **[`getsubwave/audiomuse-import`](https://github.com/getsubwave/audiomuse-import):** already analysed your library in AudioMuse-AI? Copy its moods, BPM, key, energy and genre into SUB/WAVE instead of tagging everything again.
 - **[`SECURITY.md`](SECURITY.md):** reporting security issues.
 - **[`mcp-subwave/README.md`](mcp-subwave/README.md):** the MCP server.
 - **[`docs/api.md`](docs/api.md):** the HTTP API, the in-app **Connect** explorer + playground, OpenAPI export, and Home Assistant / Music Assistant recipes.
+- **[`docs/homeassistant/`](docs/homeassistant/README.md):** request a song from Home Assistant, with a dashboard box and button or by voice through Assist, credited to the signed-in person.
 
 ## Music licensing
 
@@ -383,6 +395,12 @@ public-domain recordings.
 
 This is general information, not legal advice. If you run a public station,
 talk to a media/IP lawyer in your jurisdiction.
+
+## Credits
+
+SUB/WAVE is built on Liquidsoap, Icecast, Navidrome, and many other open-source
+projects, models, and services. [CREDITS.md](CREDITS.md) lists them all, with
+their licences.
 
 ## License
 

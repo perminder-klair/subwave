@@ -13,13 +13,14 @@
 // The second half runs adoptAndPrune against a real better-sqlite3 DB in a
 // temp STATE_DIR (set before library-db is imported, as in id-adoption.test.ts).
 // No Navidrome is configured, so getScanStatus() answers null (unknown).
-// Run: `tsx scripts/prune-policy.test.ts` (auto-discovered by npm test).
+// Run: `npm test -- prune-policy`.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const stateDir = mkdtempSync(join(tmpdir(), 'subwave-prune-guard-'));
 process.env.STATE_DIR = stateDir;
@@ -103,7 +104,7 @@ test('a small removal needs no confirmation', async () => {
   assert.equal(gone.length, 300);
 });
 
-test.after(() => {
+test.after(async () => {
   db.close?.();
-  rmSync(stateDir, { recursive: true, force: true });
+  await removeTempDir(stateDir);
 });

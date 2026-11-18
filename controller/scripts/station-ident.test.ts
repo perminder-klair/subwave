@@ -1,9 +1,23 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import test from 'node:test';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import test, { after, beforeEach } from 'node:test';
 import ts from 'typescript';
-import { normalizeForDisplay, stripSpeakerLabel } from '../src/audio/speech-text.js';
+import { normalizeForDisplay } from '../src/audio/speech-text.js';
 import { createStationIdPicker } from '../src/broadcast/station-ident.js';
+import { createTempDir, removeTempDir } from './test-utils/temp-dir.js';
+
+// The queue assertions run against the real queue under a temp STATE_DIR, so
+// it must be set before anything that reads settings is imported.
+const root = createTempDir(join(tmpdir(), 'subwave-station-ident-'));
+process.env.STATE_DIR = root;
+const settings = await import('../src/settings.js');
+const session = await import('../src/broadcast/session.js');
+const { queue } = await import('../src/broadcast/queue.js');
+const { runStationId } = await import('../src/broadcast/scheduler.js');
+const { VERBATIM_META, withheldFromPrompts } = await import('../src/broadcast/prompt-memory.js');
+const { writeSilentWav } = await import('../src/audio/wav-silence.js');
 
 const persona = { id: 'p_ident', name: 'Ident', identMode: 'verbatim', identLines: ['First ident.', 'Second ident.'] };
 
@@ -84,7 +98,7 @@ function fixture(speaker = persona, owner = speaker, delivery: Promise<void> | (
   const recap = 'Fixture recap';
   const openers = ['Recent opener'];
   const hostSpeech = { session: 'fixture' };
-  const run = new Function('withTrace', 'prepareEpisodeContext', 'getFullContext', 'settings', 'session', 'pickStationId', 'stationIdDaypartStamp', 'speakClockAllowed', 'dj', 'queue', ts.transpileModule(`return (${runnerSource});`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText)(
+  const run = new Function('withTrace', 'prepareEpisodeContext', 'getFullContext', 'settings', 'session', 'pickStationId', 'stationIdDaypartStamp', 'speakClockAllowed', 'dj', 'queue', 'VERBATIM_META', ts.transpileModule(`return (${runnerSource});`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText)(
     (_trace, fn) => fn(),
     async ctx => ctx,
     async () => context,
@@ -108,6 +122,7 @@ function fixture(speaker = persona, owner = speaker, delivery: Promise<void> | (
         return accepted;
       },
     },
+    VERBATIM_META,
   );
   return { run, calls, context, recap, openers, hostSpeech, accept: value => { accepted = value; }, setSpeaker: value => { speaker = value; } };
 }
@@ -117,7 +132,7 @@ test('manual verbatim ident never calls generateStationId and keeps its voice an
   assert.equal(await run(), 'First ident.');
   assert.deepEqual(calls, [{
     kind: 'immediate', script: 'First ident.', segment: 'station-id',
-    opts: { persona, daypart: null, verbatim: true, hostSpeech: null, meta: { personaId: persona.id, personaName: persona.name } },
+    opts: { persona, daypart: null, noClockClaim: true, hostSpeech: null, meta: { personaId: persona.id, personaName: persona.name, verbatim: true } },
   }]);
 });
 
@@ -127,7 +142,7 @@ test('automatic verbatim ident uses the captured speaker and next-track timing w
   assert.equal(await run({ automatic: true, atNextTrack: true }), 'Owner ident.');
   assert.deepEqual(calls, [{
     kind: 'next-track', script: 'Owner ident.', segment: 'station-id',
-    opts: { persona: owner, daypart: null, verbatim: true, hostSpeech, meta: { personaId: owner.id, personaName: owner.name } },
+    opts: { persona: owner, daypart: null, noClockClaim: true, hostSpeech, meta: { personaId: owner.id, personaName: owner.name, verbatim: true } },
   }]);
 });
 
@@ -154,97 +169,16 @@ test('the manual station-id route shares the gate-free runner', () => {
   assert.match(route, /'station-id': runStationId/);
 });
 
-// Use the real deferred queue methods too: they must preserve an explicit
-// clockless stamp rather than filling it from the live clock after rendering.
-const queueSource = readFileSync(new URL('../src/broadcast/queue.ts', import.meta.url), 'utf8');
-function queueMethod(name: string) {
-  const method = queueSource.match(new RegExp(`^  (?:async )?${name}\\([\\s\\S]*?^  }`, 'm'))?.[0];
-  assert.ok(method, `queue.${name} must exist`);
-  return method;
-}
-const deferredMethods = ts.transpileModule(`return {
-  ${queueMethod('announceAtNextTrack')},
-  ${queueMethod('holdForNextTrack')}
-};`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-
-function deferredQueue() {
-  const clock = { spokenDaypart: 'in the afternoon' };
-  const methods = new Function('settings', 'normalizeForDisplay', 'stripSpeakerLabel', 'session', 'suppressScheduledSpeechDuringHandoff', 'stationIdDaypartStamp', 'getClockContext', 'speakClockAllowed', 'pauseTalkArmExpired', deferredMethods)(
-    { getEffectivePersona: () => persona },
-    text => text,
-    text => text,
-    { isHostSpeechCurrent: () => true, handoffInProgress: () => false },
-    () => false,
-    (daypart, allowed) => allowed ? daypart : null,
-    () => clock,
-    () => true,
-    () => false,
-  );
-  return { ...methods, clock, _pendingVoice: null, _speak: async () => 'fixture.wav', log: () => {} };
-}
-
-test('the deferred queue preserves a verbatim ident\'s explicit null stamp after TTS', async () => {
-  const queue = deferredQueue();
-  await queue.announceAtNextTrack('First ident.', 'station-id', { persona, daypart: null, verbatim: true });
-  assert.equal(queue._pendingVoice.daypart, null);
-  assert.equal(queue._pendingVoice.clips[0].persona, persona);
-  assert.equal(queue._pendingVoice.kind, 'station-id');
-});
-
-test('an improvised ident with a null offered stamp gets the live stamp after TTS', async () => {
-  const queue = deferredQueue();
-  queue._speak = async () => { queue.clock.spokenDaypart = 'in the evening'; return 'fixture.wav'; };
-  await queue.announceAtNextTrack('Improvised ident.', 'station-id', { daypart: null, verbatim: false });
-  assert.equal(queue._pendingVoice.daypart, 'in the evening');
-});
-
-test('the deferred queue still stamps an omitted daypart and preserves the model\'s explicit stamp', async () => {
-  const queue = deferredQueue();
-  await queue.announceAtNextTrack('Ordinary announcement.');
-  assert.equal(queue._pendingVoice.daypart, 'in the afternoon');
-  await queue.announceAtNextTrack('Improvised ident.', 'station-id', { daypart: 'in the morning' });
-  assert.equal(queue._pendingVoice.daypart, 'in the morning');
-});
-
 for (const atNextTrack of [false, true]) {
-  test(`a refused ident does not advance rotation (atNextTrack=${atNextTrack})`, async () => {
+  test(`a refused ident returns null and does not advance rotation (atNextTrack=${atNextTrack})`, async () => {
     const { run, accept } = fixture();
     assert.equal(await run({ atNextTrack }), 'First ident.');
     accept(false); // The queue catches a TTS failure and refuses the clip.
-    assert.equal(await run({ atNextTrack }), 'Second ident.');
+    assert.equal(await run({ atNextTrack }), null, 'a refused verbatim ident reports nothing aired');
     accept(true);
     assert.equal(await run({ atNextTrack }), 'Second ident.');
     assert.equal(await run({ atNextTrack }), 'First ident.');
   });
-}
-
-// Execute both real queue methods with the real text cleanup. Stop at TTS,
-// before audio or filesystem work, and capture exactly what it received.
-const announcementMethods = ts.transpileModule(`return {
-  ${queueMethod('announce')},
-  ${queueMethod('announceAtNextTrack')}
-};`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-
-for (const method of ['announce', 'announceAtNextTrack']) {
-  for (const verbatim of [true, false]) {
-    test(`${method} ${verbatim ? 'preserves authored' : 'strips model'} persona labels at TTS`, async () => {
-      const iris = { ...persona, name: 'Iris', identMode: verbatim ? 'verbatim' : 'improvise' };
-      const spoken: string[] = [];
-      const methods = new Function('settings', 'normalizeForDisplay', 'stripSpeakerLabel', 'session', 'suppressScheduledSpeechDuringHandoff', announcementMethods)(
-        { getEffectivePersona: () => iris },
-        normalizeForDisplay,
-        stripSpeakerLabel,
-        { handoffInProgress: () => false },
-        () => false,
-      );
-      const queue = { ...methods, log: () => {}, _speak: async text => {
-        spoken.push(text);
-        throw new Error('stop at TTS');
-      } };
-      await queue[method]('Iris: This is SUB/WAVE.', 'station-id', { persona: iris, verbatim });
-      assert.deepEqual(spoken, [verbatim ? 'Iris: This is SUB/WAVE.' : 'This is SUB/WAVE.']);
-    });
-  }
 }
 
 test('picks reserve one line per persona without advancing the last accepted line', () => {
@@ -266,17 +200,6 @@ test('an older acceptance preserves a newer in-flight reservation', () => {
   assert.equal(pick(three), 'B');
   pick.commit(three.id, 'A');
   assert.equal(pick(three), 'C');
-});
-
-test('the deferred queue reports TTS failure and a declined slot as refused', async () => {
-  const queue = deferredQueue();
-  queue._speak = async () => { throw new Error('TTS failed'); };
-  assert.equal(await queue.announceAtNextTrack('Failed ident.', 'station-id'), false);
-  queue._speak = async () => 'fixture.wav';
-  queue._pendingVoice = { pauseId: 'committed', pauseArmedAt: Date.now() };
-  assert.equal(await queue.announceAtNextTrack('Declined ident.', 'station-id'), false);
-  queue._pendingVoice = null;
-  assert.equal(await queue.announceAtNextTrack('Accepted ident.', 'station-id'), true);
 });
 
 for (const atNextTrack of [false, true]) {
@@ -352,36 +275,129 @@ test('a stalled verbatim delivery does not block an improvised ident', async () 
   assert.equal(deliveries, 2);
 });
 
-for (const method of ['announce', 'announceAtNextTrack']) {
+// ── The real queue ───────────────────────────────────────────────────────────
+// TTS and the mixer are stubbed; everything between them is the real queue.
+
+const IRIS = { ...settings.get().personas[0], id: 'p_iris', name: 'Iris', identMode: 'improvise', identLines: [] as string[] };
+const realSpeak = (queue as any)._speak;
+const realAirVoice = (queue as any)._airVoice;
+const realFetch = globalThis.fetch;
+const wav = join(root, 'ident.wav');
+await writeSilentWav(wav, 100);
+let spoken: string[] = [];
+
+function context() {
+  return {
+    at: new Date().toISOString(),
+    time: { period: 'day', vibe: 'day', mood: 'calm' },
+    weather: null, festival: null, dominantMood: 'calm', activeShow: null,
+  } as any;
+}
+
+async function useIris(patch: Partial<typeof IRIS> = {}) {
+  await settings.update({ personas: [{ ...IRIS, ...patch }], activePersonaId: IRIS.id } as never);
+}
+
+beforeEach(async () => {
+  spoken = [];
+  queue.senderBusy = true;
+  queue.upcoming = [];
+  queue.current = null;
+  queue.djLog = [];
+  queue._pendingVoice = null;
+  (queue as any)._speak = async (text: string) => { spoken.push(text); return wav; };
+  (queue as any)._airVoice = async () => ({ voiceId: 'voice-ident', clipMs: 100, aired: Promise.resolve(null) });
+  // No context lookup may leave the machine.
+  globalThis.fetch = (async () => { throw new Error('offline in tests'); }) as typeof fetch;
+  await useIris();
+  session.start(context());
+});
+
+after(async () => {
+  (queue as any)._speak = realSpeak;
+  (queue as any)._airVoice = realAirVoice;
+  globalThis.fetch = realFetch;
+  queue.senderBusy = false;
+  // Let the session's debounced persist land before its directory goes.
+  await new Promise(resolve => setTimeout(resolve, 1_100));
+  await removeTempDir(root);
+});
+
+async function turnFor(text: string) {
+  for (let i = 0; i < 100; i++) {
+    const turn = session.getSession()?.messages.find(m => m.text === text);
+    if (turn) return turn;
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  return null;
+}
+
+test('a verbatim ident that is a listed stand-in still airs, and no prompt reads it back', async () => {
+  await useIris({ identMode: 'verbatim', identLines: ['TBD'] });
+  assert.equal(await runStationId(), 'TBD');
+  assert.deepEqual(spoken, ['TBD'], 'operator words skip the stand-in gate');
+  const turn = await turnFor('TBD');
+  assert.ok(turn, 'the ident reaches the session once aired');
+  assert.equal(turn!.meta.verbatim, true);
+  assert.equal(withheldFromPrompts(turn), true);
+  assert.equal(queue.getDjRecap(), null, 'no "Already said on air recently" entry');
+  assert.deepEqual(queue.getRecentOpeners(), [], 'no "Recent opening words" entry');
+});
+
+test('the same stand-in from the model is still dropped', async () => {
+  const outcome = await queue.announce('TBD', 'station-id', { persona: IRIS as never });
+  assert.equal(outcome.accepted, false);
+  assert.deepEqual(spoken, []);
+});
+
+test('a deferred verbatim ident skips the stand-in gate and holds with no clock claim', async () => {
+  await useIris({ identMode: 'verbatim', identLines: ['TBD'] });
+  assert.equal(await runStationId({ atNextTrack: true }), 'TBD');
+  assert.deepEqual(spoken, ['TBD']);
+  assert.equal(queue._pendingVoice!.kind, 'station-id');
+  assert.equal(queue._pendingVoice!.daypart, null);
+  assert.equal(queue._pendingVoice!.clips[0].meta.verbatim, true);
+});
+
+test('noClockClaim keeps a null stamp; an offered stamp survives without it', async () => {
+  assert.equal(await queue.announceAtNextTrack('First ident.', 'station-id', { persona: IRIS as never, daypart: 'in the morning', noClockClaim: true }), true);
+  assert.equal(queue._pendingVoice!.daypart, null);
+  assert.equal(await queue.announceAtNextTrack('Improvised ident.', 'station-id', { persona: IRIS as never, daypart: 'in the morning' }), true);
+  assert.equal(queue._pendingVoice!.daypart, 'in the morning');
+});
+
+test('a refused verbatim ident returns null through the real queue', async () => {
+  await useIris({ identMode: 'verbatim', identLines: ['First ident.'] });
+  (queue as any)._speak = async () => { throw new Error('TTS failed'); };
+  assert.equal(await runStationId({ atNextTrack: true }), null);
+  queue._pendingVoice = { pauseId: 'committed', pauseArmedAt: Date.now() } as never;
+  (queue as any)._speak = async () => wav;
+  assert.equal(await runStationId({ atNextTrack: true }), null, 'a declined slot is a refusal too');
+  queue._pendingVoice = null;
+  assert.equal(await runStationId({ atNextTrack: true }), 'First ident.');
+});
+
+// Chosen on purpose: a verbatim ident is cleaned like a raw /dj/say, which also
+// carries meta.verbatim and has always had the on-air speaker's label removed.
+for (const method of ['announce', 'announceAtNextTrack'] as const) {
+  test(`${method} strips the speaker label from a verbatim line, as from a raw say`, async () => {
+    await queue[method]('Iris: This is SUB/WAVE.', 'station-id', { persona: IRIS as never, meta: { ...VERBATIM_META } });
+    assert.deepEqual(spoken, ['This is SUB/WAVE.']);
+  });
+
   test(`${method} cleans raw picker text exactly once for accepted rotation`, async () => {
-    const encoded = { ...persona, identLines: [' Stay &amp;amp; listen. ', 'Stay &amp; listen.', 'Other ident.'] };
+    const encoded = { ...IRIS, identMode: 'verbatim', identLines: [' Stay &amp;amp; listen. ', 'Stay &amp; listen.', 'Other ident.'] };
     const pick = createStationIdPicker(() => 0);
-    const spoken: string[] = [];
-    const methods = new Function('settings', 'normalizeForDisplay', 'stripSpeakerLabel', 'session', 'suppressScheduledSpeechDuringHandoff', 'wantsPauseTalk', 'speechDurationMs', 'resolveTalkPlacement', 'currentTalkAir', announcementMethods)(
-      { getEffectivePersona: () => encoded, resolveActiveShow: () => null, get: () => ({}) },
-      normalizeForDisplay,
-      stripSpeakerLabel,
-      { handoffInProgress: () => false },
-      () => false,
-      () => false,
-      () => 1000,
-      () => 'next-track',
-      () => 'next-track',
-    );
-    const queue = {
-      ...methods,
-      log: () => {},
-      _speak: async text => { spoken.push(text); return 'fixture.wav'; },
-      holdForNextTrack: () => true,
-    };
     for (let i = 0; i < 6; i++) {
+      queue._pendingVoice = null;
       const raw = pick(encoded)!;
       if (i === 0) assert.equal(raw, 'Stay &amp;amp; listen.');
-      const outcome = await queue[method](raw, 'station-id', { persona: encoded, verbatim: true });
-      assert.equal(method === 'announce' ? outcome.accepted : outcome, true);
+      const outcome = await queue[method](raw, 'station-id', { persona: encoded as never, meta: { ...VERBATIM_META }, noClockClaim: true });
+      assert.equal(typeof outcome === 'boolean' ? outcome : outcome.accepted, true);
       assert.equal(spoken[i], normalizeForDisplay(raw));
       if (i > 0) assert.notEqual(spoken[i], spoken[i - 1]);
       pick.commit(encoded.id, raw);
     }
   });
 }
+

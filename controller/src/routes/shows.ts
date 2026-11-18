@@ -4,6 +4,7 @@
 
 import express from 'express';
 import * as settings from '../settings.js';
+import { updateEndingSteer } from '../broadcast/takeover-steer.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { validateBody, validateBodyAsync } from '../middleware/validate.js';
 import {
@@ -21,6 +22,8 @@ import { queue } from '../broadcast/queue.js';
 import { rollSessionNow } from '../broadcast/scheduler.js';
 import { resolveTakeoverWindowNow } from '../broadcast/takeover-window.js';
 import { diagnoseShowCandidates } from '../music/show-candidates.js';
+import { isInOrderShow } from '../music/playlist-order.js';
+import { playlistCursors, resolveInOrderNext } from '../music/playlist-order-next.js';
 
 export const router = express.Router();
 
@@ -93,7 +96,10 @@ router.post('/shows/community/:slug/install', requireAdmin, async (req, res) => 
     playlistIds: [],
     playlistStrict: false,
     playlistExhaust: false,
+    playlistInOrder: false,
     excludedPlaylistIds: [],
+    excludeExplicit: false,
+    excludedAlbumKinds: [],
   };
 
   try {
@@ -105,6 +111,44 @@ router.post('/shows/community/:slug/install', requireAdmin, async (req, res) => 
   } catch (err: any) {
     queue.log('error', `POST /shows/community/${slug}/install failed: ${err.message}`);
     res.status(400).json({ error: err.message });
+  }
+});
+
+// Play in order: where a SAVED show's walk stands — the track its next in-order
+// pick would choose, through the same resolveInOrderNext the pick branch calls,
+// so the editor's "next up" cannot drift from the air. Read-only.
+router.get('/shows/:id/playlist-position', requireAdmin, async (req, res) => {
+  const id = String(req.params.id);
+  await settings.load();
+  const show = settings.resolveShowById(id);
+  if (!show) return res.status(404).json({ error: `no such show: ${id}` });
+  if (!isInOrderShow(show)) return res.json({ inOrder: false, next: null });
+  try {
+    const next = await resolveInOrderNext(show, { busyIds: queue.queuedIds() });
+    if (!next.ok) return res.json({ inOrder: true, next: null, reason: next.reason });
+    res.json({
+      inOrder: true,
+      next: { index: next.index, total: next.total, title: next.track.title ?? null, artist: next.track.artist ?? null },
+    });
+  } catch (err: any) {
+    queue.log('error', `GET /shows/${id}/playlist-position failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Play in order: back to the top. The next in-order pick is the first eligible
+// track of the anchor. Answers ok even when there was no saved position.
+router.delete('/shows/:id/playlist-position', requireAdmin, async (req, res) => {
+  const id = String(req.params.id);
+  await settings.load();
+  if (!settings.resolveShowById(id)) return res.status(404).json({ error: `no such show: ${id}` });
+  try {
+    const cleared = await playlistCursors.reset(id);
+    if (cleared) queue.log('scheduler', `[shows] "${id}" running order reset to the top via admin UI`);
+    res.json({ ok: true });
+  } catch (err: any) {
+    queue.log('error', `DELETE /shows/${id}/playlist-position failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -230,7 +274,9 @@ router.post('/schedule/override', requireAdmin, validateBody(scheduleOverrideReq
     }[resolved.source]
     : '';
   try {
-    await settings.update({ scheduleOverride: override });
+    // A takeover ends a running steer (broadcast/takeover-steer.ts), and this
+    // waits its turn behind a steer that is still starting.
+    await updateEndingSteer({ scheduleOverride: override });
     queue.log(
       'scheduler',
       show
