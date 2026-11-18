@@ -6,11 +6,14 @@
 // the controller would send the level. Mirrored by `npm run gen:schemas`, so it
 // imports nothing.
 //
-// 'default' is today's "On", byte-identical on every provider: what the call
-// sends is decided by the descriptor alone, as before the field existed. A
-// level is only ever read while reasoning is on, and only on a leg
-// reasoningEffortOffered() accepts; anywhere else it is kept in settings but
-// sends nothing, so a saved level survives a provider switch and back.
+// 'default' is today's "On": what the call sends is decided by the descriptor
+// alone, as before the field existed, on every provider but one. The
+// announced exception (#2357) is a native-Anthropic, manual-thinking Claude
+// model, whose Default is a fixed MANUAL_THINKING_DEFAULT_BUDGET rather than
+// the SDK's medium. A level is only ever read while reasoning is on, and only
+// on a leg reasoningEffortOffered() accepts; anywhere else it is kept in
+// settings but sends nothing, so a saved level survives a provider switch and
+// back.
 
 export const REASONING_EFFORTS = ['default', 'low', 'medium', 'high'] as const;
 export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
@@ -26,10 +29,16 @@ export function normalizeReasoningEffort(v: unknown): ReasoningEffort {
 
 // Fixed thinking budgets for a manual-thinking Claude model (below), per level.
 // The SDK's own levels are a share of the model's max output (medium is 19,200
-// tokens on a 64k model) — far beyond a ~150-token DJ line — so a level the
-// operator picks is a small fixed budget instead (LiteLLM uses the same scale).
-// 'default' keeps the SDK's medium, unchanged.
+// tokens on a 64k model, 9,600 on Opus 4/4.1) — far beyond a ~150-token DJ
+// line — so a level the operator picks is a small fixed budget instead
+// (LiteLLM uses the same scale).
 export const MANUAL_THINKING_BUDGETS = { low: 1024, medium: 2048, high: 4096 } as const;
+
+// What 'default' sends on a manual-thinking Claude model: Low's budget, the
+// API minimum. Until #2357 Default kept the SDK's medium (above); lowering it
+// is an announced exception to "an upgrade is byte-identical" (root
+// CLAUDE.md), applying to a stored "On" from before the field too.
+export const MANUAL_THINKING_DEFAULT_BUDGET = MANUAL_THINKING_BUDGETS.low;
 
 // A Claude model id, served only by Anthropic or a proxy/gateway in front of it.
 const CLAUDE_MODEL_RE = /(?:^|\/)claude-/i;
@@ -75,13 +84,12 @@ export function manualThinkingClaudeModel(modelId: unknown): boolean {
 }
 
 /**
- * The thinking budget the SDK gives a manual-thinking Claude model under
- * 'default' (its medium: 30% of the model's max output, at least 1,024), for
- * the picker's hint. null for any other id.
+ * The thinking budget 'default' sends on a manual-thinking Claude model
+ * (MANUAL_THINKING_DEFAULT_BUDGET), for the picker's hint. null for any other
+ * id, where Default sends no budget of SUB/WAVE's own.
  */
 export function manualThinkingDefaultBudget(modelId: unknown): number | null {
-  const max = manualThinkingClaudeMaxOutput(modelId);
-  return max == null ? null : Math.min(max, Math.max(1024, Math.round(max * 0.3)));
+  return manualThinkingClaudeModel(modelId) ? MANUAL_THINKING_DEFAULT_BUDGET : null;
 }
 
 export interface ReasoningEffortLeg {

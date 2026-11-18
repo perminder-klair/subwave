@@ -32,9 +32,10 @@ test('the picker shows where a leg can express a level, and nowhere else', () =>
 });
 
 test('the hints: manual Claude budgets, Request parameters where the picker is hidden, a Claude proxy honours the switch', () => {
-  assert.equal(reasoningEffortHint(leg('anthropic', 'claude-sonnet-4-5')),
-    'Default: up to ~19k thinking tokens per reply on this model; Low 1k, Medium 2k, High 4k. A DJ line is about 150 tokens, so Low is usually plenty.');
-  assert.match(reasoningEffortHint(leg('anthropic', 'claude-opus-4-1')), /^Default: up to ~10k/);
+  // Default is Low's 1k budget on every manual-thinking id (#2357), never the SDK's 30% share.
+  const manualHint = 'Thinking tokens per reply on this model: Default and Low up to ~1k, Medium 2k, High 4k. A DJ line is about 150 tokens, so the default is usually plenty.';
+  assert.equal(reasoningEffortHint(leg('anthropic', 'claude-sonnet-4-5')), manualHint);
+  assert.equal(reasoningEffortHint(leg('anthropic', 'claude-opus-4-1')), manualHint);
   assert.doesNotMatch(reasoningEffortHint(leg('anthropic', 'claude-opus-4-7')), /thinking tokens/, 'adaptive ids have no budget');
   assert.doesNotMatch(reasoningEffortHint(leg('openai-compatible', 'claude-sonnet-4-5', 'hosted')), /thinking tokens/, 'a proxy gets no budget');
   assert.match(reasoningEffortHint(leg('deepseek', 'deepseek-v4-flash')), /Medium as High/);

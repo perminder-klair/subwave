@@ -48,9 +48,14 @@ export function reasoningEffortHint(leg: ReasoningLegView): string {
   const defaultBudget = leg.provider === 'anthropic' ? manualThinkingDefaultBudget(leg.model) : null;
   if (defaultBudget != null) {
     const { low, medium, high } = MANUAL_THINKING_BUDGETS;
-    return `Default: up to ~${kTokens(defaultBudget)} thinking tokens per reply on this model; `
-      + `Low ${kTokens(low)}, Medium ${kTokens(medium)}, High ${kTokens(high)}. A DJ line is about 150 tokens, `
-      + 'so Low is usually plenty.';
+    // Read both numbers off the constants, so the copy can't claim Default
+    // equals Low after one of them moves.
+    const lead = defaultBudget === low
+      ? `Default and Low up to ~${kTokens(low)}`
+      : `Default up to ~${kTokens(defaultBudget)}, Low ${kTokens(low)}`;
+    return `Thinking tokens per reply on this model: ${lead}, `
+      + `Medium ${kTokens(medium)}, High ${kTokens(high)}. A DJ line is about 150 tokens, `
+      + 'so the default is usually plenty.';
   }
   const base = 'Default keeps what On has always sent. Low, Medium and High set the model’s reasoning effort.';
   if (leg.provider === 'deepseek') return `${base} DeepSeek treats Medium as High.`;
