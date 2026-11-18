@@ -110,6 +110,11 @@ try {
   // the two clauses that forbid code-switching, and keeps the raid defence.
   const mixPersona = { id: 'p_mix', name: 'Nova', soul: 'warm and dry', language: 'English', alsoSpeaks: 'Japanese' };
   assert.deepEqual(settings.personaLanguages({ alsoSpeaks: ' Japanese, english ,Korean,' }), { primary: 'English', mix: ['Japanese', 'Korean'] });
+  assert.deepEqual(
+    settings.personaLanguages({ language: 'English', alsoSpeaks: 'Japanese, japanese , JAPANESE,Korean' }),
+    { primary: 'English', mix: ['Japanese', 'Korean'] },
+    'a repeated mix language is dropped case-insensitively, first spelling kept',
+  );
   assert.equal(settings.languageDirective({ ...noLangPersona, alsoSpeaks: '' }), dirNoLang, 'an empty alsoSpeaks is byte-identical');
   const dirMix = settings.languageDirective(mixPersona);
   assert.match(dirMix, /native speaker of English and Japanese/);

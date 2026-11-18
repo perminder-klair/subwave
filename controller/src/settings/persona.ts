@@ -391,8 +391,15 @@ export function pickOnAirSpeaker(date: Date = new Date()) {
 export function personaLanguages(persona: unknown): { primary: string; mix: string[] } {
   const p = persona as { language?: unknown; alsoSpeaks?: unknown } | null | undefined;
   const primary = String(p?.language || '').trim() || 'English';
-  const mix = String(p?.alsoSpeaks || '').split(',').map((s) => s.trim())
-    .filter((s) => s && s.toLowerCase() !== primary.toLowerCase());
+  // Case-insensitive: the primary and any repeat are dropped, first spelling wins.
+  const seen = new Set([primary.toLowerCase()]);
+  const mix: string[] = [];
+  for (const s of String(p?.alsoSpeaks || '').split(',').map((x) => x.trim())) {
+    const key = s.toLowerCase();
+    if (!s || seen.has(key)) continue;
+    seen.add(key);
+    mix.push(s);
+  }
   return { primary, mix };
 }
 
