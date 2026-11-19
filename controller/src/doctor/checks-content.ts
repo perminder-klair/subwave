@@ -7,6 +7,7 @@ import { readFile } from 'node:fs/promises';
 import { STATE_DIR } from '../config.js';
 import * as settings from '../settings.js';
 import * as beds from '../broadcast/beds.js';
+import { bedFits, entryCrossSecFor, thresholdLinkBedSec } from '../broadcast/bed-policy.js';
 import * as jingles from '../broadcast/jingles.js';
 import { jingleRotateOwner } from '../broadcast/jingle-rotate.js';
 import { allowedForShow } from '../broadcast/show-allowlist.js';
@@ -38,7 +39,11 @@ export async function checkContent(): Promise<Finding[]> {
 
 // Per-show imaging allowlists (#1875, #1188): the mixer's own rotate cannot see
 // which show is on air, and a list whose entries were all deleted skips that
-// show's jingle slots or beds (broadcast/show-allowlist.ts).
+// show's jingle slots or beds (broadcast/show-allowlist.ts). A bed list whose
+// beds all exist but are too short airs links dry just the same, because the
+// list filters before pickBed's length check (#2367). "Too short" is judged
+// against a link at the bed threshold over the station's crossfade, through
+// bed-policy's own rules: the shortest link that beds on an unmeasured track.
 async function showListFindings(): Promise<Finding[]> {
   const s = settings.get();
   const shows = s.shows || [];
@@ -54,14 +59,28 @@ async function showListFindings(): Promise<Finding[]> {
     });
   }
   const jingleNames = (await jingles.list()).map(j => j.filename);
-  const bedNames = (await beds.list()).map(b => b.name);
+  const bedCatalog = await beds.catalog();
+  const linkBedSec = s.beds ? thresholdLinkBedSec(s.beds, entryCrossSecFor(s.crossfadeDuration)) : 0;
+  const stationFits = bedCatalog.some(b => bedFits(b, linkBedSec));
   const hint = "Edit the show's Imaging section: re-pick from the library or clear the list.";
   for (const sh of shows) {
     if (sh.allowedJingles?.length && !allowedForShow(jingleNames, sh.allowedJingles, n => n).length) {
       out.push({ label: 'show lists', status: 'warn', detail: `"${sh.name}": no listed jingle exists — its automatic jingle slots are skipped`, hint });
     }
-    if (s.beds?.enabled && sh.allowedBeds?.length && !allowedForShow(bedNames, sh.allowedBeds, n => n).length) {
-      out.push({ label: 'show lists', status: 'warn', detail: `"${sh.name}": no listed bed exists — its links air without a bed`, hint });
+    if (s.beds?.enabled && sh.allowedBeds?.length) {
+      const listed = allowedForShow(bedCatalog, sh.allowedBeds, b => b.name);
+      if (!listed.length) {
+        out.push({ label: 'show lists', status: 'warn', detail: `"${sh.name}": no listed bed exists — its links air without a bed`, hint });
+      } else if (!listed.some(b => bedFits(b, linkBedSec))) {
+        out.push({
+          label: 'show lists',
+          status: 'warn',
+          detail: `"${sh.name}": no listed bed is ${linkBedSec}s or longer — a ${s.beds.thresholdSec}s link airs without a bed`,
+          hint: stationFits
+            ? "The library has longer beds this show doesn't list. Edit the show's Imaging section to add one, or clear the list."
+            : `No bed in the library is long enough either. Upload one of ${linkBedSec}s or longer.`,
+        });
+      }
     }
   }
   return out;

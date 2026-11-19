@@ -1375,11 +1375,7 @@ class Queue {
       // is held for it in onBedStarted. The predecessor's own crossSec stamp
       // (applyMixTransition's ending-aware canvas) is exactly that length;
       // fall back to the operator's crossfade setting like getAnnotatedUri.
-      // 0 is a legitimate value (a hard-cut station has NO entry canvas), so
-      // guard with isFinite rather than `||` — `|| 10` would turn crossfade 0
-      // into 10s of phantom dead time the listener hears as bare bed.
-      const rawCross = Number(predecessor?.crossSec ?? settings.get()?.crossfadeDuration);
-      const entryCrossSec = Math.min(15, Math.max(0, Number.isFinite(rawCross) ? rawCross : 10));
+      const entryCrossSec = bedPolicy.entryCrossSecFor(predecessor?.crossSec ?? settings.get()?.crossfadeDuration);
 
       const { bedSec, crossSec } = bedPolicy.bedLengthFor(voiceMs, cfg, entryCrossSec);
       const show = session.onAirShow();
