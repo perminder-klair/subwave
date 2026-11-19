@@ -202,17 +202,6 @@ export function AllowlistSkipNotice(props: {
   return text ? <span role="status" className="field-hint text-vermilion">{text}</span> : null;
 }
 
-// Under a show's jingle picker: the mixer's own rotate cannot see the show.
-export function JingleMixerNotice({ ignored, listed }: { ignored: boolean; listed: readonly string[] }) {
-  if (!ignored || !listed.length) return null;
-  return (
-    <span role="status" className="field-hint text-vermilion">
-      The mixer counts the jingle rotate, and its rotate ignores this list. Switch Imaging → Jingles → counted by to
-      Controller, then restart the mixer.
-    </span>
-  );
-}
-
 // Checkbox list for the show's playlist anchor / exclusion sets.
 //
 // Pinned ids that no longer resolve get a row of their own: a playlist deleted

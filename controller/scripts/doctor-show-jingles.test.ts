@@ -1,6 +1,6 @@
-// Doctor findings for per-show imaging allowlists (#1875, #1188): the mixer's
-// rotate ignores jingle lists, and a list whose entries were all deleted skips
-// that show's jingle slots or beds. A bed list whose beds all exist but are too
+// Doctor findings for per-show imaging allowlists (#1875, #1188): a list whose
+// entries were all deleted skips that show's jingle slots or beds, and since
+// #2367 the jingles count reads jingles.m3u as the on-air show's list. A bed list whose beds all exist but are too
 // short for a threshold-length link airs links dry too (#2367).
 //
 // Run: `npm test -- doctor-show-jingles`.
@@ -17,6 +17,7 @@ process.env.STATE_DIR = root;
 
 const settings = await import('../src/settings.js');
 const { checkContent } = await import('../src/doctor/checks-content.js');
+const jingles = await import('../src/broadcast/jingles.js');
 
 mkdirSync(join(root, 'jingles'), { recursive: true });
 mkdirSync(join(root, 'beds'), { recursive: true });
@@ -40,17 +41,31 @@ async function station(over: Record<string, unknown>, rotate: 'mixer' | 'control
 }
 const labelled = (findings: any[], label: string) => findings.filter(f => f.label === label);
 
-test('doctor warns when the mixer counts and a show lists jingles', async () => {
-  const [f, ...rest] = labelled(await station({ allowedJingles: ['jingle_a.wav'] }, 'mixer'), 'show jingles');
-  assert.equal(rest.length, 0);
-  assert.equal(f?.status, 'warn');
-  assert.match(f.hint, /only when the controller counts/);
-  assert.match(f.hint, /counted by: Controller/);
+// Since #2367 the mixer's own rotate draws from the on-air show's list too, so
+// the old "lists apply only when the controller counts" warning is gone.
+test('doctor no longer warns that the mixer ignores show jingle lists', async () => {
+  assert.deepEqual(labelled(await station({ allowedJingles: ['jingle_a.wav'] }, 'mixer'), 'show jingles'), []);
+  assert.deepEqual(labelled(await station({ allowedJingles: ['jingle_a.wav'] }, 'controller'), 'show jingles'), []);
 });
 
-test('doctor is quiet when the controller counts', async () => {
-  assert.deepEqual(labelled(await station({ allowedJingles: ['jingle_a.wav'] }, 'controller'), 'show jingles'), []);
-  assert.deepEqual(labelled(await station({}, 'mixer'), 'show jingles'), []);
+// jingles.m3u holds the on-air show's list, so its count is not the library's.
+test('the jingles count names a show filter, and "generate the defaults" only for an empty library', async () => {
+  await station({}, 'mixer');
+  await jingles.applyShowList(undefined);
+  const [all] = labelled(await checkContent(), 'jingles');
+  assert.equal(all.status, 'ok');
+  assert.equal(all.detail, '1 entries', 'no list: the file as before');
+  await jingles.applyShowList(['gone.wav']);
+  const [none] = labelled(await checkContent(), 'jingles');
+  assert.equal(none.status, 'warn');
+  assert.match(none.detail, /none of 1: the on-air show lists no jingle in the library/);
+  assert.equal(none.fix, undefined, 'never "generate jingles" over a library that has them');
+  assert.doesNotMatch(none.hint, /Generate the defaults/);
+  await jingles.applyShowList(['jingle_a.wav']);
+  const [listed] = labelled(await checkContent(), 'jingles');
+  assert.equal(listed.status, 'ok');
+  assert.equal(listed.detail, "1 of 1 (the on-air show's list)");
+  await jingles.applyShowList(undefined);
 });
 
 test('doctor names a show whose jingle list matches nothing', async () => {
