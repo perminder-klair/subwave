@@ -60,9 +60,14 @@ jingle or bed, as before. A non-empty list is strict: while that show is on air,
 the automatic rotate, the over-music ID and the link bed draw only from it. If
 none of the listed entries exists any more, the jingle slot is skipped or the
 link airs without a bed, and the editor and the doctor say so. Pressing play on
-a jingle ignores the list. Jingle lists need the controller to count the rotate
-(Imaging → Jingles → counted by: Controller, then restart the mixer); the
-mixer's own rotate cannot see which show is on air.
+a jingle ignores the list. Jingle lists apply whoever counts the rotate: when the
+mixer counts it, the controller rewrites the mixer's jingle playlist as the show
+changes, and the incoming show's list takes over while the outgoing show's last
+track plays, so the stinger between the two shows is the incoming show's. A list
+none of whose jingles exist airs no rotate stinger during that show; on the
+mixer's rotate the skipped stinger then airs at the next show's first seam. This
+needs a broadcast image from the same release: an older mixer applies a new list
+one stinger late.
 
 ## Audio imports
 

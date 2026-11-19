@@ -2,7 +2,7 @@
 import type { ShowFacet, ShowRow } from './ShowsTable';
 import { SHOW_COLORS } from '../schedule/lib';
 import { eraLabelOf } from './types';
-import type { Persona, PlaylistIndexStatus, Schedule, SettingsResponse, Show } from './types';
+import type { Persona, PlaylistIndexStatus, Schedule, Show } from './types';
 import {
   migrateLegacyShowFields,
   type ShowSchemaContext,
@@ -140,12 +140,6 @@ export function showPayload(s: Show) {
     allowedBeds: s.allowedBeds || [],
     description: (s.description || '').trim(),
   };
-}
-
-// The controller's jingleRotateOwner rule: only a between-songs rotate left to
-// the mixer ignores a show's jingle list (the mixer cannot see the show).
-export function jingleListIgnored(values: NonNullable<SettingsResponse['values']>): boolean {
-  return (values.jinglePlacement ?? 'between') === 'between' && values.jingleRotate !== 'controller';
 }
 
 // Why a show's draws are skipped: a non-empty list none of whose entries exist

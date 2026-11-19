@@ -20,6 +20,7 @@ import * as pocketTts from './audio/pocketTts.js';
 import { getFullContext } from './context.js';
 import { loadCuriosityLedger } from './skills/curiosity.js';
 import { startScheduler, flushPendingAutoPlaylist, refreshAutoPlaylist } from './broadcast/scheduler.js';
+import { initJingleShowList, startJingleShowSync } from './broadcast/jingle-show-sync.js';
 import { showKeyAt } from './broadcast/show-boundary.js';
 import { resumeIntoAnotherShow } from './broadcast/resume-show.js';
 import { autoPlaylistReady, skipTrack } from './broadcast/liquidsoap-control.js';
@@ -378,6 +379,10 @@ app.listen(config.server.port, async (err?: Error) => {
   // Up front so the sync readers see data from the first pick.
   await likes.load().catch(err => console.error('[likes] init failed:', err.message));
   startScheduler();
+  // The mixer's rotate draws from the on-air show's jingle list (#2367): set it
+  // before the boot rewrite below, then follow every roll and settings change.
+  initJingleShowList();
+  startJingleShowSync({ log: line => queue.log('scheduler', line) });
   jingles
     .ensureDefaultIdent()
     .catch(err => console.error('[jingles] ident generation failed:', err.message));

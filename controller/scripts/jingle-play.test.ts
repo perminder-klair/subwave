@@ -199,7 +199,7 @@ test('the marker says how long a jingle waits behind the jingles fed just before
 });
 
 test('neither jingle source writes the marker from its own hook', () => {
-  const rotate = liq.slice(liq.indexOf('jingles = playlist('), liq.indexOf('rotate(weights=[1, jingle_ratio()]'));
+  const rotate = liq.slice(liq.indexOf('def make_jingles_playlist() ='), liq.indexOf('rotate(weights=[1, jingle_ratio()]'));
   assert.ok(rotate.length > 0, 'the rotate block is still where this test looks');
   assert.ok(!rotate.includes('jingle-playing.json'),
     'the playlist starts its next clip at the end of the current one, N tracks before it airs');
@@ -257,9 +257,46 @@ test('a jingle that has started plays to its end', () => {
   // clip and before the gate sees that frame's track mark. Re-checked at the
   // mark, a closed gate dropped the rest of the frame: the next clip's head and
   // metadata, so it aired later under the previous clip's name and length.
-  const release = liq.indexOf('jingles.on_track(synchronous=true, fun (_) -> rotate_jingle_on_air := false)');
-  assert.ok(release > liq.indexOf('jingles = playlist(') && release < liq.indexOf('jingles = source.available(jingles,'),
-    'the latch is released on the raw playlist, below the gate');
+  // On EACH instance the slot holds (#2367), so the slot moves nothing about
+  // when it runs: measured on 2.4.6 with clips of distinct lengths, each one
+  // aired at its own length through the slot, as without it.
+  const builderAt = liq.indexOf('def make_jingles_playlist() =');
+  const builder = liq.slice(builderAt, liq.indexOf('\n    end\n', builderAt));
+  assert.ok(builder.includes('p.on_track(synchronous=true, fun (_) -> rotate_jingle_on_air := false)'),
+    'the latch is released on the raw playlist, each instance of it');
+  assert.ok(builderAt > 0 && builderAt < liq.indexOf('jingles = source.available(jingles,'), 'below the gate');
+});
+
+// A show's jingle list reaches the mixer's rotate at the next stinger (#2367).
+// A playlist holds its next clip as its current request, which reload() keeps,
+// so the playlist sits in a source.dynamic slot like the fallback's (#1925):
+// between stingers `jingles.reload` commits a fresh instance; while a rotate
+// stinger is on air it reloads in place. scripts/liquidsoap-jingle-swap.py
+// measures both against this file in Docker.
+test('jingles.reload swaps the rotate\'s playlist between stingers and reloads it in place during one', () => {
+  const builderAt = liq.indexOf('def make_jingles_playlist() =');
+  const builder = liq.slice(builderAt, liq.indexOf('\n    end\n', builderAt));
+  assert.ok(builder.includes('id="jingles"'), 'the instances keep the id the controller and logs know');
+  assert.ok(builder.includes('register_server_commands=false'),
+    'no instance registers commands: a fresh one would register them again');
+  assert.ok(builder.includes('reload_mode="never"'), 'no instance watches the file; radio.liq does, once');
+  const slotAt = liq.indexOf('source.dynamic(\n      id="jingles_slot"');
+  assert.ok(slotAt > builderAt && slotAt < liq.indexOf('jingles = source.available(jingles,'),
+    'the slot is what the gate and the rotate see');
+  const branch = liq.slice(liq.indexOf('if jingle_ratio() > 0 then'), liq.indexOf('rotate(weights=[1, jingle_ratio()]'));
+  const regAt = branch.indexOf('namespace="jingles",\n      "reload"');
+  assert.ok(regAt > 0, 'jingles.reload is registered with the rotate, so a mixer without one says "unknown command"');
+  const command = branch.slice(regAt, branch.indexOf('"OK"', regAt));
+  assert.ok(command.includes('if rotate_jingle_on_air() then\n          jingles_playlist().reload()'),
+    'a stinger on air: reload in place, which plays it out and draws the next from the new list');
+  assert.ok(command.includes('pending_jingles_playlist := jingles.prepare(fresh)'), 'between stingers: a fresh instance');
+  assert.ok(command.includes('ignore(jingles.is_ready())'),
+    'committed at once: the slot takes a prepared source only when asked whether it is ready');
+  assert.ok(!/\.skip\(\)/.test(command), 'never skip: it aired the prepared clip at zero length, and cut one on air');
+  const watch = branch.slice(branch.indexOf('def jingles_m3u_changed() ='), branch.indexOf('rotate(weights'));
+  assert.ok(watch.includes('if contents != jingles_m3u_loaded() then'), 'the backup watch skips what a reload already read');
+  assert.ok(watch.includes('jingles_playlist().reload()') && !watch.includes('prepare('),
+    'and only reloads in place: the server thread alone replaces the instance');
 });
 
 // Back to back, the rotate chooses the next clip in the same cycle the last one

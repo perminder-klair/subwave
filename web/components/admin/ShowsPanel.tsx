@@ -34,7 +34,7 @@ import { useRosterView, useRosterSort } from '../../lib/adminView';
 import { showSubmitUrl } from '../../lib/repo';
 import { ShowDefRow } from './shows/ShowDefRow';
 import { ShowEditor } from './shows/ShowEditor';
-import { clientMintId, emptyWeek, hydrateShow, jingleListIgnored, showContext, showPayload, showRow } from './shows/lib';
+import { clientMintId, emptyWeek, hydrateShow, showContext, showPayload, showRow } from './shows/lib';
 import type {
   CommunityShow,
   Persona,
@@ -592,7 +592,6 @@ export default function ShowsPanel() {
           jinglesStatus={indexStatus(settingsQuery)}
           beds={bedOpts}
           bedsStatus={indexStatus(bedsQuery)}
-          jingleListIgnored={jingleListIgnored(data?.values ?? {})}
           apiBase={apiBase}
           adminFetch={adminFetch}
           minTrackSeconds={data?.values?.minTrackSeconds}

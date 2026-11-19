@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { AllowlistSkipNotice, IMAGING_PICKER_COPY, JingleMixerNotice, PlaylistPicker } from './ShowPickers';
-import { allowlistSkipNotice, hydrateShow, jingleListIgnored, showPayload } from './lib';
+import { AllowlistSkipNotice, IMAGING_PICKER_COPY, PlaylistPicker } from './ShowPickers';
+import { allowlistSkipNotice, hydrateShow, showPayload } from './lib';
 
 const jingles = [
   { id: 'jingle_a.wav', name: 'Station A', songCount: null },
@@ -44,19 +44,6 @@ test('hydrate then payload keeps both lists', () => {
   const bare = hydrateShow({ id: 's_bare', name: 'Bare', personaId: 'p' });
   assert.deepEqual(showPayload(bare).allowedJingles, []);
   assert.deepEqual(showPayload(bare).allowedBeds, []);
-});
-
-test('jingle list notice shows under mixer counting', () => {
-  assert.equal(jingleListIgnored({}), true);
-  assert.equal(jingleListIgnored({ jingleRotate: 'mixer', jinglePlacement: 'between' }), true);
-  assert.equal(jingleListIgnored({ jingleRotate: 'controller' }), false);
-  assert.equal(jingleListIgnored({ jingleRotate: 'mixer', jinglePlacement: 'over' }), false);
-  assert.equal(jingleListIgnored({ jinglePlacement: 'both' }), false);
-  const notice = (ignored: boolean, listed: string[]) =>
-    renderToStaticMarkup(createElement(JingleMixerNotice, { ignored, listed }));
-  assert.match(notice(true, ['jingle_a.wav']), /role="status"[^>]*>The mixer counts the jingle rotate/);
-  assert.equal(notice(true, []), '');
-  assert.equal(notice(false, ['jingle_a.wav']), '');
 });
 
 test('notice when no listed jingle exists', () => {
