@@ -9,6 +9,8 @@ import * as settings from '../settings.js';
 import * as beds from '../broadcast/beds.js';
 import { bedFits, entryCrossSecFor, thresholdLinkBedSec } from '../broadcast/bed-policy.js';
 import * as jingles from '../broadcast/jingles.js';
+import { jingleRotateOwner } from '../broadcast/jingle-rotate.js';
+import { jingleListSwap } from '../broadcast/liquidsoap-control.js';
 import { allowedForShow } from '../broadcast/show-allowlist.js';
 import { getSetupStatus } from '../setup/firstRun.js';
 import type { Finding, FixAction } from './types.js';
@@ -29,7 +31,27 @@ export async function checkContent(): Promise<Finding[]> {
   out.push(await jinglesFinding());
 
   out.push(...await showListFindings());
+  out.push(...await mixerJingleSwapFindings());
   return out;
+}
+
+// A show's jingle list reaches the mixer's own rotate through jingles.m3u, and
+// lands at the next stinger only on a mixer that replaces its playlist between
+// stingers (#2367). An older broadcast image still reloads in place, so the list
+// starts one stinger late, with nothing else to show for it. Asked only when it
+// matters: the mixer counts the rotate and some show lists jingles. Only the
+// mixer's own "unknown command" warns; an unreachable mixer is another check's.
+async function mixerJingleSwapFindings(): Promise<Finding[]> {
+  const s = settings.get();
+  const listing = (s.shows || []).filter(sh => sh.allowedJingles?.length).length;
+  if (!listing || jingleRotateOwner(s) !== 'mixer') return [];
+  if (await jingleListSwap() !== 'no') return [];
+  return [{
+    label: 'mixer jingles',
+    status: 'warn',
+    detail: `${listing} show(s) list jingles, but the running mixer is older than this controller: a show's list starts one stinger late`,
+    hint: 'Update the broadcast container to this release (rebuild or pull its image; in dev, restart it) so the list applies from the first stinger.',
+  }];
 }
 
 // jingles.m3u holds the ON-AIR show's jingle list (#2367), so an empty or short

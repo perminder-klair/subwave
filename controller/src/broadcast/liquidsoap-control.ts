@@ -195,6 +195,23 @@ export async function reloadJinglesPlaylist(): Promise<boolean> {
   return reloadPlaylist('jingles');
 }
 
+// Whether the running mixer replaces its jingle playlist between stingers
+// (radio.liq `jingle_list_swap`, #2367). radio.liq registers the command whatever
+// the rotate, so a complete "unknown command" is a mixer older than the swap,
+// which applies a show's jingle list one stinger late: 'no'. 'unknown' is a
+// telnet failure, a timeout or any other reply, and says nothing either way.
+export type JingleListSwap = 'yes' | 'no' | 'unknown';
+
+export async function jingleListSwap(timeoutMs = 2000): Promise<JingleListSwap> {
+  try {
+    const reply = await sendCommand('jingle_list_swap', timeoutMs, { requireComplete: true });
+    if (reply === 'yes') return 'yes';
+    return /^ERROR: unknown command/i.test(reply) ? 'no' : 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
 // Whether the fallback has a track ready to air: after auto.reload the mixer's
 // fresh playlist fetches its first track first (radio.liq `auto.ready`). A mixer
 // older than that command has no ready signal to wait for: carry on at once.
