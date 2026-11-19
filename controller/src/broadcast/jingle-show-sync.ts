@@ -62,8 +62,10 @@ async function apply(reason: string): Promise<boolean> {
   }
 }
 
-// Every music start (queue.onTrackStarted). Acts only on the confirmed final
-// outgoing track of a boundary record that names its incoming show.
+// Every music start (queue.onTrackStarted), and a pick cycle that arms on the
+// track already on air (queue.confirmOnAirJingleList), whose start came before
+// the record. Acts only on the confirmed final outgoing track of a boundary
+// record that names its incoming show.
 export function onMusicStarted(track: Track): Promise<boolean> {
   const live = session.getSession();
   const handoff = live?.boundaryHandoff;

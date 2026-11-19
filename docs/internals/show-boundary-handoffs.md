@@ -182,8 +182,15 @@ roll (talk tick, pick cycle, ...) → re-apply: same bytes, nothing written or s
   which is every jingle). It fires on the music start that
   `boundaryHandoffReadyForTrack` confirms as the recorded final track, the same
   now-playing transition that authorises the handoff pair, and does not wait
-  for that track's intro publication. A record armed before #2367 has no id and
-  waits for the roll.
+  for that track's intro publication. When the pick cycle arms the record on
+  the track **already on air** (no held anchor, the usual case), that start has
+  passed before the record exists, so the cycle hands the list over itself,
+  straight after the arm (`queue.confirmOnAirJingleList`) and ahead of the
+  boundary plan and the pair's render. Seen on a dev stack before that call
+  existed: armed five seconds into the final track, the pair rendered eighteen
+  seconds later, and the list changed only at the roll, which beat the seam by
+  28 seconds that time. A record armed before #2367 has no id and waits for the
+  roll.
 - **The seam before F stays the outgoing show's.** A request source starts its
   next request as the current one ends, so F's `now-playing.json` is written in
   the same frame the rotate chooses that seam's stinger; by the time the

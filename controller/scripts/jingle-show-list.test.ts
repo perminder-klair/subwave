@@ -268,3 +268,37 @@ test('every music start offers the track on air to the jingle sync', async () =>
     queue.runArmedBoundaryHandoff = realRunner;
   }
 });
+
+// The pick cycle usually arms on the track ALREADY on air: its music start, the
+// hook above, ran before the record existed. Seen live on the dev stack: armed
+// five seconds into the final track, and the list changed only at the roll.
+test('a pick cycle that arms on the on-air track hands over the incoming list at once', async () => {
+  const { queue } = await import('../src/broadcast/queue.js');
+  const realCurrent = queue.current;
+  try {
+    await armedBoundary();
+    queue.current = { track: { ...FINAL }, startedAt: new Date().toISOString(), source: 'auto' } as never;
+    assert.equal(queue.confirmOnAirJingleList(true, { track: { id: 'held' } } as never), false,
+      'a held anchor (deadline path): its own start hands it over');
+    assert.equal(queue.confirmOnAirJingleList(false, null), false, 'nothing armed this cycle');
+    await pause(200);
+    assert.equal(m3u(), lines(['j_out.wav']));
+    commands.length = 0;
+    assert.equal(queue.confirmOnAirJingleList(true, null), true);
+    await eventually(() => m3u() === lines(['j_in.wav']), 'the incoming list, before the roll');
+    await eventually(() => commands.includes('jingles.reload'), 'the immediate reload');
+  } finally {
+    queue.current = realCurrent;
+  }
+});
+
+test('runPickCycle hands the list over straight after the arm, before the plan and the mic-pass', () => {
+  const src = readFileSync(new URL('../src/broadcast/queue.ts', import.meta.url), 'utf8');
+  const cycle = src.slice(src.indexOf('  runPickCycle('));
+  const armAt = cycle.indexOf('session.armBoundaryHandoff(');
+  const swapAt = cycle.indexOf('this.confirmOnAirJingleList(finalTrackHandoff, pickAnchorItem)');
+  const planAt = cycle.indexOf('programme.prepareBoundaryPlan(');
+  const micPassAt = cycle.indexOf('djAgent.runPersonaHandoff(');
+  assert.ok(armAt > 0 && swapAt > armAt, 'after the arm');
+  assert.ok(swapAt < planAt && swapAt < micPassAt, 'ahead of the awaited plan and render');
+});
