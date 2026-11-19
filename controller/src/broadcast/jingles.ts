@@ -1,6 +1,12 @@
 // Jingle store: WAVs under <stateDir>/jingles/, absolute paths listed one per
 // line in <stateDir>/jingles.m3u, metadata in the <stateDir>/jingles.json
 // sidecar (filename → { text, createdAt, builtin, source }).
+//
+// jingles.m3u is the mixer-counted rotate's draw list, so it holds the ON-AIR
+// SHOW's jingles (#2367): broadcast/jingle-show-sync.ts tells this module the
+// list when the show changes, and rewritePlaylist, the file's one writer, applies
+// it to every write (broadcast/jingle-playlist-policy.ts). With no list on any
+// show the file is byte-for-byte what it always was.
 
 import { readFile, readdir, writeFile, unlink, mkdir, stat, copyFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -11,6 +17,7 @@ import type { TtsVoiceSlot } from '../schemas/persona.js';
 import { STATE_DIR, SOUNDS_DIR } from '../config.js';
 import { writeFileAtomic } from '../util/atomic-file.js';
 import { reloadJinglesPlaylist } from './liquidsoap-control.js';
+import { rotatePlaylistFilenames, rotatePlaylistText, rotatePlaylistView } from './jingle-playlist-policy.js';
 import {
   transcodeAudio, hasFfmpeg, extOf, baseName, isAcceptedAudio,
 } from '../audio/audio-import.js';
@@ -51,14 +58,29 @@ async function saveMeta(meta: any) {
 export const RELOAD_SETTLE_MS = 2000;
 let reloadTimer: NodeJS.Timeout | null = null;
 
+// The on-air show's jingle list; undefined is every jingle. Set only through
+// setShowList/applyShowList, by jingle-show-sync.ts, so this module never reads
+// the session (which would close an import cycle through the queue).
+let showList: readonly string[] | undefined;
+
+// Writes run one at a time, so a library edit and a show swap landing together
+// cannot leave the older of the two on disk.
+let writeChain: Promise<unknown> = Promise.resolve();
+function serialWrite<T>(fn: () => Promise<T>): Promise<T> {
+  const run = writeChain.then(fn, fn);
+  writeChain = run.catch(() => {});
+  return run;
+}
+
 // Atomic, so the mixer never reads a half-written playlist. That rename is what
 // a Liquidsoap 2.4.5 file watch stops seeing (#2008), so every write is followed
 // by a telnet reload. Never awaited: no write waits on the mixer, and a mixer
 // that is down or has no rotate changes nothing here.
 async function rewritePlaylist(filenames: string[]) {
-  const lines = filenames.map((f: string) => `${DIR}/${f}`);
-  await writeFileAtomic(PLAYLIST, lines.join('\n') + (lines.length ? '\n' : ''));
-  scheduleReload();
+  await serialWrite(async () => {
+    await writeFileAtomic(PLAYLIST, rotatePlaylistText(DIR, rotatePlaylistFilenames(filenames, showList)));
+    scheduleReload();
+  });
 }
 
 function scheduleReload() {
@@ -68,6 +90,49 @@ function scheduleReload() {
     void reloadJinglesPlaylist();
   }, RELOAD_SETTLE_MS);
   reloadTimer.unref?.();
+}
+
+// A show swap reloads at once: it lands while the outgoing show's final track
+// plays, and the mixer must hold the new list before the seam that ends it.
+// This reload reads the newest file, so it also covers a pending library one.
+function reloadNow() {
+  if (reloadTimer) clearTimeout(reloadTimer);
+  reloadTimer = null;
+  void reloadJinglesPlaylist();
+}
+
+const normalizeList = (list: readonly string[] | null | undefined) =>
+  (Array.isArray(list) && list.length ? [...list] : undefined);
+
+// Boot: the list the first write uses (ensureDefaultIdent's), with no write here.
+export function setShowList(list: readonly string[] | null | undefined) {
+  showList = normalizeList(list);
+}
+
+export function currentShowList(): readonly string[] | undefined {
+  return showList;
+}
+
+// A show change. Rewrites the file and reloads the mixer at once, but only when
+// the bytes change: a roll between two shows with the same list (or none) writes
+// nothing and sends nothing, so a station without lists sees no new traffic.
+// Resolves to whether it wrote.
+export async function applyShowList(list: readonly string[] | null | undefined): Promise<boolean> {
+  setShowList(list);
+  return serialWrite(async () => {
+    const library = Object.keys((await loadMeta()).items);
+    const text = rotatePlaylistText(DIR, rotatePlaylistFilenames(library, showList));
+    const onDisk = await readFile(PLAYLIST, 'utf8').catch(() => null);
+    if (onDisk === text) return false;
+    await writeFileAtomic(PLAYLIST, text);
+    reloadNow();
+    return true;
+  });
+}
+
+// For doctor: the library against what the on-air show's list leaves of it.
+export async function playlistView() {
+  return rotatePlaylistView(Object.keys((await loadMeta()).items), showList);
 }
 
 async function statOrNull(p: string) {

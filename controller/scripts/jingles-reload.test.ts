@@ -1,9 +1,11 @@
 // Every write of jingles.m3u is followed by a telnet `jingles.reload` (#2008).
-// The mixer's own reload_mode="watch" cannot be trusted with it: on Liquidsoap
-// 2.4.5 the watch follows the inode that the first atomic rewrite replaces, so
-// 184 uploaded jingles sat outside the rotate until the mixer restarted. The
-// reload is coalesced and never awaited, so a write can neither wait on it nor
-// fail because of it. Run: npm test -- jingles-reload
+// A file watch cannot be trusted with it: on Liquidsoap 2.4.5 the playlist's
+// watch followed the inode that the first atomic rewrite replaces, so 184
+// uploaded jingles sat outside the rotate until the mixer restarted (radio.liq
+// now keeps its own watch only as the backup). A library write's reload is
+// coalesced and never awaited, so a write can neither wait on it nor fail
+// because of it; a show swap's reload goes at once (jingle-show-list.test.ts).
+// Run: npm test -- jingles-reload
 
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync } from 'node:fs';

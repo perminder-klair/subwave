@@ -42,6 +42,7 @@ import { jinglePlacement, pickRotateJingle, onJingleRotateOwnerChange } from './
 import { overlayDue, overlayEnabled, overlayOffer, overlayOpening, overlayFits, overlayMixerStatus } from './jingle-overlay.js';
 import * as beds from './beds.js';
 import * as bedPolicy from './bed-policy.js';
+import * as jingleShowSync from './jingle-show-sync.js';
 import { allowedForShow } from './show-allowlist.js';
 import { vocalRunwayMs, segmentFitsRunway } from './vocal-runway.js';
 import * as session from './session.js';
@@ -478,6 +479,7 @@ class Queue {
   // ID cannot take the song's opening from it (see whileTalkInFlight).
   _talkInFlight = 0;
   _overlayMixerStatus = async () => overlayMixerStatus(await liquidsoapControl.sendCommand('jingle_overlay_status'));
+  _onMusicStartedForJingles = jingleShowSync.onMusicStarted;
   _bedCatalog = beds.catalog;
   _bedGetPath = beds.getPath;
   _writeHandoff = writeHandoff;
@@ -4051,6 +4053,11 @@ class Queue {
       };
       this.log('playing', `${np.title} — ${np.artist}`, { source: 'auto' });
     }
+
+    // The outgoing show's confirmed final track hands the mixer's rotate the
+    // incoming show's jingle list now, before the seam that ends it (#2367).
+    // Ahead of the handoff runner, which first awaits the track's intro.
+    void this._onMusicStartedForJingles(this.current?.track ?? null);
 
     // Every real music start can confirm an overdue handoff, including an
     // untracked auto-playlist fallback. The runner waits for a tracked intro's

@@ -183,12 +183,14 @@ export async function reloadAutoPlaylist(): Promise<boolean> {
   return reloadPlaylist('auto');
 }
 
-// Re-read jingles.m3u, the mixer's own rotate (radio.liq `id="jingles"`). Its
-// reload_mode="watch" follows the file's inode on Liquidsoap 2.4.5, so it goes
-// deaf after the first atomic rewrite (#2008). 2.4.6 watches the directory, and
-// there the watch and this both reload, which only reshuffles the rotate. A
-// mixer without the rotate (jingleRatio 0, or the controller drawing jingles)
-// answers "unknown command": false, with nothing to reload.
+// Re-read jingles.m3u, the mixer's own rotate (radio.liq `jingles.reload`). A
+// file watch alone cannot be trusted with it (on Liquidsoap 2.4.5 it followed
+// the inode the first atomic rewrite replaced, #2008), so every write sends
+// this; radio.liq's own watch is only the backup. Between stingers the mixer
+// replaces its playlist, dropping the clip the old list had prepared, so the
+// on-air show's new list airs at the next stinger (#2367); during one it reloads
+// in place. A mixer without the rotate (jingleRatio 0, or the controller drawing
+// jingles) answers "unknown command": false, with nothing to reload.
 export async function reloadJinglesPlaylist(): Promise<boolean> {
   return reloadPlaylist('jingles');
 }

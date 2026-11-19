@@ -56,7 +56,7 @@ The pieces are Broadcast (Icecast + Liquidsoap), Controller (Express, ESM, TypeS
 | `intro.txt` | 0.5 s poll | between-track link → `intro_queue`, light duck (`ducking.intro`, 0.30) |
 | `sfx.txt` | 0.5 s poll | sound effect → `sfx_queue` |
 | `auto.m3u` | telnet `auto.reload` | the coast playlist for the current mood |
-| `jingles.m3u` | telnet `jingles.reload` | the mixer's own jingle rotate, rebuilt by `broadcast/jingles.ts` |
+| `jingles.m3u` | telnet `jingles.reload` | the mixer's own jingle rotate: the on-air show's jingle list, rebuilt by `broadcast/jingles.ts` |
 | `liquidsoap_*.txt` | once, at startup | crossfade, jingle ratio, duck depths, per-mount enable…, written by `settings.update()`; a change needs `/restart-mixer`. The Icecast renderers read the stream bitrates and hand them on as `SUBWAVE_*_BITRATE` (`infrastructure.md`) |
 
 **Liquidsoap → Controller.** Marker files written by `radio.liq` (the rules are in `liquidsoap/CLAUDE.md`):
@@ -99,6 +99,7 @@ The pieces are Broadcast (Icecast + Liquidsoap), Controller (Express, ESM, TypeS
 - **A rendered segment is placed, not trimmed**: the lever at a boundary is which boundary it takes (`broadcast/vocal-runway.ts`).
 - **A pause-and-talk break is silence on the music timeline.** The voice still goes through `say.txt`.
 - **A show handoff is prepared for the confirmed final outgoing track**, never by look-ahead alone (`show-boundary-handoffs.md`).
+- **The mixer's jingle list is the on-air show's, and becomes the incoming show's at the confirmed final outgoing track**, so the stinger at the seam between them is the incoming show's; the roll only re-applies it. Between stingers `jingles.reload` replaces the mixer's playlist, because a reload in place airs the old list's prepared clip first (`show-boundary-handoffs.md`, #2367).
 - **A programme plan waits for its episode preparation to settle** (`preparationSettled`), and the greeting uses a plan's angle only while the occurrence and subject it was written from still match (`preparedPlanAngle`); before then it names only a subject the skill already chose (`preparationOpening`). A plan whose tool failed for good is kept honest by its no-subject brief (`NO_SUBJECT_LINE`), so every beat trusts its angle alike (`broadcast.md`, #2321).
 - **A spoken clock is a forecast**, guarded by two paired checks in `broadcast/queue/pure.ts`.
 - **A show-boundary cut is a fade through the existing `liq_cue_out` path.** It is measured from the pick's expected air time, and that forecast must count the bed.
