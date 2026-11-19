@@ -252,9 +252,19 @@ router.get('/now-playing', async (req, res) => {
     // callers still get it from the same getFullContext. `spokenTime` stays.
     const publicClock: any = { ...(ctx.clock as any) };
     delete publicClock.spokenTimeOptions;
+    // The resolved show carries `topic` but never `description` (#2358): no
+    // model reads the listener blurb, so it is joined here, at the public
+    // boundary, from the stored show.
+    const publicContext: any = { ...ctx, clock: publicClock };
+    if (ctx.activeShow) {
+      publicContext.activeShow = {
+        ...(ctx.activeShow as any),
+        description: storedShowDescription(stationSettings, (ctx.activeShow as any).id),
+      };
+    }
     res.json({
       nowPlaying,
-      context: { ...ctx, clock: publicClock },
+      context: publicContext,
       dj: {
         name: persona?.name || 'Frequency',
         tagline: persona?.tagline || '',
@@ -359,6 +369,12 @@ router.get('/listen.m3u', (req, res) => {
   res.send(lines.join('\n') + '\n');
 });
 
+// A stored show's listener blurb by id, '' when unset or the show is gone.
+function storedShowDescription(s: any, showId: unknown): string {
+  const show = (s?.shows || []).find((sh: any) => sh?.id === showId);
+  return typeof show?.description === 'string' ? show.description : '';
+}
+
 // Public-safe DJ + station info: only fields the DJ already says on air.
 router.get('/dj', async (req, res) => {
   try {
@@ -401,6 +417,8 @@ router.get('/schedule', async (req, res) => {
       id: show.id,
       name: show.name,
       topic: show.topic,
+      // The listener blurb (#2358). '' = unset: clients show `topic` instead.
+      description: show.description || '',
       // `mood` is the lead entry for older clients, derived and never stored (#929).
       moods: Array.isArray(show.moods) ? show.moods : [],
       mood: Array.isArray(show.moods) && show.moods.length ? show.moods[0] : '',

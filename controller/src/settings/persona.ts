@@ -245,6 +245,9 @@ function resolveShowShape(show, s) {
   return {
     id: show.id,
     name: show.name,
+    // The DJ's brief. `description` (#2358) is deliberately absent: it is the
+    // listener blurb, and this shape is what every prompt and pick path reads.
+    // The public routes join it from the stored show instead.
     topic: show.topic,
     // Optional music-steering filters (soft lean), each a multi-value list
     // (#929): OR within the attribute, AND across attributes. Surfaced for the

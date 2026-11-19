@@ -52,6 +52,7 @@ export function hydrateShow(s: Partial<Show>): Show {
     tags: Array.isArray(m.tags) ? m.tags.map(t => String(t).trim().toLowerCase()).filter(Boolean) : [],
     allowedJingles: Array.isArray(m.allowedJingles) ? m.allowedJingles : [],
     allowedBeds: Array.isArray(m.allowedBeds) ? m.allowedBeds : [],
+    description: typeof m.description === 'string' ? m.description : '',
   };
 }
 
@@ -137,6 +138,7 @@ export function showPayload(s: Show) {
     tags: s.tags || [],
     allowedJingles: s.allowedJingles || [],
     allowedBeds: s.allowedBeds || [],
+    description: (s.description || '').trim(),
   };
 }
 

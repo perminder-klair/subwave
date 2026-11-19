@@ -303,7 +303,7 @@ export default function ShowsPanel() {
       playlistIds: [], playlistStrict: false, playlistExhaust: false, playlistInOrder: false, excludedPlaylistIds: [], excludedAlbumKinds: [],
       excludeExplicit: false,
       programme: false, segmentSkill: '', preparationSkill: '', tags: [],
-      allowedJingles: [], allowedBeds: [],
+      allowedJingles: [], allowedBeds: [], description: '',
     });
     // errors populate only once a field is touched, so without this the new
     // row's "incomplete" badge stays silent about why.

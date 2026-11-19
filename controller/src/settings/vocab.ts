@@ -941,6 +941,9 @@ export interface NormalizedShow {
    *  every one. See broadcast/show-allowlist.ts. */
   allowedJingles: string[];
   allowedBeds: string[];
+  /** Listener-facing blurb (#2358). '' = unset; listener surfaces fall back to
+   *  `topic`. Never carried by resolveShow(): no model reads it. */
+  description: string;
 }
 
 // Dedup + cap over one already-plural list. The legacy singular fold lives ONLY

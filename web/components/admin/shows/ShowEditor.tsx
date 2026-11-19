@@ -45,6 +45,7 @@ import {
   TAGS_MAX,
   TAG_MAX,
   TAG_RE,
+  DESCRIPTION_MAX,
   TOPIC_MAX,
   VOCAL_OPTIONS,
   YEAR_MAX,
@@ -76,6 +77,7 @@ const FIELD_LABELS: Record<string, string> = {
   excludedAlbumKinds: 'album kinds left out',
   allowedJingles: 'jingles',
   allowedBeds: 'beds',
+  description: 'listener description',
 };
 
 // Some rules root on an ARRAY field (`eras.0.fromYear`), so walk down to the
@@ -209,8 +211,9 @@ export function ShowEditor({
   const fadeAtShowEndCtl = useController({ control, name: path('fadeAtShowEnd') });
   const tagsCtl = useController({ control, name: path('tags') });
 
-  // The imaging lists play no part in which tracks a show can pick.
-  const { allowedJingles: _j, allowedBeds: _b, ...candidateShape } = showPayload(show);
+  // The imaging lists and the listener description play no part in which
+  // tracks a show can pick.
+  const { allowedJingles: _j, allowedBeds: _b, description: _d, ...candidateShape } = showPayload(show);
   const candidateKey = JSON.stringify(candidateShape);
   const [candidateBusy, setCandidateBusy] = useState(false);
   const [candidateError, setCandidateError] = useState<string | null>(null);
@@ -499,11 +502,24 @@ export function ShowEditor({
             label="Show brief"
             rows={5}
             placeholder="e.g. Slow ambient, modern classical and downtempo for the late shift. Think Nils Frahm, Hammock, Bonobo's quieter side, nothing with a hard beat. Keep the host calm and unhurried, like a friend talking you down at 1am."
-            description="Describe the music, the listener and how the host should sound. The DJ uses this brief for song picks and spoken links."
+            description="For the DJ only: describe the music, the listener and how the host should sound. The DJ uses this brief for song picks and spoken links. Listeners see it only when the listener description below is empty."
             maxLength={TOPIC_MAX}
           />
           <span className="field-hint -mt-2">
             {show.topic.trim().length}/{TOPIC_MAX}
+          </span>
+
+          <TextareaField
+            control={control}
+            name={path('description')}
+            label="Listener description"
+            rows={2}
+            placeholder="e.g. Ambient, modern classical and downtempo to see you through the small hours."
+            description="What listeners read on the schedule and the On Now card. Plain text. The DJ never sees it. Leave it empty to show the brief above instead."
+            maxLength={DESCRIPTION_MAX}
+          />
+          <span className="field-hint -mt-2">
+            {(show.description ?? '').trim().length}/{DESCRIPTION_MAX}
           </span>
 
           <div className="grid items-start gap-6 xl:grid-cols-2">
