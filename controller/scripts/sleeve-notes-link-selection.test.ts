@@ -15,7 +15,7 @@ function candidate(overrides: Partial<SleeveNoteSelectionCandidate> = {}): Sleev
     wording: 'The artist made a distinctive studio decision.',
     fullWording: 'The artist made a distinctive studio decision.', shortWording: null,
     provider: 'wikipedia', attribution: 'Wikipedia', sourceUrl: 'https://example.test/source',
-    relationshipKey: null, localTrackId: 'local-1', sourceContent: '', evidence: 'quoted source evidence',
+    relationshipKey: null, localTrackId: 'local-1', evidence: 'quoted source evidence',
     ...overrides,
   };
 }

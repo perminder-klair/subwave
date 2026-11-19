@@ -63,7 +63,6 @@ export interface ExtendedSleeveNote {
 }
 
 export interface SleeveNoteSelectionCandidate extends ExtendedSleeveNote {
-  sourceContent: string;
   evidence: string;
 }
 
@@ -115,23 +114,22 @@ export function extendedSleeveNoteAllowedForVocalRunway(firstVocalMs: number | n
     || firstVocalMs >= EXTENDED_SLEEVE_NOTE_MIN_VOCAL_RUNWAY_MS;
 }
 
-function relationshipKey(provider: string, sourceContent: string, evidence: string): string | null {
+function relationshipKey(provider: string, sourceProviderId: string | number | null, evidence: string): string | null {
   if (provider !== 'genius') return null;
   try {
-    const sourceId = (JSON.parse(sourceContent) as { identity?: { providerId?: unknown } })?.identity?.providerId;
     const targetId = (JSON.parse(evidence) as { target?: { providerId?: unknown } })?.target?.providerId;
-    if (sourceId == null || targetId == null) return null;
+    if (sourceProviderId == null || targetId == null) return null;
     // Sorting makes an inverse relationship share the same local suppression
     // key, without sending raw Genius payloads to the prompt.
-    return [`genius:${String(sourceId)}`, `genius:${String(targetId)}`].sort().join('|');
+    return [`genius:${String(sourceProviderId)}`, `genius:${String(targetId)}`].sort().join('|');
   } catch {
     return null;
   }
 }
 
-function eligibleProvider(provider: string): boolean {
+function eligibleProvider(provider: string, geniusEnabled = settings.get().sleeveNotes.providers.genius.enabled === true): boolean {
   if (provider === 'wikipedia') return true;
-  if (provider === 'genius') return settings.get().sleeveNotes.providers.genius.enabled === true;
+  if (provider === 'genius') return geniusEnabled;
   if (provider === 'musicbrainz-series') return true;
   return false;
 }
@@ -236,8 +234,9 @@ function eligibleCandidates(candidates: readonly SleeveNoteSelectionCandidate[],
 }
 
 /** Shared relevance, source, scope and novelty checks for long-form segments. */
-export function eligibleSleeveNotesForSegmentInDatabase(db: Database.Database, localTrackId: string, artist: unknown, nowMs = Date.now(), manual = false): SleeveNoteSelectionCandidate[] {
-  const candidates = loadExtendedSleeveNoteCandidatesInDatabase(db, localTrackId, artist);
+export function eligibleSleeveNotesForSegmentInDatabase(db: Database.Database, localTrackId: string, artist: unknown, nowMs = Date.now(), manual = false,
+  geniusEnabled = settings.get().sleeveNotes.providers.genius.enabled === true): SleeveNoteSelectionCandidate[] {
+  const candidates = loadExtendedSleeveNoteCandidatesInDatabase(db, localTrackId, artist, geniusEnabled);
   // Long-form discussion may develop new topics after a short artist link.
   // Exact facts, topics, relationships and reservations still retain their guards.
   const uses = recentUsesForCandidates(db, candidates, nowMs);
@@ -305,6 +304,7 @@ export function loadExtendedSleeveNoteCandidatesInDatabase(
   db: Database.Database,
   localTrackId: string,
   currentArtist: unknown,
+  geniusEnabled = settings.get().sleeveNotes.providers.genius.enabled === true,
 ): SleeveNoteSelectionCandidate[] {
   const matches = db.prepare(`SELECT a.recording_id AS recordingId, r.artist_id AS artistId,
       (SELECT rr.release_id FROM sleeve_recording_releases rr
@@ -331,7 +331,13 @@ export function loadExtendedSleeveNoteCandidatesInDatabase(
       c.airtime_scope AS airtimeScope, c.matching_release_title AS matchingReleaseTitle,
       c.matching_track_title AS matchingTrackTitle,
       c.extraction_rank AS extractionRank, c.extraction_section AS extractionSection,
-      s.provider, s.attribution, s.source_url AS sourceUrl, s.content AS sourceContent
+      s.provider, s.attribution, s.source_url AS sourceUrl,
+      CASE WHEN s.provider = 'genius' THEN
+        CASE WHEN json_valid(s.content) THEN json_extract(s.content, '$.identity.providerId') END END AS sourceProviderId,
+      CASE WHEN s.provider = 'genius' AND c.operator_state = 'auto' THEN
+        CASE WHEN json_valid(s.content) THEN json_extract(s.content, '$.identity.title') END END AS sourceTitle,
+      CASE WHEN s.provider = 'genius' AND c.operator_state = 'auto' THEN
+        CASE WHEN json_valid(s.content) THEN json_extract(s.content, '$.identity.artist') END END AS sourceArtist
     FROM sleeve_claims c
     JOIN sleeve_source_documents s ON s.id = c.source_document_id
     WHERE c.enabled = 1
@@ -366,7 +372,8 @@ export function loadExtendedSleeveNoteCandidatesInDatabase(
       recordingId, localTrackId) as Array<{
       claimId: string; entityType: ExtendedSleeveNote['entityType']; entityId: string;
       category: string; topic: string; wording: string; shortWording: string; evidence: string;
-      provider: string; attribution: string; sourceUrl: string; sourceContent: string;
+      provider: string; attribution: string; sourceUrl: string; sourceProviderId: string | number | null;
+      sourceTitle: string | null; sourceArtist: string | null;
       operatorState: string; extractionRank: number | null; extractionSection: number | null;
       airtimeScope: ExtendedSleeveNote['airtimeScope']; matchingReleaseTitle: string | null; matchingTrackTitle: string | null;
     }>;
@@ -384,7 +391,7 @@ export function loadExtendedSleeveNoteCandidatesInDatabase(
   const activeSeries = activeSeriesMap(db);
   for (const row of rows) {
     if (row.provider === 'musicbrainz-series' && !activeSeries.has(row.sourceUrl.split('/').at(-1) ?? '')) continue;
-    if (!eligibleProvider(row.provider) || !(row.category in CATEGORY_PRIORITY)
+    if (!eligibleProvider(row.provider, geniusEnabled) || !(row.category in CATEGORY_PRIORITY)
       || (row.category === 'credits' && row.provider !== 'genius')) continue;
     let connection = connectionsByClaim.get(row.claimId)?.sort((a, b) =>
       Number(b.matchState === 'matched') - Number(a.matchState === 'matched') || a.id.localeCompare(b.id))[0];
@@ -406,8 +413,7 @@ export function loadExtendedSleeveNoteCandidatesInDatabase(
     let wording = row.wording;
     if (connection && row.operatorState === 'auto') {
       try {
-        const identity = JSON.parse(row.sourceContent).identity;
-        const source = identity?.title ? `${identity.title}${identity.artist ? ` by ${identity.artist}` : ''}` : '';
+        const source = row.sourceTitle ? `${row.sourceTitle}${row.sourceArtist ? ` by ${row.sourceArtist}` : ''}` : '';
         const target = `${connection.targetTitle}${connection.targetArtist ? ` by ${connection.targetArtist}` : ''}`;
         if (source && connection.targetKind === 'recording') wording = {
           samples: `${source} samples ${target}.`, sampled_in: `${target} samples ${source}.`,
@@ -435,9 +441,8 @@ export function loadExtendedSleeveNoteCandidatesInDatabase(
       provider: row.provider,
       attribution: row.attribution,
       sourceUrl: row.sourceUrl,
-      sourceContent: row.sourceContent,
       evidence: row.evidence,
-      relationshipKey: relationshipKey(row.provider, row.sourceContent, row.evidence),
+      relationshipKey: relationshipKey(row.provider, row.sourceProviderId, row.evidence),
       localTrackId,
     };
     byClaim.set(candidate.claimId, candidate);
@@ -454,17 +459,30 @@ export function inspectExtendedSleeveNote(
   if (settings.get().djBehaviour.extendedSleeveNotes !== true) {
     return { status: 'disabled', note: null, candidateCount: 0 };
   }
+  return inspectExtendedSleeveNoteInDatabase(open(), current, nowMs, requireShortWording);
+}
+
+export function inspectExtendedSleeveNoteInDatabase(
+  db: Database.Database,
+  current: { id?: unknown; artist?: unknown } | null | undefined,
+  nowMs = Date.now(),
+  requireShortWording = false,
+  enabled = settings.get().djBehaviour.extendedSleeveNotes === true,
+  geniusEnabled = settings.get().sleeveNotes.providers.genius.enabled === true,
+): ExtendedSleeveNoteInspection {
+  if (!enabled) {
+    return { status: 'disabled', note: null, candidateCount: 0 };
+  }
   const localTrackId = String(current?.id ?? '').trim();
   if (!localTrackId) return { status: 'unavailable', note: null, candidateCount: 0 };
-  const db = open();
-  const candidates = loadExtendedSleeveNoteCandidatesInDatabase(db, localTrackId, current?.artist)
+  const candidates = loadExtendedSleeveNoteCandidatesInDatabase(db, localTrackId, current?.artist, geniusEnabled)
     .filter((candidate) => !requireShortWording || candidate.shortWording
       || candidate.provider !== 'genius' || candidate.entityType !== 'release-group');
   if (!candidates.length) return { status: 'unavailable', note: null, candidateCount: 0 };
   const latestUses = recentUsesForCandidates(db, candidates, nowMs);
   const selected = selectMostSpecificEligibleClaim(candidates, latestUses, nowMs);
   if (!selected) return { status: 'cooldown', note: null, candidateCount: candidates.length };
-  const { sourceContent: _sourceContent, evidence: _evidence, ...publicNote } = selected;
+  const { evidence: _evidence, ...publicNote } = selected;
   return { status: 'available', note: publicNote, candidateCount: candidates.length };
 }
 

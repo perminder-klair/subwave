@@ -1,6 +1,5 @@
 import type Database from 'better-sqlite3';
 import { queuePromotion } from './queue-actions.js';
-import { pruneCompletedWikipediaArticlesInDatabase } from './wikipedia-retention.js';
 import { nextAiringReview, runAiringReview } from './airing-review.js';
 import { runResearchDatabaseWork } from './db.js';
 import { createHash } from 'node:crypto';
@@ -21,7 +20,8 @@ import {
   splitResearchSource,
 } from './researcher.js';
 import * as repository from './research-repository.js';
-import { expireRecycleBin, retainRejectedCandidates } from './moderation.js';
+import { retainRejectedCandidates } from './moderation.js';
+import { runSleeveNotesHousekeeping } from './housekeeping.js';
 import { open } from './db.js';
 import { applyAirtimeDecision } from './airtime-review.js';
 import {
@@ -1160,24 +1160,26 @@ export class ResearchWorker {
 }
 
 let timer: ReturnType<typeof setInterval> | null = null;
+let housekeepingRunning = false;
 export function startResearchWorker(quietGate: QuietGate): void {
   if (timer) return;
   const worker = new ResearchWorker(quietGate);
   timer = setInterval(() => { void worker.runOnce(); }, 10_000);
   timer.unref();
   const expiryTimer = setInterval(() => {
-    if (!settings.get().djBehaviour.extendedSleeveNotes || !quietGate.isQuiet()) return;
+    if (housekeepingRunning || !settings.get().djBehaviour.extendedSleeveNotes || !quietGate.isQuiet()) return;
+    housekeepingRunning = true;
     void runResearchDatabaseWork(async () => {
       const started = performance.now();
       try {
-        expireRecycleBin();
-        pruneCompletedWikipediaArticlesInDatabase(open());
+        await runSleeveNotesHousekeeping();
       } finally {
         const elapsed = Math.round(performance.now() - started);
-        if (elapsed >= 1_000) console.warn(`[sleeve-notes] Slow database housekeeping: ${elapsed}ms (controller)`);
+        if (elapsed >= 1_000) console.warn(`[sleeve-notes] Slow database housekeeping: ${elapsed}ms (worker)`);
       }
       return true;
-    }).catch(error => console.warn('[sleeve-notes] Recycle Bin cleanup deferred:', error instanceof Error ? error.message : String(error)));
+    }).catch(error => console.warn('[sleeve-notes] Database housekeeping deferred:', error instanceof Error ? error.message : String(error)))
+      .finally(() => { housekeepingRunning = false; });
   }, 60 * 60 * 1000);
   expiryTimer.unref();
 }

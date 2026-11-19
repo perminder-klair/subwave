@@ -159,7 +159,7 @@ export function expireRecycleBin(now = new Date()): number {
       FROM sleeve_moderation_candidates WHERE status = 'pending' AND bin_entered_at < ?
         AND rejection_origin NOT IN ('operator-feedback', 'operator-review')
         AND NOT EXISTS (SELECT 1 FROM sleeve_claims held WHERE held.id=sleeve_moderation_candidates.claim_id AND held.feedback_hold=1)
-        ${flagged}`)
+        ${flagged} LIMIT 10`)
       .all(cutoff) as Array<{ id: string; claimId: string | null; entityType: string; entityId: string; fingerprint: string }>;
     const suppress = db.prepare(`INSERT OR IGNORE INTO sleeve_expired_candidate_fingerprints
       (entity_type, entity_id, fingerprint, expired_at) VALUES (?, ?, ?, ?)`);

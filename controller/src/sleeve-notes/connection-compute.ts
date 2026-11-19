@@ -3,6 +3,7 @@ import { dashboardReadInDatabase, type DashboardRead } from './dashboard-reads.j
 import { searchResearchStoriesInDatabase } from './research-repository.js';
 import {externalDiscoveriesInDatabase} from './external-discoveries.js';
 import { fork, type ChildProcess } from 'node:child_process';
+import type { Socket } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import type Database from 'better-sqlite3';
 import { open } from './db.js';
@@ -10,12 +11,21 @@ import { buildConnectionLibraryPatch, connectionRevision, publishConnectionLibra
   type ConnectionLibraryPatch } from './library-connections.js';
 import { researchConnectionsOverviewInDatabase } from './connections-overview.js';
 import type { ConnectionEdgeType } from './research-repository.js';
+import { eligibleSleeveNotesForSegmentInDatabase, inspectExtendedSleeveNoteInDatabase, type ExtendedSleeveNoteInspection,
+  type SleeveNoteSelectionCandidate } from './link-selection.js';
+import * as settings from '../settings.js';
 
 let child: ChildProcess | null = null;
 let sequence = 0;
 let idleTimer: ReturnType<typeof setTimeout> | null = null;
 const pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout> }>();
+let selectionChild: ChildProcess | null = null;
+let selectionSequence = 0;
+let selectionIdleTimer: ReturnType<typeof setTimeout> | null = null;
+type SleeveSelectionResult = ExtendedSleeveNoteInspection | SleeveNoteSelectionCandidate[];
+const selectionPending = new Map<number, { resolve: (value: SleeveSelectionResult) => void;
+  reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
 const cache = new Map<string, { revision: number; json: string }>();
 const dashboardCache = new Map<string, { until: number; json: string }>();
 const dashboardFlights = new Map<string, Promise<string>>();
@@ -29,6 +39,7 @@ function releaseWhenIdle() {
 }
 export function stopConnectionCompute(): void {
   clearIdleTimer();
+  stopSleeveSelectionCompute();
   const previous = child;
   child = null;
   previous?.kill();
@@ -40,6 +51,89 @@ export function stopConnectionCompute(): void {
 export function clearConnectionComputeCache():void {
   stopConnectionCompute();cache.clear();inFlight.clear();
   dashboardEpoch++;dashboardCache.clear();dashboardFlights.clear();
+}
+
+type SleeveNoteSelectionInput = {
+  kind: 'link' | 'segment';
+  current: { id?: unknown; artist?: unknown } | null | undefined;
+  nowMs: number;
+  enabled: boolean;
+  geniusEnabled: boolean;
+  manual: boolean;
+};
+
+function clearSelectionIdleTimer(): void {
+  if (selectionIdleTimer) clearTimeout(selectionIdleTimer);
+  selectionIdleTimer = null;
+}
+
+function stopSleeveSelectionCompute(): void {
+  clearSelectionIdleTimer();
+  const previous = selectionChild;
+  selectionChild = null;
+  previous?.kill();
+  for (const call of selectionPending.values()) {
+    clearTimeout(call.timer);
+    call.reject(new Error('Sleeve Notes selection worker stopped'));
+  }
+  selectionPending.clear();
+}
+
+function selectInChild(path: string, selection: SleeveNoteSelectionInput): Promise<SleeveSelectionResult> {
+  clearSelectionIdleTimer();
+  if (!selectionChild) {
+    const proc = fork(fileURLToPath(new URL('./sleeve-selection-worker.ts', import.meta.url)), [], {
+      execArgv: ['--import', import.meta.resolve('tsx')],
+      serialization: 'advanced', stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+    });
+    selectionChild = proc;
+    proc.stderr?.on('data', (chunk: Buffer) => console.warn('[sleeve-notes] Selection worker:', chunk.toString().trim()));
+    (proc.stderr as Socket | null)?.unref();
+    const failed = (error: Error) => {
+      if (selectionChild === proc) {
+        stopSleeveSelectionCompute();
+        console.warn('[sleeve-notes]', error.message);
+      }
+    };
+    proc.on('error', failed);
+    proc.on('exit', (code) => failed(new Error(`Selection worker exited (${code})`)));
+    proc.on('message', (message: { id: number; result?: SleeveSelectionResult; error?: string }) => {
+      const call = selectionPending.get(message.id);
+      if (!call) return;
+      clearTimeout(call.timer);
+      selectionPending.delete(message.id);
+      if (message.error) call.reject(new Error(message.error));
+      else call.resolve(message.result!);
+      if (!selectionPending.size) {
+        proc.channel?.unref();
+        selectionIdleTimer = setTimeout(stopSleeveSelectionCompute, 60_000).unref();
+      }
+    });
+    proc.unref();
+    proc.channel?.unref();
+  }
+  const proc = selectionChild;
+  proc.channel?.ref();
+  return new Promise((resolve, reject) => {
+    const id = ++selectionSequence;
+    const timer = setTimeout(() => {
+      console.warn(`[sleeve-notes] ${selection.kind === 'link' ? 'Link' : 'segment'} candidate selection exceeded 1500ms; skipping Sleeve Notes for this opportunity`);
+      stopSleeveSelectionCompute();
+      reject(new Error('Sleeve Notes selection timed out'));
+    }, 1_500).unref();
+    selectionPending.set(id, { resolve, reject, timer });
+    proc.send({ id, path, selection }, (error) => {
+      if (error) {
+        clearTimeout(timer);
+        selectionPending.delete(id);
+        reject(error);
+        if (!selectionPending.size) {
+          proc.channel?.unref();
+          selectionIdleTimer = setTimeout(stopSleeveSelectionCompute, 60_000).unref();
+        }
+      }
+    });
+  });
 }
 
 function compute<T>(path: string, kind: 'overview' | 'matches' | 'discoveries' | 'library-stories' | 'dashboard', edges?: readonly ConnectionEdgeType[], input?: Parameters<typeof searchResearchStoriesInDatabase>[1], dashboard?: DashboardRead): Promise<T> {
@@ -78,6 +172,57 @@ function compute<T>(path: string, kind: 'overview' | 'matches' | 'discoveries' |
       }
     });
   });
+}
+
+export async function selectExtendedSleeveNoteInBackground(
+  current: SleeveNoteSelectionInput['current'], nowMs = Date.now(), db?: Database.Database,
+): Promise<ExtendedSleeveNoteInspection> {
+  const enabled = settings.get().djBehaviour.extendedSleeveNotes === true;
+  if (!enabled) return { status: 'disabled', note: null, candidateCount: 0 };
+  const database = db ?? open();
+  const selection: SleeveNoteSelectionInput = {
+    kind: 'link',
+    current: current ? { id: current.id, artist: current.artist } : current,
+    nowMs,
+    enabled,
+    geniusEnabled: settings.get().sleeveNotes.providers.genius.enabled === true,
+    manual: false,
+  };
+  const result = database.memory
+    ? inspectExtendedSleeveNoteInDatabase(database, selection.current, nowMs, false, selection.enabled, selection.geniusEnabled)
+    : await selectInChild(database.name, selection).then(value => Array.isArray(value)
+      ? { status: 'unavailable' as const, note: null, candidateCount: 0 } : value)
+      .catch(() => ({ status: 'unavailable' as const, note: null, candidateCount: 0 }));
+  if (settings.get().djBehaviour.extendedSleeveNotes !== true) {
+    return { status: 'disabled', note: null, candidateCount: 0 };
+  }
+  if (settings.get().sleeveNotes.providers.genius.enabled !== selection.geniusEnabled) {
+    return { status: 'unavailable', note: null, candidateCount: 0 };
+  }
+  return result;
+}
+
+export async function eligibleSleeveNotesForSegmentInBackground(
+  current: SleeveNoteSelectionInput['current'], nowMs = Date.now(), manual = false, db?: Database.Database,
+): Promise<SleeveNoteSelectionCandidate[]> {
+  if (settings.get().djBehaviour.extendedSleeveNotes !== true) return [];
+  const database = db ?? open();
+  const selection: SleeveNoteSelectionInput = {
+    kind: 'segment',
+    current: current ? { id: current.id, artist: current.artist } : current,
+    nowMs,
+    enabled: true,
+    geniusEnabled: settings.get().sleeveNotes.providers.genius.enabled === true,
+    manual,
+  };
+  const result = database.memory
+    ? eligibleSleeveNotesForSegmentInDatabase(database, String(selection.current?.id ?? ''), selection.current?.artist,
+      nowMs, manual, selection.geniusEnabled)
+    : await selectInChild(database.name, selection).then(value => Array.isArray(value) ? value : [])
+      .catch(() => [] as SleeveNoteSelectionCandidate[]);
+  if (settings.get().djBehaviour.extendedSleeveNotes !== true
+    || settings.get().sleeveNotes.providers.genius.enabled !== selection.geniusEnabled) return [];
+  return result;
 }
 
 export async function reconcileConnectionsInBackground(db: Database.Database): Promise<number | null> {

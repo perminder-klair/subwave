@@ -398,7 +398,7 @@ test('the master switch blocks manual segment preparation and generation without
  const brief=prepareSleeveNotesSegmentInDatabase(open(),track,config,host,[],Date.now(),true)!;
  store.setCache({...saved,djBehaviour:{...saved.djBehaviour,extendedSleeveNotes:false}});
  try {
-  assert.equal((await import('../src/sleeve-notes/segment.js')).prepareSleeveNotesSegment(track,true),null);
+  assert.equal(await (await import('../src/sleeve-notes/segment.js')).prepareSleeveNotesSegment(track,true),null);
   let called=false;
   assert.equal(await runSleeveNotesSegment(brief,async()=>true,async()=>{called=true;return {};}),false);
   assert.equal(called,false);

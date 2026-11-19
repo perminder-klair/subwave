@@ -24,7 +24,8 @@ import { trackFeelSuffix } from './track-feel.js';
 import { announceLine, nextAnnounceForm } from '../../../broadcast/announce-line.js';
 import * as library from '../../../music/library.js';
 import { contextSleeveNotesFor, releaseYearMentionEligible, selectSleeveNotes, stationHistoryNoteFor } from './sleeve-notes.js';
-import { extendedSleeveNoteAllowedForVocalRunway, recordExtendedSleeveNoteSupplied, selectExtendedSleeveNote, markExtendedSleeveNoteContextPass, markExtendedSleeveNoteQualityRejection, releaseExtendedSleeveNoteReservation } from '../../../sleeve-notes/link-selection.js';
+import { extendedSleeveNoteAllowedForVocalRunway, recordExtendedSleeveNoteSupplied, type ExtendedSleeveNote, markExtendedSleeveNoteContextPass, markExtendedSleeveNoteQualityRejection, releaseExtendedSleeveNoteReservation } from '../../../sleeve-notes/link-selection.js';
+import { selectExtendedSleeveNoteInBackground } from '../../../sleeve-notes/connection-compute.js';
 import { stripRecapSpokenTags, stripSpokenTags } from './recent-speech.js';
 import { namedSubjectLine } from '../../../broadcast/preparation-subject-wording.js';
 
@@ -508,10 +509,10 @@ export async function generateLink(args: any) {
       kind: 'generateAnnounceLinkFallback',
     });
   }
-  let extendedSleeveNote: ReturnType<typeof selectExtendedSleeveNote> = null;
+  let extendedSleeveNote: ExtendedSleeveNote | null = null;
   try {
     if (!args.suppressExtendedSleeveNote && extendedSleeveNoteAllowedForVocalRunway(firstVocalMsFor(args.current))) {
-      extendedSleeveNote = selectExtendedSleeveNote(args.current);
+      extendedSleeveNote = (await selectExtendedSleeveNoteInBackground(args.current)).note;
     }
   } catch {
     // Sleeve Notes are opportunistic context: a local-store error must never

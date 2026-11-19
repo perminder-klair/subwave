@@ -10,11 +10,12 @@ import type Database from 'better-sqlite3';
 import * as settings from '../settings.js';
 import { djObject } from '../llm/sdk.js';
 import { open } from './db.js';
+import { eligibleSleeveNotesForSegmentInBackground } from './connection-compute.js';
+import { eligibleSleeveNotesForSegmentInDatabase } from './link-selection.js';
 import type { SleeveNotesSegmentConfig } from '../schemas/settings.js';
 import { PERSONA_SOUL_MAX, PERSONA_MUSIC_LEAN_MAX } from '../schemas/persona.js';
 import { SHOW_TOPIC_MAX } from '../schemas/show.js';
-import { eligibleSleeveNotesForSegmentInDatabase,
-  recordExtendedSleeveNoteSupplied, releaseExtendedSleeveNoteReservation,
+import { recordExtendedSleeveNoteSupplied, releaseExtendedSleeveNoteReservation,
   type SleeveNoteSelectionCandidate } from './link-selection.js';
 
 import { confirmedDayConnections, type EarlierDayConnection } from './segment-connections.js';
@@ -34,14 +35,14 @@ export interface SleeveNotesSegmentBrief {
 }
 export function prepareSleeveNotesSegmentInDatabase(db: Database.Database, track: SegmentTrack,
   config: SleeveNotesSegmentConfig, host: Persona | null, guests: Persona[], now = Date.now(), manual = false,
-  show: SegmentShow | null = null): SleeveNotesSegmentBrief | null {
+  show: SegmentShow | null = null, candidates?: SleeveNoteSelectionCandidate[]): SleeveNotesSegmentBrief | null {
   if (!host || (!manual && (!config.enabled || (config.personaIds !== null && !config.personaIds.includes(host.id))))) return null;
   const last = db.prepare(`SELECT MAX(COALESCE(aired_at,supplied_at)) AS at FROM sleeve_claim_uses
     WHERE consumer='sleeveNotesSegment' AND (aired_at IS NOT NULL OR released_at IS NULL)`).get() as {at:string|null};
   if (!manual && last.at && now - Date.parse(last.at) < config.cooldownMinutes * 60_000) return null;
   const seen = new Set<string>(), seenFacts = new Set<string>();
   let recognitionSelected = false;
-  const notes = eligibleSleeveNotesForSegmentInDatabase(db, track.id, track.artist, now, manual)
+  const notes = (candidates ?? eligibleSleeveNotesForSegmentInDatabase(db, track.id, track.artist, now, manual))
     .filter(note => note.category !== 'credits')
     // A ranking can support a story, but cannot crowd out the story itself.
     .sort((a,b) => Number(a.category==='recognition') - Number(b.category==='recognition')
@@ -61,11 +62,14 @@ export function prepareSleeveNotesSegmentInDatabase(db: Database.Database, track
     show:show?{id:show.id,name:show.name,brief:String(show.topic??'').trim().slice(0,SHOW_TOPIC_MAX)}:null};
 }
 
-export function prepareSleeveNotesSegment(track: SegmentTrack | null, manual = false): SleeveNotesSegmentBrief | null {
+export async function prepareSleeveNotesSegment(track: SegmentTrack | null, manual = false): Promise<SleeveNotesSegmentBrief | null> {
   const s=settings.get(), config=s.sleeveNotes.segment;
   if (!track || !s.djBehaviour.extendedSleeveNotes || (!manual && !config.enabled)) return null;
   const {host,guests,show}=settings.getOnAirRoster();
-  const brief = prepareSleeveNotesSegmentInDatabase(open(),track,config,host,guests,Date.now(),manual,show);
+  if (!host || (!manual && config.personaIds !== null && !config.personaIds.includes(host.id))) return null;
+  const db=open(), now=Date.now();
+  const candidates=await eligibleSleeveNotesForSegmentInBackground(track,now,manual,db);
+  const brief = prepareSleeveNotesSegmentInDatabase(db,track,config,host,guests,now,manual,show,candidates);
   return brief ? { ...brief, hostSpeech: session.captureHostSpeech() } : null;
 }
 
@@ -167,7 +171,9 @@ export async function runSleeveNotesSegment(brief: SleeveNotesSegmentBrief,
       || (s.sleeveNotes.segment.personaIds!==null && !s.sleeveNotes.segment.personaIds.includes(brief.cast[0].id))
       || (brief.cast.length>1 && (!s.sleeveNotes.segment.cohosts || brief.cast.slice(1).some(p=>!roster.guests.some(g=>g.id===p.id)))))) return decline('the segment settings or on-air roster changed');
     // A concurrent link may have reserved a fact while generation was running.
-    const stillEligible=new Set(eligibleSleeveNotesForSegmentInDatabase(open(),brief.track.id,brief.track.artist,Date.now(),brief.manual).map(note=>note.claimId));
+    const stillEligible=new Set((await eligibleSleeveNotesForSegmentInBackground(
+      brief.track,Date.now(),brief.manual,
+    )).map(note=>note.claimId));
     if (brief.notes.some(note=>!stillEligible.has(note.claimId))) return decline('the selected stories are no longer available');
     let lines:SleeveNotesSegmentLine[]=output.lines.map(line=>({persona:brief.cast.find(p=>p.id===line.speaker)!,text:line.text,meta:{sleeveNotesSegmentUseIds:[]}}));
     // Wording signals locate ledger entries only; they never approve or veto speech.

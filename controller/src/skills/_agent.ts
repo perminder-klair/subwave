@@ -571,7 +571,7 @@ export async function runAutomaticSleeveNotesSegment(
     const s = settings.get();
     if (!s.djBehaviour.extendedSleeveNotes || !s.sleeveNotes.segment.enabled) return false;
     const current = await queue.getNowPlaying();
-    brief = prepareSleeveNotesSegment(
+    brief = await prepareSleeveNotesSegment(
       current?.subsonic_id
         ? {
             id: current.subsonic_id,
@@ -656,7 +656,7 @@ export async function agenticTick(ctx) {
     const caps = availableCapabilities(ctx, now);
     const nativeEnabled=settings.get().djBehaviour.extendedSleeveNotes && settings.get().sleeveNotes.segment.enabled;
     const current=nativeEnabled ? await queue.getNowPlaying() : null;
-    const native=prepareSleeveNotesSegment(current?.subsonic_id ? {
+    const native=await prepareSleeveNotesSegment(current?.subsonic_id ? {
       id:current.subsonic_id,title:current.title??'',artist:current.artist??'',album:current.album??'',
     }:null);
     const nativeReady=automaticSleeveNotesReady(native);
@@ -899,7 +899,7 @@ export async function runSleeveNotesSegmentNow(): Promise<CapabilityRun> {
     reason,
   });
   if (!current?.subsonic_id) return silent('no library track is currently reported on air');
-  const brief = prepareSleeveNotesSegment(
+  const brief = await prepareSleeveNotesSegment(
     {
       id: current.subsonic_id,
       title: current.title ?? '',
