@@ -8,9 +8,10 @@ import { useZodForm } from '@/lib/form';
 import { showSchema } from '@/lib/schemas.generated';
 import { notify } from '@/lib/notify';
 import { useAdminThemesQuery } from '../themes-queries';
+import { useBedsQuery } from '../imaging/queries';
 import { ShowEditor } from './ShowEditor';
 import { hydrateShow, showContext } from './lib';
-import type { SettingsResponse, ShowsFormValues } from './types';
+import type { PlaylistIndexStatus, SettingsResponse, ShowsFormValues } from './types';
 import {
   useShowGenresQuery, useShowPlaylistsQuery, useShowSkillsQuery,
   useSaveGeneratedShowMutation, type GeneratedShowDraft,
@@ -29,6 +30,7 @@ export function GeneratedShowEditor({ draft, occurrenceId, settings, apiBase, ad
   const skills = useShowSkillsQuery(adminFetch, true);
   const genres = useShowGenresQuery(adminFetch, true);
   const playlists = useShowPlaylistsQuery(adminFetch, true);
+  const beds = useBedsQuery(adminFetch, true, false);
   const save = useSaveGeneratedShowMutation(adminFetch);
   const editorRef = useRef<HTMLDivElement>(null);
   const context = useMemo(() => showContext({
@@ -43,6 +45,12 @@ export function GeneratedShowEditor({ draft, occurrenceId, settings, apiBase, ad
   const trigger = form.trigger as unknown as UseFormTrigger<ShowsFormValues>;
   const errors = form.formState.errors as FieldErrors<ShowsFormValues>;
   const show = watch('shows.0');
+  const bedOptions = useMemo(
+    () => (beds.data?.beds ?? []).map(bed => ({ id: bed.name, name: bed.name, songCount: null })),
+    [beds.data],
+  );
+  const indexStatus = (query: { data: unknown; isPending: boolean }): PlaylistIndexStatus =>
+    query.data !== undefined ? 'ready' : query.isPending ? 'loading' : 'error';
   useEffect(() => { void trigger(); }, [context, trigger]);
 
   const submit = form.handleSubmit(async values => {
@@ -59,6 +67,13 @@ export function GeneratedShowEditor({ draft, occurrenceId, settings, apiBase, ad
     themes={themes.data?.themes ?? []} skills={skills.data ?? []} activeThemeId={themes.data?.active ?? ''}
     genres={genres.data ?? []} tagSuggestions={[]} playlists={playlists.data ?? []}
     playlistsStatus={playlists.isPending ? 'loading' : playlists.isError ? 'error' : 'ready'}
+    jingles={(settings.jingles ?? []).map(jingle => ({
+      id: jingle.filename,
+      name: jingle.text ? `${jingle.text} · ${jingle.filename}` : jingle.filename,
+      songCount: null,
+    }))}
+    jinglesStatus={settings.jingles ? 'ready' : 'loading'}
+    beds={bedOptions} bedsStatus={indexStatus(beds)}
     apiBase={apiBase} adminFetch={adminFetch} minTrackSeconds={settings.values?.minTrackSeconds}
     stationMinTrackLengthSeconds={settings.values?.picker?.minTrackLengthSeconds}
     busy={save.isPending} isNew={false} valid={form.formState.isValid}
