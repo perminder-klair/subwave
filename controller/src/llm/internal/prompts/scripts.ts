@@ -369,10 +369,15 @@ export function linkPrompt({
   steerIntro = null,
 }: any): string {
   const speaker = persona || settings.getEffectivePersona();
+  const flowFacts = flow ? {
+    album: flow.tracks?.[0]?.album ?? current?.album ?? null,
+    artist: flow.tracks?.[0]?.artist ?? current?.artist ?? null,
+    openingTrack: flow.tracks?.[0]?.title ?? current?.title ?? null,
+  } : null;
   const rules = [
     'Output only the words to be spoken on air.',
     flow
-      ? 'Introduce the supplied ordered album sequence as one continuous Flow. Briefly name the supplied album and artist rather than listing every track title. For example: "Here’s a nice flow of tracks from [album] by [artist]." Replace the placeholders only with supplied library facts; omit any missing credit. Vary the wording naturally in the presenter’s voice and language rather than repeating a fixed announcement. The first listed track is playing now; later tracks follow in the supplied order. Never present a later member as the current opening track. Do not describe internal protection, selection or queue mechanics. Do not refer to the previous track.'
+      ? 'Introduce only this short, ordered sequence of two or three tracks, not the whole album. In one concise, natural sentence, name the supplied album and artist; you may mention the opening track. Never state a track count, use the saved Flow name as a title, imply the whole album is playing, add album-wide praise or predictions, greet the listener, add a second sentence, or include a stage direction. Use only supplied facts and the presenter’s voice and language. For example: "Here’s a nice flow of tracks from [album] by [artist]." The opening track is playing now; later members follow in order. Do not describe internal protection, selection or queue mechanics or refer to the previous track.'
       : 'The named track is already playing. Give a natural introduction in the presenter’s voice that identifies the supplied artist and track title, keeping their roles distinct. Focus on this track and do not refer to the previous track.',
     'Treat supplied sleeve notes as verified facts, but do not add or infer further music-history claims.',
     'The supplied day of week is for accuracy, not generic atmosphere. Mention it only when it adds something specific and natural; do not use it as a default opener or repeat it from link to link.',
@@ -403,7 +408,7 @@ export function linkPrompt({
 
   const sections = [
     'Task: Give a brief spoken introduction to the track now playing.',
-    flow ? `Ordered album sequence (library facts): ${JSON.stringify(flow)}` : '',
+    flowFacts ? `Flow facts (about the short sequence only): ${JSON.stringify(flowFacts)}` : '',
     `Rules:\n${rules.map((rule) => `- ${rule}`).join('\n')}`,
     facts,
     context?.episodeEditorial || '',
