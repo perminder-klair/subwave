@@ -120,18 +120,33 @@ export function airableAnchorTracks<T extends ShowTrack>(
 // a few hours, every discovery source came back empty, and each pick fell to
 // the fallback pool. A strict playlist was already clamped to its own size; a
 // strict filter is the same kind of closed catalogue.
+type StrictShowPoolOptions = {
+  show: RecencyShow;
+  excludedIds: Set<string> | null;
+  resolvedGenres?: string[];
+  minTrackSec?: number | null;
+  maxTrackSec?: number | null;
+};
+
 export function strictShowLibraryPool<T extends ShowTrack>(
   libraryTracks: T[] | null | undefined,
-  opts: {
-    show: RecencyShow;
-    excludedIds: Set<string> | null;
-    resolvedGenres?: string[];
-    minTrackSec?: number | null;
-    maxTrackSec?: number | null;
-  },
+  opts: StrictShowPoolOptions,
 ): T[] | null {
   if (!opts.show?.filtersStrict || !libraryTracks) return null;
   return airableAnchorTracks(libraryTracks, opts);
+}
+
+// Same pool as strictShowLibraryPool, filtering each asynchronous library page
+// before yielding so neither the SQL projection nor the strict-lock pass blocks
+// the controller for the whole catalogue.
+export async function strictShowLibraryPoolSliced<T extends ShowTrack>(
+  libraryBatches: AsyncIterable<T[]>,
+  opts: StrictShowPoolOptions,
+): Promise<T[] | null> {
+  if (!opts.show?.filtersStrict) return null;
+  const pool: T[] = [];
+  for await (const tracks of libraryBatches) pool.push(...airableAnchorTracks(tracks, opts));
+  return pool;
 }
 
 export function showNoRepeatGuard(
