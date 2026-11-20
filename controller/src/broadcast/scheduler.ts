@@ -49,6 +49,8 @@ import { cleanupPauseTalkSilence } from '../audio/wav-silence.js';
 import { warmHeavy } from '../audio/ttsHeavyClient.js';
 import { shouldFire } from './dj-gate.js';
 import { speakClockAllowed, stationIdDaypartStamp } from './clock-policy.js';
+import { createStationIdPicker } from './station-ident.js';
+import { VERBATIM_META } from './prompt-memory.js';
 import { scheduledTalkAir, talkOnlyBetweenTracks, withTalkAir } from './talk-air.js';
 import { mayReplacePendingTalk, type PendingTalk } from './queue/kinds.js';
 import { talkTickPlan, type TalkAir, type TalkKind, type TalkPlan } from './talk-scheduler.js';
@@ -973,34 +975,71 @@ export async function runProgrammeOutro() {
 // Station ident. Gate-free runner — the /dj/segment route fires it immediately;
 // the scheduled path passes atNextTrack so it holds for the next track boundary
 // rather than ducking mid-vocal.
-export async function runStationId({ atNextTrack = false, automatic = false } = {}) {
-  return withTrace({ kind: 'station-id' }, async () => {
-    const ctx = await prepareEpisodeContext(await getFullContext());
-    let speaker = settings.pickOnAirSpeaker();
-    const speechOwner = automatic
-      ? session.captureAutomaticHostSpeech(speaker)
-      : { persona: speaker, hostSpeech: null };
-    speaker = speechOwner.persona;
-    // A deferred ident can wait across several boundaries, so stamp the daypart
-    // offered to the model and let the queue refuse the clip if it changed.
-    const daypart = atNextTrack
-      ? stationIdDaypartStamp(ctx.clock?.spokenDaypart, speakClockAllowed())
-      : null;
-    const script = await dj.generateStationId({
-      recap: queue.getDjRecap(),
-      context: ctx,
-      recentOpeners: queue.getRecentOpeners(),
-      persona: speaker,
-    });
-    const opts = { persona: speaker, daypart, hostSpeech: speechOwner.hostSpeech, meta: { personaId: speaker?.id, personaName: speaker?.name } };
-    if (atNextTrack) {
-      await queue.announceAtNextTrack(script, 'station-id', opts);
-      return script;
-    }
-    const outcome = await queue.announce(script, 'station-id', opts);
-    return outcome.accepted ? script : null;
-  });
+const pickStationId = createStationIdPicker();
+
+// What the runner reads, behind one seam so station-ident.test.ts can drive it
+// with fakes. Built per call: these bindings come from modules that import
+// each other, so none is read while this module is still loading.
+function stationIdDeps() {
+  return {
+    withTrace, prepareEpisodeContext, getFullContext, settings, session,
+    pickStationId, stationIdDaypartStamp, speakClockAllowed, dj, queue,
+  };
 }
+type StationIdDeps = ReturnType<typeof stationIdDeps>;
+
+export function createStationIdRunner(deps: () => StationIdDeps = stationIdDeps) {
+  return async function runStationId({ atNextTrack = false, automatic = false } = {}) {
+    const d = deps();
+    return d.withTrace({ kind: 'station-id' }, async () => {
+      let speaker = d.settings.pickOnAirSpeaker();
+      const speechOwner = automatic
+        ? d.session.captureAutomaticHostSpeech(speaker)
+        : { persona: speaker, hostSpeech: null };
+      speaker = speechOwner.persona;
+      // A verbatim ident is operator-typed words, so it carries the same
+      // `meta.verbatim` stamp as a raw /dj/say: exempt from the stand-in gate and
+      // withheld from every prompt, with its label stripped and text cleaned as that say is.
+      // `noClockClaim` is the one thing the stamp does not give: no daypart was
+      // offered, so the drift guard has nothing to refuse.
+      // It needs no model, so it leaves before the context is fetched: a slow
+      // or unreachable weather or music server never delays it.
+      if (d.pickStationId.hasLines(speaker)) {
+        const script = d.pickStationId(speaker)!;
+        const opts = {
+          persona: speaker, daypart: null, noClockClaim: true, hostSpeech: speechOwner.hostSpeech,
+          meta: { personaId: speaker?.id, personaName: speaker?.name, ...VERBATIM_META },
+        };
+        const accepted = atNextTrack
+          ? await d.queue.announceAtNextTrack(script, 'station-id', opts)
+          : (await d.queue.announce(script, 'station-id', opts)).accepted;
+        if (accepted && speaker) d.pickStationId.commit(speaker.id, script);
+        return accepted ? script : null;
+      }
+      const ctx = await d.prepareEpisodeContext(await d.getFullContext());
+      // A deferred ident can wait across several boundaries, so stamp the daypart
+      // offered to the model and let the queue refuse the clip if it changed.
+      const daypart = atNextTrack
+        ? d.stationIdDaypartStamp(ctx.clock?.spokenDaypart, d.speakClockAllowed())
+        : null;
+      const script = await d.dj.generateStationId({
+        recap: d.queue.getDjRecap(),
+        context: ctx,
+        recentOpeners: d.queue.getRecentOpeners(),
+        persona: speaker,
+      });
+      const opts = { persona: speaker, daypart, hostSpeech: speechOwner.hostSpeech, meta: { personaId: speaker?.id, personaName: speaker?.name } };
+      if (atNextTrack) {
+        await d.queue.announceAtNextTrack(script, 'station-id', opts);
+        return script;
+      }
+      const outcome = await d.queue.announce(script, 'station-id', opts);
+      return outcome.accepted ? script : null;
+    });
+  };
+}
+
+export const runStationId = createStationIdRunner();
 
 // TALK TICK — the one cron owning every spoken segment the station produces on
 // its own. They compete for the listener's ear, so they are rows in one table

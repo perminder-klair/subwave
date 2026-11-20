@@ -73,7 +73,12 @@ export interface SchedulePersona {
 export interface ScheduleShow {
   id: string;
   name: string;
+  /** The DJ's brief. Listener surfaces read it only through `showBlurb`, as
+   *  the fallback for an unset `description`. */
   topic: string;
+  /** Listener-facing blurb (#2358). '' when unset; absent from an older
+   *  controller. Render with `showBlurb`, never directly. */
+  description?: string;
   /** Lead mood — moods[0], derived server-side for back-compat. */
   mood: string;
   /** Full multi-value mood list (#929). */

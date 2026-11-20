@@ -940,6 +940,13 @@ export interface NormalizedShow {
   /** Operator organisation tags. Filters the admin list; steers nothing on
    *  air, which is why resolveShow() does not carry them through. */
   tags: string[];
+  /** Jingle filenames / bed names the automatic draws may use on air. Empty =
+   *  every one. See broadcast/show-allowlist.ts. */
+  allowedJingles: string[];
+  allowedBeds: string[];
+  /** Listener-facing blurb (#2358). '' = unset; listener surfaces fall back to
+   *  `topic`. Never carried by resolveShow(): no model reads it. */
+  description: string;
 }
 
 // Dedup + cap over one already-plural list. The legacy singular fold lives ONLY
@@ -1040,6 +1047,8 @@ export const SEED_PERSONAS = [
     tagline: 'Late-night company and well-chosen records.',
     frequency: 'moderate',
     scriptLength: 'concise',
+    identMode: 'improvise',
+    identLines: [] as string[],
     soul: DJ_SOULS[0],
     language: '',
     avatar: '',
@@ -1051,6 +1060,8 @@ export const SEED_PERSONAS = [
     tagline: 'Small details, quiet rooms, one good image.',
     frequency: 'quiet',
     scriptLength: 'concise',
+    identMode: 'improvise',
+    identLines: [] as string[],
     soul: DJ_SOULS[1],
     language: '',
     avatar: '',
@@ -1062,6 +1073,8 @@ export const SEED_PERSONAS = [
     tagline: 'Says less, means more. Leaves space.',
     frequency: 'moderate',
     scriptLength: 'concise',
+    identMode: 'improvise',
+    identLines: [] as string[],
     soul: DJ_SOULS[3],
     language: '',
     avatar: '',

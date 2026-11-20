@@ -77,6 +77,31 @@ export function bedLengthFor(
   return { bedSec: round2(bedSec), crossSec: round2(crossSec) };
 }
 
+// The entry cross a bed is sized to carry: the predecessor's exit canvas (its
+// crossSec stamp), else the operator's crossfade, clamped to 0..15. 0 is a real
+// value (a hard-cut station has no entry canvas), hence isFinite rather than
+// `||`, which would turn crossfade 0 into 10s of phantom dead time.
+export function entryCrossSecFor(raw: unknown): number {
+  const n = Number(raw);
+  return Math.min(15, Math.max(0, Number.isFinite(n) ? n : 10));
+}
+
+// Whether a bed can carry a `bedSec` bed. Beds are only trimmed shorter
+// (cue_out), never looped, and an unknown duration is excluded, not gambled on:
+// a bed running out mid-link drops the DJ into silence. pickBed and the doctor's
+// show-list check both judge length here.
+export function bedFits(bed: { durationSec?: number | null }, bedSec: number): boolean {
+  return typeof bed.durationSec === 'number' && bed.durationSec >= bedSec;
+}
+
+// The bed a link exactly at the threshold needs: the shortest link that beds
+// wherever the incoming track's vocal onset is unknown. A reference length for
+// diagnosis, not a decision — a measured onset can bed a shorter link, and a
+// request beds at any length.
+export function thresholdLinkBedSec(opts: BedOpts, entryCrossSec = 0): number {
+  return bedLengthFor(Math.max(0, opts.thresholdSec) * 1000, opts, entryCrossSec).bedSec;
+}
+
 // Long enough to be cut to `bedSec`, and not the one that played last. Beds are
 // only trimmed shorter (cue_out), never looped. `roll` is 0..1, injected so
 // selection is deterministic in tests.
@@ -86,9 +111,7 @@ export function pickBed<T extends { name: string; durationSec?: number | null }>
   lastUsed: string | null,
   roll: number,
 ): T | null {
-  // Unknown duration is excluded, not gambled on: a bed running out mid-link
-  // drops the DJ into silence.
-  const fits = beds.filter(b => typeof b.durationSec === 'number' && b.durationSec >= bedSec);
+  const fits = beds.filter(b => bedFits(b, bedSec));
   if (!fits.length) return null;
   // Avoid an immediate repeat, but never at the cost of airing no bed at all.
   const fresh = fits.filter(b => b.name !== lastUsed);

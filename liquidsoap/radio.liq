@@ -1544,8 +1544,30 @@ VOICE_GATE_MAX_SEC = 120.
 # their output as ONE never-ending track, so a rotate above them plays a single
 # jingle at startup and is stuck on music forever. music_meta is captured ABOVE
 # this, so jingles never reach now-playing. An empty jingles.m3u is fine (rotate
-# skips an unavailable source); jingle_ratio 0 = jingles OFF (#997), the rotate
-# is not built at all.
+# skips an unavailable source, and the slot it skipped airs at the first seam
+# after a list returns); jingle_ratio 0 = jingles OFF (#997), the rotate is not
+# built at all.
+#
+# The file is the ON-AIR SHOW's list (#2367): the controller rewrites it from a
+# show's jingle list when the show changes, so the rotate needs a reload that
+# takes effect at the next stinger. A playlist draws its next clip as the one on
+# air ends and holds it as its current request, apart from its queue, and
+# reload() empties only the queue (stdlib playlist.liq): measured on 2.4.6, a
+# reload between stingers aired the old list's prepared clip next, and the new
+# list only one stinger later — at the default ratio, the incoming show's first
+# and often only stinger. So the playlist sits in a source.dynamic slot, as the
+# fallback's does (#1925): between stingers `jingles.reload` commits a fresh
+# instance, which drops what the old one prepared; while a rotate stinger is on
+# air it reloads in place, which plays that stinger to its end and draws the
+# next from the new list (measured). `skip` is no substitute: measured, it aired
+# the prepared clip at zero length, and cut a stinger on air.
+#
+# The instances do not watch jingles.m3u: radio.liq watches it once (below) as
+# the backup for a write whose reload never came, and reloads in place only
+# contents no reload has read yet. register_server_commands=false: every
+# instance would register jingles.skip/next/uri again; radio.liq registers
+# `jingles.reload` itself, only here, so a mixer without the rotate still
+# answers "unknown command", which is how the controller knows there is none.
 #
 # True while a rotate jingle is on air: set where it reaches the source cross
 # reads (below the jingle_now switch), released as the playlist starts its next
@@ -1553,18 +1575,98 @@ VOICE_GATE_MAX_SEC = 120.
 rotate_jingle_on_air = ref(false)
 music =
   if jingle_ratio() > 0 then
-    jingles = playlist(
-      id="jingles",
-      mode="randomize",
-      reload_mode="watch",
-      "#{state_dir}/jingles.m3u"
+    jingles_m3u = "#{state_dir}/jingles.m3u"
+    def read_jingles_m3u() =
+      try
+        file.contents(jingles_m3u)
+      catch err do
+        log(label="subwave", "jingles.m3u unreadable (#{err})")
+        ""
+      end
+    end
+    def make_jingles_playlist() =
+      p = playlist(
+        id="jingles",
+        register_server_commands=false,
+        reload_mode="never",
+        mode="randomize",
+        jingles_m3u
+      )
+      # The playlist starts its next clip in the frame that ends the one on air,
+      # and this hook runs inside that frame, before the gate below sees its
+      # track mark. Re-checked at the mark, a closed gate dropped the rest of the
+      # frame, the next clip's head and metadata with it, so that clip later
+      # aired under the previous one's name and length. On each instance, so the
+      # slot changes nothing about when it runs.
+      p.on_track(synchronous=true, fun (_) -> rotate_jingle_on_air := false)
+      p
+    end
+    jingles_playlist = ref(make_jingles_playlist())
+    pending_jingles_playlist = ref(null)
+    # self_sync=false: a playlist never drives its own clock.
+    jingles = source.dynamic(
+      id="jingles_slot",
+      self_sync=false,
+      init=jingles_playlist(),
+      # The clock thread calls this, while only the server thread below stores a
+      # source; clearing only what was taken never drops one stored meanwhile.
+      fun () -> begin
+        next = pending_jingles_playlist()
+        if null.defined(next) then pending_jingles_playlist := null end
+        next
+      end
     )
-    # The playlist starts its next clip in the frame that ends the one on air,
-    # and this hook runs inside that frame, before the gate below sees its track
-    # mark. Re-checked at the mark, a closed gate dropped the rest of the frame,
-    # the next clip's head and metadata with it, so that clip later aired under
-    # the previous one's name and length.
-    jingles.on_track(synchronous=true, fun (_) -> rotate_jingle_on_air := false)
+    # What the last reload read. The watch below skips a write this already
+    # holds; `jingles.reload` always reloads.
+    jingles_m3u_loaded = ref(read_jingles_m3u())
+    server.register(
+      namespace="jingles",
+      "reload",
+      description="Reload jingles.m3u; between stingers, a fresh playlist replaces the one holding a prepared clip",
+      usage="reload",
+      fun (_) -> begin
+        jingles_m3u_loaded := read_jingles_m3u()
+        if rotate_jingle_on_air() then
+          jingles_playlist().reload()
+        else
+          fresh = make_jingles_playlist()
+          jingles_playlist := fresh
+          # The prepared source carries the activation the slot releases when it
+          # replaces it, which shuts the old instance and its request down.
+          pending_jingles_playlist := jingles.prepare(fresh)
+          # Commit now: the slot takes a prepared source only when asked whether
+          # it is ready, and the rotate asks only when a stinger is due.
+          ignore(jingles.is_ready())
+        end
+        "OK"
+      end
+    )
+    # The backup for a write whose `jingles.reload` never arrived: reload in
+    # place, as the playlist's own watch did. Settled like the stdlib's watch.
+    # Only the server thread replaces the instance. Never raises.
+    jingles_watch_scheduled = ref(false)
+    def jingles_m3u_changed() =
+      if not jingles_watch_scheduled() then
+        jingles_watch_scheduled := true
+        thread.run(delay=0.5, fun () -> begin
+          jingles_watch_scheduled := false
+          contents = read_jingles_m3u()
+          if contents != jingles_m3u_loaded() then
+            jingles_m3u_loaded := contents
+            try
+              jingles_playlist().reload()
+            catch err do
+              log(label="subwave", "jingles.m3u watch reload failed (#{err})")
+            end
+          end
+        end)
+      end
+    end
+    try
+      if file.exists(jingles_m3u) then ignore(file.watch(jingles_m3u, jingles_m3u_changed)) end
+    catch err do
+      log(label="subwave", "jingles.m3u is not watched (#{err}); only jingles.reload re-reads it")
+    end
     # Unavailable while a bed is on air (can't split a bed from its song), while
     # a voice clip is on air (can't hand a stinger over the DJ), and while the
     # music chain is starved (can't serve stingers forever over dead air).
@@ -2773,6 +2875,17 @@ server.register(
       "no"
     end
   end
+)
+
+# Whether `jingles.reload` replaces the rotate's playlist between stingers
+# (#2367). Registered whatever the rotate, so "unknown command" here always
+# means a mixer older than the swap, never a mixer without a rotate: doctor
+# asks, and warns that a show's jingle list starts one stinger late.
+server.register(
+  "jingle_list_swap",
+  description="Whether jingles.reload replaces the playlist between stingers: yes",
+  usage="jingle_list_swap",
+  fun(_) -> "yes"
 )
 
 # What a skip would air next from dj_queue: "ready" (a resolved request is

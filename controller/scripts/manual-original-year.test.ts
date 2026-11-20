@@ -384,6 +384,8 @@ test('migration 22 backfills the refresh marker ONLY where the era text changed'
   // v23 — the indexes reference the columns, so they go first.
   d.prepare(`DROP INDEX IF EXISTS idx_tracks_album_id`).run();
   d.prepare(`DROP INDEX IF EXISTS idx_tracks_artist_id`).run();
+  // The counts line's covering index (an open-time accelerator) names both too.
+  d.prepare(`DROP INDEX IF EXISTS idx_tracks_overview`).run();
   d.prepare(`ALTER TABLE tracks DROP COLUMN album_id`).run();
   d.prepare(`ALTER TABLE tracks DROP COLUMN artist_id`).run();
   d.prepare(`ALTER TABLE tracks DROP COLUMN tail_start_ms`).run();       // v25

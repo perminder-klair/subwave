@@ -120,5 +120,5 @@ Rules:
 - ${onAirLocationGrounding()}
 - Use ordinary apostrophes in spoken words; do not add literal backslashes before quotes or apostrophes.
 - Plain spoken words only. Do not write speaker labels such as "Name:" inside text; speaker identity travels separately and each line will use that persona's own TTS voice.
-- Everyone speaks ${lang} on air. ${settings.spokenProperNounDirective(host)}${settings.castHouseRulesBlock()}`;
+- Everyone speaks ${lang} on air. ${settings.spokenProperNounDirective({ language: lang })}${settings.castHouseRulesBlock()}`;
 }

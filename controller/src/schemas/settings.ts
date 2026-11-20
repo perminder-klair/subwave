@@ -1611,6 +1611,105 @@ export const SETTINGS_FESTIVAL_DESCRIPTION_MAX = 200;
 // ceiling is deliberately low: past a fortnight a "festival window" is just a
 // season, which is what moodSchedule is for.
 export const SETTINGS_FESTIVAL_WINDOW_DAYS_MAX = 14;
+// A festival with an end date (#2112) runs month/day through endMonth/endDay
+// inclusive, wrapping past New Year when the end falls earlier in the year,
+// and windowDays does not apply to it. The cap is higher than the window's
+// because operators asked for their own start and stop dates around a season
+// (a family's Christmas from late November into January), but it still stops
+// a festival from standing in for moodSchedule all year: while one is active
+// its mood outranks weather and time of day in dominantMood.
+export const SETTINGS_FESTIVAL_RANGE_DAYS_MAX = 60;
+
+// Feb has 29 so a range is measured on the longest calendar it can span.
+const FESTIVAL_DAYS_IN_MONTH = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+function festivalDayOfYear(month: number, day: number): number {
+  let n = day;
+  for (let i = 0; i < month - 1; i++) n += FESTIVAL_DAYS_IN_MONTH[i] ?? 31;
+  return n;
+}
+
+function festivalMonthDayOk(month: unknown, day: unknown): boolean {
+  return Number.isInteger(month)
+    && (month as number) >= 1 && (month as number) <= 12
+    && Number.isInteger(day)
+    && (day as number) >= 1
+    && (day as number) <= (FESTIVAL_DAYS_IN_MONTH[(month as number) - 1] ?? 31);
+}
+
+/** Days a start/end pair covers, both ends counted. An end before the start wraps the year. */
+export function festivalRangeDays(
+  month: number, day: number, endMonth: number, endDay: number,
+): number {
+  const span = festivalDayOfYear(endMonth, endDay) - festivalDayOfYear(month, day);
+  return (span < 0 ? span + 366 : span) + 1;
+}
+
+/**
+ * A festival's end date, or null when it is a single day (± window). The one
+ * read of endMonth/endDay for every caller: a half-set, malformed or
+ * over-long end, which only a hand-edited settings.json can hold, reads as
+ * absent, so that festival keeps today's single-day behaviour.
+ */
+export function festivalEnd(f: {
+  month?: unknown; day?: unknown; endMonth?: unknown; endDay?: unknown;
+}): { month: number; day: number } | null {
+  if (f.endMonth == null || f.endDay == null) return null;
+  const month = Number(f.month);
+  const day = Number(f.day);
+  const endMonth = Number(f.endMonth);
+  const endDay = Number(f.endDay);
+  if (!festivalMonthDayOk(month, day) || !festivalMonthDayOk(endMonth, endDay)) return null;
+  if (festivalRangeDays(month, day, endMonth, endDay) > SETTINGS_FESTIVAL_RANGE_DAYS_MAX) return null;
+  return { month: endMonth, day: endDay };
+}
+
+const FESTIVAL_DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Is the festival on, on this calendar date (the station's local date)? The
+ * one rule for the controller (getFestivalContext) and the admin panel's
+ * "now" badge.
+ *
+ * A single-day festival compares real dates, so its window spans month and
+ * year boundaries, and a Feb 29 date rolls to Mar 1 in a common year
+ * (Date.UTC). A ranged one compares month/day keys like the blocklist's
+ * seasonal window: a Feb 29 start begins Mar 1 in a common year, and a Feb 29
+ * end ends on Feb 28. A range of one day is that single day, window ignored.
+ */
+export function festivalActiveOn(
+  f: { month: number; day: number; windowDays?: number; endMonth?: unknown; endDay?: unknown },
+  today: { year: number; month: number; day: number },
+): boolean {
+  const end = festivalEnd(f);
+  if (end) {
+    const k = today.month * 100 + today.day;
+    const from = f.month * 100 + f.day;
+    const to = end.month * 100 + end.day;
+    // A one-day range is that day with no window, judged below like any
+    // single day: a Feb 29 → Feb 29 range would otherwise start Mar 1 and end
+    // Feb 28, and never be on in a common year.
+    if (from !== to) return from <= to ? k >= from && k <= to : k >= from || k <= to;
+  }
+  const window = end ? 0 : f.windowDays || 0;
+  const t = Date.UTC(today.year, today.month - 1, today.day);
+  // Adjacent years cover a window reaching across Dec 31 / Jan 1.
+  for (const yy of [today.year - 1, today.year, today.year + 1]) {
+    if (Math.abs(Date.UTC(yy, f.month - 1, f.day) - t) <= window * FESTIVAL_DAY_MS) return true;
+  }
+  return false;
+}
+
+export type SettingsFestival = {
+  month: number;
+  day: number;
+  name: string;
+  mood: string;
+  description: string;
+  windowDays: number;
+  endMonth?: number;
+  endDay?: number;
+};
 
 export function festivalsSchema(ctx: SettingsMoodContext) {
   const names = ctx.moodNames ? new Set(ctx.moodNames) : null;
@@ -1683,11 +1782,44 @@ export function festivalsSchema(ctx: SettingsMoodContext) {
             `festivals[${i}].windowDays must be an integer 0-${SETTINGS_FESTIVAL_WINDOW_DAYS_MAX}`,
             'windowDays',
           );
+          return;
+        }
+        // Optional end date (#2112): both or neither. null/undefined is
+        // "no end", so a festival saved before this field is unchanged.
+        const hasEndMonth = f.endMonth != null;
+        const hasEndDay = f.endDay != null;
+        if (!hasEndMonth && !hasEndDay) return;
+        if (!hasEndMonth || !hasEndDay) {
+          add(
+            `festivals[${i}] needs both endMonth and endDay, or neither`,
+            hasEndMonth ? 'endDay' : 'endMonth',
+          );
+          return;
+        }
+        const endMonth = Number(f.endMonth);
+        if (!Number.isInteger(endMonth) || endMonth < 1 || endMonth > 12) {
+          add(`festivals[${i}].endMonth must be an integer 1-12`, 'endMonth');
+          return;
+        }
+        const endDaysInMonth = FESTIVAL_DAYS_IN_MONTH[endMonth - 1] ?? 31;
+        const endDay = Number(f.endDay);
+        if (!Number.isInteger(endDay) || endDay < 1 || endDay > endDaysInMonth) {
+          add(
+            `festivals[${i}].endDay must be an integer 1-${endDaysInMonth} for month ${endMonth}`,
+            'endDay',
+          );
+          return;
+        }
+        if (festivalRangeDays(month, day, endMonth, endDay) > SETTINGS_FESTIVAL_RANGE_DAYS_MAX) {
+          add(
+            `festivals[${i}] may run at most ${SETTINGS_FESTIVAL_RANGE_DAYS_MAX} days, start and end included`,
+            'endDay',
+          );
         }
       });
     })
     .transform((raw) =>
-      (raw as Array<Record<string, unknown>>).map((f) => ({
+      (raw as Array<Record<string, unknown>>).map((f): SettingsFestival => ({
         month: Number(f.month),
         day: Number(f.day),
         name: String(f.name ?? '').trim(),
@@ -1697,6 +1829,11 @@ export function festivalsSchema(ctx: SettingsMoodContext) {
             ? f.description.trim().slice(0, SETTINGS_FESTIVAL_DESCRIPTION_MAX)
             : '',
         windowDays: Number(f.windowDays ?? 0),
+        // Present only on a ranged festival, so a single-day one saves
+        // exactly the shape it always has.
+        ...(f.endMonth != null && f.endDay != null
+          ? { endMonth: Number(f.endMonth), endDay: Number(f.endDay) }
+          : {}),
       })),
     );
 }

@@ -29,6 +29,8 @@ export interface Persona {
   tagline: string;
   frequency: string;
   scriptLength: string;
+  identMode: 'improvise' | 'verbatim';
+  identLines: string[];
   // Back-announces, teases what's next and runs callbacks across the session.
   djMode: boolean;
   // 'announce' limits the link to exactly "This is <artist>." / "Next up,
@@ -44,6 +46,9 @@ export interface Persona {
   // directive injected server-side).
   language: string;
   voiceStyle?: string;
+  // Comma-separated languages a multilingual DJ mixes into `language`
+  // ("Japanese"). Empty = a one-language persona.
+  alsoSpeaks: string;
   // Basename like `p_abc123.png`, empty when none. The image is served from
   // /api/persona-avatar/<id>; the basename is held only so a save round-trips it.
   avatar: string;

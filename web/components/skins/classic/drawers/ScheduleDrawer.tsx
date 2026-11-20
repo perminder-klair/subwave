@@ -2,6 +2,7 @@
 
 import { useEffect, useId, useMemo, useState } from 'react';
 import { cn } from '@/lib/cn';
+import { showBlurb } from '@/lib/showBlurb';
 import { fmtClockMinute, normalizeStationLocale, zonedDayHour } from '@/lib/format';
 import type {
   ActiveShow,
@@ -539,10 +540,10 @@ function OnNowCard(props: {
           <div className="mt-0.5 text-lg leading-tight font-semibold">
             {onNow.show.name}
           </div>
-          {onNow.show.topic && (
+          {showBlurb(onNow.show) && (
             <ExpandableText
               key={`topic-${onNow.show.id}`}
-              text={onNow.show.topic}
+              text={showBlurb(onNow.show)}
               clampClass="line-clamp-3"
               className="mt-1.5 text-xs leading-relaxed text-muted"
             />
@@ -584,9 +585,9 @@ function ScheduleRow({ slot, isNow, locale }: { slot: Slot; isNow: boolean; loca
                 truncateName
               />
             )}
-            {slot.show.topic && (
+            {showBlurb(slot.show) && (
               <ExpandableText
-                text={slot.show.topic}
+                text={showBlurb(slot.show)}
                 clampClass="line-clamp-2"
                 className="mt-1 text-[11px] leading-relaxed text-muted"
               />
