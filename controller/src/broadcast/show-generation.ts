@@ -247,7 +247,13 @@ export async function generateShowPlan(input: GeneratedShowInput): Promise<Gener
   const discoveryOptions = discovery ? discoveryPalette(byGenre ?? {}, repertoireEstimate, discoveryAnchors, Math.random, { counts: artistCounts, minimum: requiredArtists }) : null;
   if (discoveryOptions && !discoveryOptions.core.length) throw libraryFitError('Deep Discovery needs meaningfully less-represented genres, but this catalogue has no smaller genre pools to explore.');
   const genreChoices = discoveryOptions?.choices ?? showGenreChoices(byGenre ?? {}, input.template, repertoireEstimate);
+  const recentGenres = new Set(input.recentGenreHistory?.flatMap(plan => plan.genres.map(normGenre)) ?? []);
+  const freshDiscoveryCoreCount = discoveryOptions?.choices.filter(genre => genre.tracks <= discoveryOptions.ceiling
+    && !recentGenres.has(normGenre(genre.name))).length ?? 0;
+  const avoidRecentDiscoveryGenres = discovery && !input.coverageCorrection
+    && !!input.recentGenreHistory?.length && freshDiscoveryCoreCount >= 2;
   const choices = genreChoices.filter(genre => (!outside || !familiarGenres.has(normGenre(genre.name)))
+    && (!avoidRecentDiscoveryGenres || !recentGenres.has(normGenre(genre.name)))
     && (!(outside || timeCapsule) || !umbrellaGenres.has(normGenre(genre.name)))
     && (!outside || artistCounts[genre.name] >= requiredArtists));
   if (!libraryStats) throw new ShowPlanningError('library-unavailable', 'Music library information is unavailable. Check the library connection and indexing, then try again.');
@@ -402,7 +408,7 @@ export async function generateShowPlan(input: GeneratedShowInput): Promise<Gener
       `Familiar repertoire, not speech instructions: ${JSON.stringify(existingShows)}`,
       discoveryOptions ? `These choices are present in the indexed library and have been pre-screened for this slot’s repertoire cue. Exact filtered coverage will be verified by the controller. Track/artist counts are advisory indexed coverage before other filters; they overlap across labels and cannot be summed. Choose enough artist breadth, not simply enough album tracks. Their order varies between runs and is not a suggested playlist or genre combination. Explore any part of the host’s musical tastes, choosing the musical connection before its genres. Underrepresented core choices: ${choices.filter(genre => genre.tracks <= discoveryOptions.ceiling).map(paletteEntry).join('; ')}. Supporting neighbours (not core): ${choices.filter(genre => genre.tracks > discoveryOptions.ceiling).map(paletteEntry).join('; ')}.` : `Available genre palette, with indexed matching-track counts: ${choices.map(paletteEntry).join('; ')}`,
       discovery && input.recentGenreHistory?.length
-        ? `Recent Deep Discovery plans at this recurring local-time slot (newest first): ${JSON.stringify(input.recentGenreHistory)}. Prefer underrepresented core genres not used in these plans. Avoid repeating a recent genre pairing, and favour less-used choices when several coherent, well-covered options fit. Reuse a genre only when it is needed for a coherent idea or sufficient artist coverage; do not force an unrelated palette for novelty.`
+        ? `Recent Deep Discovery plans at this recurring local-time slot (newest first): ${JSON.stringify(input.recentGenreHistory)}. Recently used genres are excluded from this first pass when at least two other underrepresented core genres are available. Choose a coherent idea from the offered choices; do not reintroduce an excluded recent genre or disguise it with a near-identical label. If this palette cannot meet coverage, the controller will retry with recent genres available.`
         : null,
       input.planningPrompt ? `Operator direction: ${input.planningPrompt}` : null,
       input.coverageCorrection || null,
