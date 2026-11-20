@@ -67,7 +67,7 @@ track plays, so the stinger between the two shows is the incoming show's. A list
 none of whose jingles exist airs no rotate stinger during that show; on the
 mixer's rotate the skipped stinger then airs at the next show's first seam. This
 needs a broadcast image from the same release: an older mixer applies a new list
-one stinger late.
+one stinger late, and the doctor warns when it finds one (`mixer jingles`).
 
 ## Audio imports
 

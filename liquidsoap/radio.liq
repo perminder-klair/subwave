@@ -2877,6 +2877,17 @@ server.register(
   end
 )
 
+# Whether `jingles.reload` replaces the rotate's playlist between stingers
+# (#2367). Registered whatever the rotate, so "unknown command" here always
+# means a mixer older than the swap, never a mixer without a rotate: doctor
+# asks, and warns that a show's jingle list starts one stinger late.
+server.register(
+  "jingle_list_swap",
+  description="Whether jingles.reload replaces the playlist between stingers: yes",
+  usage="jingle_list_swap",
+  fun(_) -> "yes"
+)
+
 # What a skip would air next from dj_queue: "ready" (a resolved request is
 # waiting), "resolving" (pushed but still downloading, so a skip now falls
 # through to auto.m3u), or "empty". The controller polls this before `skip` so
