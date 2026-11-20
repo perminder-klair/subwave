@@ -8,7 +8,7 @@ import { adminJson, useAdminMutation, useAdminQuery, type AdminFetch } from '../
 import { errorMessage, notify } from '../../../lib/notify';
 import { Input } from '../../ui/input';
 import { Label } from '../../ui/label';
-import { Card, Btn, Pill, Seg } from '../ui';
+import { Card, Btn, Pill, Seg, Toggle } from '../ui';
 
 interface AlexaConnection {
   station: string;
@@ -25,6 +25,31 @@ interface AlexaConnection {
   }>;
   listenerAuth: boolean;
   directSkill: { enabled: boolean; skillId: string; tokenTtlHours: number };
+  intentPolicy: AlexaIntentPolicy;
+  intentGroups: AlexaIntentGroup[];
+}
+
+interface AlexaIntentPolicy {
+  version: 1;
+  mode: 'allowlist';
+  allowed: string[];
+}
+
+interface AlexaIntentCapability {
+  id: string;
+  group: string;
+  label: string;
+  description: string;
+  intentNames: string[];
+  configurable: boolean;
+  required?: boolean;
+}
+
+interface AlexaIntentGroup {
+  id: string;
+  label: string;
+  description: string;
+  capabilities: AlexaIntentCapability[];
 }
 
 interface AlexaConnectionTest {
@@ -49,6 +74,30 @@ function alexaDraftKey(draft: AlexaDraft): string {
     streamMount: draft.streamMount,
     tokenTtlHours: draft.tokenTtlHours,
   });
+}
+
+function intentPolicyKey(policy: AlexaIntentPolicy): string {
+  return JSON.stringify({
+    version: policy.version,
+    mode: policy.mode,
+    allowed: [...policy.allowed].sort(),
+  });
+}
+
+function capabilityEnabled(policy: AlexaIntentPolicy, capability: AlexaIntentCapability): boolean {
+  return capability.required === true || policy.allowed.includes(capability.id);
+}
+
+function setCapability(
+  policy: AlexaIntentPolicy,
+  capability: AlexaIntentCapability,
+  enabled: boolean,
+): AlexaIntentPolicy {
+  if (!capability.configurable || capability.required) return policy;
+  const allowed = new Set(policy.allowed);
+  if (enabled) allowed.add(capability.id);
+  else allowed.delete(capability.id);
+  return { ...policy, allowed: [...allowed] };
 }
 
 function CopyValue({ value }: { value: string }) {
@@ -165,6 +214,8 @@ export default function AlexaTab({ adminFetch }: { adminFetch: AdminFetch }) {
   const [testResult, setTestResult] = useState<AlexaConnectionTest | null>(null);
   const [testedDraftKey, setTestedDraftKey] = useState<string | null>(null);
   const [directTouched, setDirectTouched] = useState(false);
+  const [intentPolicyDraft, setIntentPolicyDraft] = useState<AlexaIntentPolicy>({ version: 1, mode: 'allowlist', allowed: [] });
+  const [intentPolicyTouched, setIntentPolicyTouched] = useState(false);
 
   useEffect(() => {
     if (!data) return;
@@ -174,7 +225,14 @@ export default function AlexaTab({ adminFetch }: { adminFetch: AdminFetch }) {
       setStreamMount(data.streamMount || '/stream.mp3');
       setTokenTtlHours(String(data.directSkill.tokenTtlHours || 24));
     }
-  }, [data, directTouched]);
+    if (!intentPolicyTouched) {
+      setIntentPolicyDraft({
+        version: data.intentPolicy.version,
+        mode: data.intentPolicy.mode,
+        allowed: [...data.intentPolicy.allowed],
+      });
+    }
+  }, [data, directTouched, intentPolicyTouched]);
 
   const directMutation = useAdminMutation<Record<string, unknown>, { enabled: boolean; skillId: string; streamMount: string; tokenTtlHours: number }>({
     adminFetch,
@@ -211,6 +269,24 @@ export default function AlexaTab({ adminFetch }: { adminFetch: AdminFetch }) {
     toastOnError: false,
   });
 
+  const intentPolicyMutation = useAdminMutation<Record<string, unknown>, AlexaIntentPolicy>({
+    adminFetch,
+    request: (vars, fetcher) => adminJson<Record<string, unknown>>(fetcher, '/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ alexa: { intentPolicy: vars } }),
+    }),
+    onDone: async (_result, _vars, client) => {
+      await Promise.all([
+        client.invalidateQueries({ queryKey: keys.connection }),
+        client.invalidateQueries({ queryKey: ['settings', 'detail'] }),
+      ]);
+      setIntentPolicyTouched(false);
+      notify.ok('Alexa listener access saved');
+    },
+    toastOnError: false,
+  });
+
   if (connection.isPending && !data) return <Card title="Alexa"><div className="text-[12px] text-muted">Loading Alexa connection…</div></Card>;
   if (connection.error && !data) return <Card title="Alexa"><div className="text-[12px] text-red-300">{errorMessage(connection.error)}</div></Card>;
   if (!data) return null;
@@ -225,6 +301,19 @@ export default function AlexaTab({ adminFetch }: { adminFetch: AdminFetch }) {
   const draftKey = alexaDraftKey(draft);
   const testPassedForDraft = testResult?.ok === true && testedDraftKey === draftKey;
   const canSave = !directEnabled || testPassedForDraft;
+  const intentPolicyDirty = intentPolicyKey(intentPolicyDraft) !== intentPolicyKey(data.intentPolicy);
+  const setIntentCapability = (capability: AlexaIntentCapability, enabled: boolean) => {
+    setIntentPolicyTouched(true);
+    setIntentPolicyDraft(current => setCapability(current, capability, enabled));
+  };
+  const setIntentGroup = (group: AlexaIntentGroup, enabled: boolean) => {
+    setIntentPolicyTouched(true);
+    setIntentPolicyDraft(current => group.capabilities.reduce(
+      (next, capability) => setCapability(next, capability, enabled),
+      current,
+    ));
+  };
+  const capabilityById = new Map(data.intentGroups.flatMap(group => group.capabilities).map(capability => [capability.id, capability]));
 
   return (
     <>
@@ -327,10 +416,96 @@ export default function AlexaTab({ adminFetch }: { adminFetch: AdminFetch }) {
           </div>
         </Card>
 
+        <Card
+          title="Listener intent access"
+          sub="Choose which listener actions this station accepts. Equivalent Alexa aliases are controlled together."
+          right={<Pill tone="ink">allowlist</Pill>}
+        >
+          <div className="grid gap-4">
+            <div className="field-hint">
+              The allowlist applies to this station. New capabilities are off until enabled. Required Alexa behavior stays available so listeners can pause, stop, get help, and complete confirmations.
+            </div>
+            <div className="grid gap-3">
+              {data.intentGroups.map(group => {
+                const configurable = group.capabilities.filter(capability => capability.configurable && !capability.required);
+                const enabledCount = group.capabilities.filter(capability => capabilityEnabled(intentPolicyDraft, capability)).length;
+                const allEnabled = configurable.length > 0 && configurable.every(capability => capabilityEnabled(intentPolicyDraft, capability));
+                return (
+                  <section key={group.id} className="grid gap-3 border border-separator-strong p-3">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2 text-[13px] font-bold text-ink">
+                          {group.label}
+                          <Pill tone="ink">{enabledCount}/{group.capabilities.length} enabled</Pill>
+                        </div>
+                        <div className="mt-1 text-[11px] leading-[1.5] text-muted">{group.description}</div>
+                      </div>
+                      {configurable.length > 0 && (
+                        <div className="flex shrink-0 gap-2">
+                          <Btn sm disabled={intentPolicyMutation.isPending || allEnabled} onClick={() => setIntentGroup(group, true)}>Enable all</Btn>
+                          <Btn sm disabled={intentPolicyMutation.isPending || !allEnabled && configurable.every(capability => !capabilityEnabled(intentPolicyDraft, capability))} onClick={() => setIntentGroup(group, false)}>Disable all</Btn>
+                        </div>
+                      )}
+                    </div>
+                    <div className="grid gap-2 md:grid-cols-2">
+                      {group.capabilities.map(capability => {
+                        const enabled = capabilityEnabled(intentPolicyDraft, capability);
+                        return (
+                          <div key={capability.id} className="flex min-w-0 items-start justify-between gap-3 border border-separator-strong bg-[var(--ink-softer)] p-3">
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-2 text-[12px] font-bold text-ink">
+                                <span>{capability.label}</span>
+                                {capability.required && <Pill tone="ink">required</Pill>}
+                              </div>
+                              <div className="mt-1 text-[11px] leading-[1.5] text-muted">{capability.description}</div>
+                              <div className="mt-2 flex flex-wrap gap-1">
+                                {capability.intentNames.map(intentName => <code key={intentName} className="border border-separator-strong px-1 py-0.5 text-[10px] text-muted">{intentName}</code>)}
+                              </div>
+                            </div>
+                            <Toggle
+                              on={enabled}
+                              disabled={capability.required === true}
+                              onClick={() => setIntentCapability(capability, !enabled)}
+                              ariaLabel={`${enabled ? 'Disable' : 'Enable'} ${capability.label}`}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </section>
+                );
+              })}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Btn
+                tone="accent"
+                disabled={intentPolicyMutation.isPending || !intentPolicyDirty}
+                onClick={() => intentPolicyMutation.mutate(intentPolicyDraft)}
+              >
+                {intentPolicyMutation.isPending ? 'Saving…' : 'Save listener access'}
+              </Btn>
+              <Btn
+                disabled={intentPolicyMutation.isPending || !intentPolicyDirty}
+                onClick={() => {
+                  setIntentPolicyDraft({ ...data.intentPolicy, allowed: [...data.intentPolicy.allowed] });
+                  setIntentPolicyTouched(false);
+                }}
+              >
+                Discard changes
+              </Btn>
+              {intentPolicyDirty && <span className="field-hint">Unsaved listener access changes.</span>}
+            </div>
+          </div>
+        </Card>
+
         <Card title="What listeners say" sub="The station name is dynamic; the skill invocation name is not.">
           <div className="grid gap-2 text-[12px] leading-[1.6] text-muted">
             <div><code>Alexa, open Subwave Radio</code> — replace <code>Subwave Radio</code> with the invocation name configured in your Alexa skill.</div>
-            <div><code>Alexa, ask Subwave Radio to start the radio</code> — start this deployment&apos;s stream.</div>
+            {capabilityById.get('playback.start') && capabilityEnabled(intentPolicyDraft, capabilityById.get('playback.start')!) && <div><code>Alexa, ask Subwave Radio to start the radio</code> — start this deployment&apos;s stream.</div>}
+            {capabilityById.get('track.now') && capabilityEnabled(intentPolicyDraft, capabilityById.get('track.now')!) && <div><code>Alexa, ask Subwave Radio what is playing</code> — hear the current track.</div>}
+            {capabilityById.get('request.song') && capabilityEnabled(intentPolicyDraft, capabilityById.get('request.song')!) && <div><code>Alexa, ask Subwave Radio to request a song</code> — submit a listener request.</div>}
+            {capabilityById.get('request.dedication') && capabilityEnabled(intentPolicyDraft, capabilityById.get('request.dedication')!) && <div><code>Alexa, ask Subwave Radio to dedicate a song</code> — send a dedication.</div>}
+            {capabilityById.get('request.reminder') && capabilityEnabled(intentPolicyDraft, capabilityById.get('request.reminder')!) && <div><code>Alexa, ask Subwave Radio to remind me when my request is coming up</code> — request a reminder.</div>}
             <div><code>Alexa, ask Subwave Radio to pause</code> or <code>stop</code> — control playback.</div>
             <div className="text-muted">The station name ({data.station}) is read in the confirmation. This skill controls one deployment; it does not select among multiple stations.</div>
           </div>

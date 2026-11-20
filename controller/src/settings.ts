@@ -99,6 +99,7 @@ import {
 import { validateCompatParams, normalizeLlmBodyParams } from './settings/compat-params.js';
 import { normalizeReasoningEffort } from './schemas/reasoning.js';
 import { effectiveAlexaStreamMount, isAlexaStreamMountEnabled } from './alexa/stream.js';
+import { normalizeAlexaIntentPolicy } from './alexa/intent-policy.js';
 // A bound on the engine's composed prompt, not a validated vocabulary — it lives
 // beside the engine that enforces it (web/lib/geminiLimits.ts mirrors it for the
 // admin field, pinned by scripts/gemini-tts-settings.test.ts).
@@ -805,6 +806,7 @@ export async function load() {
           && stored.alexa.tokenTtlHours <= 168
           ? stored.alexa.tokenTtlHours
           : DEFAULTS.alexa.tokenTtlHours,
+      intentPolicy: normalizeAlexaIntentPolicy(stored.alexa?.intentPolicy),
     },
     // Listener-request pipeline gates. Absent/malformed settings.json (every
     // install predating this key) coerces field-by-field to DEFAULTS.requests,
@@ -2662,6 +2664,7 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
     if (ax.skillId !== undefined) next.alexa.skillId = ax.skillId as string;
     if (ax.streamMount !== undefined) next.alexa.streamMount = ax.streamMount as string;
     if (ax.tokenTtlHours !== undefined) next.alexa.tokenTtlHours = ax.tokenTtlHours as number;
+    if (ax.intentPolicy !== undefined) next.alexa.intentPolicy = normalizeAlexaIntentPolicy(ax.intentPolicy);
     if (next.alexa.enabled && !next.alexa.skillId) {
       throw new Error('Alexa integration requires a Skill ID before it can be enabled');
     }
@@ -2709,7 +2712,7 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
       throw new Error('set a station password before turning on a privacy lock');
     }
   }
-  if (!isAlexaStreamMountEnabled(next.alexa.streamMount, next.stream)) {
+  if (next.alexa.enabled && !isAlexaStreamMountEnabled(next.alexa.streamMount, next.stream)) {
     throw new Error('enable the selected Alexa stream mount before using it');
   }
   if ('requests' in patch) {

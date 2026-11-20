@@ -85,9 +85,14 @@ assert.equal(
   'fresh Alexa token verifies for its exact mount',
 );
 assert.equal(
-  listenerAuthDecision({ enabled: true, password: PW, mount: `/stream.mp3?auth=${encodeURIComponent(liveAlexaToken)}` }),
+  listenerAuthDecision({ enabled: true, alexaEnabled: true, password: PW, mount: `/stream.mp3?auth=${encodeURIComponent(liveAlexaToken)}` }),
   true,
   'signed Alexa token admits through the Icecast callback',
+);
+assert.equal(
+  listenerAuthDecision({ enabled: true, alexaEnabled: false, password: PW, mount: `/stream.mp3?auth=${encodeURIComponent(liveAlexaToken)}` }),
+  false,
+  'disabling Alexa invalidates an already-issued signed token',
 );
 assert.equal(
   listenerAuthDecision({ enabled: true, password: PW, mount: `/stream.opus?auth=${encodeURIComponent(signedAlexaToken)}` }),

@@ -91,6 +91,72 @@ Alexa fetches the stream directly from the station
       </section>
 
       <section className="bs-section">
+        <p className="bs-eyebrow">SHAREABLE SKILL PACKAGE</p>
+        <h2>Start with the repository template.</h2>
+        <p>
+          If you want to create the skill in your own Amazon Developer account, use the
+          deployment-neutral package included in the repository. It keeps your endpoint, station
+          name, Skill ID, and Alexa credentials out of the shared files.
+        </p>
+        <ul className="bs-list">
+          <li>
+            From the repository root, find the package at{' '}
+            <code className="bs-code-inline">alexa-skill-package/</code>.
+          </li>
+          <li>
+            Read <code className="bs-code-inline">alexa-skill-package/README.md</code> before
+            starting. It is the human-facing, step-by-step setup guide for ASK CLI,
+            authentication, Skill ID configuration, development deployment, and device testing.
+          </li>
+          <li>
+            If an AI agent is doing the setup, give it{' '}
+            <code className="bs-code-inline">alexa-skill-package/README.agent.md</code> as its
+            operating guide, while the human follows the regular README for the account and
+            device steps.
+          </li>
+        </ul>
+        <CodeBlock>{`alexa-skill-package/
+├── README.md                         human setup guide
+├── README.agent.md                   AI-agent setup guide
+├── alexa.env.example                 your private values go in alexa.env
+├── skill.json.template               neutral skill manifest
+└── interactionModels/custom/         en-US, en-IN, and hi-IN templates`}</CodeBlock>
+        <p>
+          From the repository root, the normal preparation flow is:
+        </p>
+        <CodeBlock>{`cp alexa-skill-package/alexa.env.example alexa-skill-package/alexa.env
+$EDITOR alexa-skill-package/alexa.env
+npm run alexa:prepare -- --check
+npm run alexa:prepare
+ask deploy --profile my-radio --target skill-metadata`}</CodeBlock>
+        <p>
+          Replace the example endpoint, skill name, and invocation name with your own values. The
+          generated manifest and locale models are ignored local files; do not share{' '}
+          <code className="bs-code-inline">alexa.env</code>, generated JSON, ASK CLI project
+          state, or credentials.
+        </p>
+        <div className="bs-callout">
+          <div className="bs-eyebrow">KEEP THE TWO FLOWS SEPARATE</div>
+          <p>
+            This shareable package is a deployment-neutral starting point. The supported intent
+            inventory and user-facing examples are documented in{' '}
+            <code className="bs-code-inline">alexa-skill-package/README.md</code>, while the
+            tracked locale templates{' '}
+            <code className="bs-code-inline">en-US.json.template</code>,{' '}
+            <code className="bs-code-inline">en-IN.json.template</code>, and{' '}
+            <code className="bs-code-inline">hi-IN.json.template</code> under{' '}
+            <code className="bs-code-inline">alexa-skill-package/interactionModels/custom/</code>{' '}
+            contain the actual intent names, slots, and sample utterances, including the explicit{' '}
+            <code className="bs-code-inline">StartRadioIntent</code> and{' '}
+            <code className="bs-code-inline">PlayRadioIntent</code> playback controls. Generated{' '}
+            <code className="bs-code-inline">.json</code> files are local output and must not be
+            shared. Do not copy a personal generated model into the shared template; enter your
+            own values and regenerate the locale models locally.
+          </p>
+        </div>
+      </section>
+
+      <section className="bs-section">
         <p className="bs-eyebrow">1 · CHOOSE THE INVOCATION NAME</p>
         <h2>Make Alexa hear the skill, not a radio catalogue.</h2>
         <p>
@@ -144,11 +210,21 @@ Alexa fetches the stream directly from the station
 
       <section className="bs-section">
         <p className="bs-eyebrow">2 · BUILD THE CUSTOM SKILL</p>
-        <h2>Use the Alexa Developer Console.</h2>
+        <h2>Use the template or build the model by hand.</h2>
+        <p>
+          The repository template is the recommended path. After generating the package, use
+          <code className="bs-code-inline">ask deploy --target skill-metadata</code> to upload
+          the manifest and interaction models. Do not manually recreate every intent in the
+          Developer Console when you are using the package.
+        </p>
+        <p>
+          If you are building a skill by hand instead, use the Developer Console and keep the
+          interaction model consistent with the endpoint's backend handlers:
+        </p>
         <ol className="bs-list">
           <li>Create a <strong>Custom</strong> Alexa skill and choose the locale you will test, such as English (US).</li>
           <li>Set the invocation name to the distinctive name you chose above.</li>
-          <li>Keep the model intents and sample utterances focused on playback: start, play, pause, resume, stop, and help.</li>
+          <li>Add the supported custom and built-in intents for the model you intend to deploy; the shareable package README contains the complete intent inventory.</li>
           <li>Intent names must contain only letters and underscores, such as{' '}
             <code className="bs-code-inline">StartRadioIntent</code> and{' '}
             <code className="bs-code-inline">PlayRadioIntent</code>. Built-in intents keep the{' '}

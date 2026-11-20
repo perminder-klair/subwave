@@ -65,13 +65,16 @@ export function clientIp(req) {
 // must only be spent on acceptance, or rejected retries close the request line
 // station-wide. So check() spends the cooldown and only PEEKS at the caps;
 // commit() spends them, once every later gate has passed.
-export function checkRateLimit(ip) {
+export function checkRateLimit(ip, { allowReplacement = false }: { allowReplacement?: boolean } = {}) {
   const now = Date.now();
   const oneHourAgo = now - HOUR_MS;
   const rec = requestHistory.get(ip) || { last: 0, hits: [] };
   rec.hits = rec.hits.filter(t => t > oneHourAgo);
   const { cooldownMs, perIpHourlyCap } = limits();
-  if (rec.last && now - rec.last < cooldownMs) {
+  // A replacement has already cancelled the listener's previous request. It
+  // may reuse that request's cooldown slot, but it must still consume a new
+  // timestamp so the replacement becomes the start of the next cooldown.
+  if (!allowReplacement && rec.last && now - rec.last < cooldownMs) {
     return { ok: false, retryAfter: Math.ceil((cooldownMs - (now - rec.last)) / 1000) };
   }
   if (rec.hits.length >= perIpHourlyCap) {

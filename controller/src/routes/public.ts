@@ -544,6 +544,7 @@ router.post(
     const allow = listenerAuthDecision({
       enabled: s?.privacy?.listenerAuth === true,
       password: s?.privacy?.password || '',
+      alexaEnabled: s?.alexa?.enabled === true,
       action: typeof req.body?.action === 'string' ? req.body.action : '',
       pass: typeof req.body?.pass === 'string' ? req.body.pass : '',
       mount,

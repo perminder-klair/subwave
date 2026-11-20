@@ -14,6 +14,7 @@ import {
   TAGGER_AUTO_DEFAULTS,
   type TaggerAutoSettings,
   BEDS_THRESHOLD_SEC_BOUNDS,
+  ALEXA_INTENT_POLICY_DEFAULT_ALLOWED,
   SHORTLIST_PASSES_DEFAULT,
   CROSSFADE_DURATION_BOUNDS,
   DUCK_DEPTH_BOUNDS,
@@ -216,7 +217,17 @@ export const DEFAULTS = {
   // supplies the one Skill ID created in the Alexa Developer Console. When
   // listener auth is on, Alexa receives a short-lived signed URL whose lifetime
   // is controlled by tokenTtlHours.
-  alexa: { enabled: false, skillId: '', streamMount: '/stream.mp3', tokenTtlHours: 24 },
+  alexa: {
+    enabled: false,
+    skillId: '',
+    streamMount: '/stream.mp3',
+    tokenTtlHours: 24,
+    intentPolicy: {
+      version: 1,
+      mode: 'allowlist' as const,
+      allowed: [...ALEXA_INTENT_POLICY_DEFAULT_ALLOWED],
+    },
+  },
   // Listener-request gates, all applied live. They bound the rate from several
   // angles at once: queue depth, requests/hour station-wide, per-track repeat
   // cooldown (0 = off), minimum gap between any two, and a single IP's share.

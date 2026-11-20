@@ -26,12 +26,15 @@ import {
   REQUESTS_DISABLED,
 } from '../middleware/ratelimit.js';
 import { validatePublicBody } from '../middleware/validate.js';
-import { listenerRequestSchema } from '../schemas/request.js';
+import { listenerDedicationSchema, listenerRequestSchema } from '../schemas/request.js';
 import { classifyUnsupportedLabels, directRequestUnsupported, isRefusedOutcome, modelFreeRequest, nameSearchTerms, repairRequestMatch, requestArtistMatches, resolveDirectRequest } from '../music/request-match.js';
 import { requestWaitClause } from '../broadcast/queue/pure.js';
 import { matchedRequestLookups, matchedRequestStandIn } from '../util/request-claim.js';
 import { ARTIST_VARIETY_WINDOW, drawRequestCandidate } from '../broadcast/dj-agent/artist-guard.js';
 import { heldBackFromShow } from '../music/explicit-policy.js';
+import * as requestLedger from '../broadcast/request-ledger.js';
+import type { AlexaVerifiedCandidate } from '../alexa/listener-features.js';
+import type { RequestDedication, RequestReminder, RequestReminderConsent } from '../broadcast/request-ledger.js';
 
 export const router = express.Router();
 
@@ -40,9 +43,51 @@ export const router = express.Router();
 const requests = new Map();
 const REQUEST_TTL_MS = 10 * 60 * 1000;
 
+export function verifiedCandidateMatches(
+  pick: { id?: unknown } | null | undefined,
+  candidate: AlexaVerifiedCandidate | null | undefined,
+): boolean {
+  return !candidate || String(pick?.id || '') === candidate.id;
+}
+
+export type ListenerRequestSource = 'browser' | 'alexa';
+export type RequestPhase = 'pending' | 'queued' | 'playing' | 'finished' | 'interrupted' | 'cancelled' | 'resolved' | 'failed';
+export interface ListenerRequestStatus {
+  status: 'pending' | 'resolved' | 'failed' | 'cancelled' | 'unknown';
+  success: boolean;
+  requestId?: string;
+  phase?: RequestPhase;
+  ack?: string | null;
+  track?: { id?: string; title?: string | null; artist?: string | null } | null;
+  queuePosition?: number | null;
+  etaSeconds?: number | null;
+  outcome?: string | null;
+  message?: string | null;
+  dedication?: RequestDedication | null;
+  reminder?: RequestReminder | null;
+}
+
+export type PublicListenerRequestStatus = Omit<ListenerRequestStatus, 'reminder'> & {
+  reminder?: Omit<RequestReminder, 'alertToken'> | null;
+};
+
+export function publicListenerRequestStatus(status: ListenerRequestStatus): PublicListenerRequestStatus {
+  const { reminder, ...withoutReminder } = status;
+  return {
+    ...withoutReminder,
+    reminder: reminder ? {
+      createdAt: reminder.createdAt,
+      triggerAt: reminder.triggerAt,
+      forecastSeconds: reminder.forecastSeconds,
+      leadSeconds: reminder.leadSeconds,
+    } : reminder,
+  };
+}
+
 // settings.requests.onePendingPerIp: an IP's previous request must resolve AND
 // leave the upcoming queue before the next is accepted. pruneRequests() janitors.
 const lastByIp = new Map<string, any>();
+const replacementLocks = new Map<string, Promise<void>>();
 
 function pruneRequests() {
   const cutoff = Date.now() - REQUEST_TTL_MS;
@@ -52,6 +97,76 @@ function pruneRequests() {
   for (const [ip, entry] of lastByIp) {
     if (entry.createdAt < cutoff) lastByIp.delete(ip);
   }
+}
+
+function queueStatusFor(id: string): { phase: RequestPhase; queuePosition?: number; etaSeconds?: number | null } | null {
+  const upcomingIndex = queue.upcoming.findIndex(item => item.requestId === id);
+  if (upcomingIndex >= 0) {
+    return {
+      phase: 'queued',
+      queuePosition: upcomingIndex + 1,
+      etaSeconds: queue.airForecastSec(queue.upcoming[upcomingIndex]),
+    };
+  }
+  if (queue.current?.requestId === id) return { phase: 'playing' };
+  if (queue.history.some(item => item.requestId === id)) return { phase: 'finished' };
+  return null;
+}
+
+function statusFromEntry(entry: any): ListenerRequestStatus {
+  const queueState = queueStatusFor(entry.id);
+  const phase = queueState?.phase || (entry.status === 'resolved' ? 'resolved' : entry.status);
+  return {
+    status: entry.status === 'pending' ? 'pending' : entry.status === 'cancelled' ? 'cancelled' : entry.status === 'failed' ? 'failed' : 'resolved',
+    success: entry.status === 'resolved',
+    requestId: entry.id,
+    phase,
+    ack: entry.ack || null,
+    track: entry.pick || entry.track || null,
+    queuePosition: queueState?.queuePosition ?? entry.queuePosition ?? null,
+    etaSeconds: queueState?.etaSeconds ?? null,
+    outcome: entry.outcome || null,
+    message: entry.message || null,
+    dedication: entry.dedication || null,
+    reminder: entry.reminder || null,
+  };
+}
+
+function statusFromRecord(record: requestLedger.RequestLedgerRecord): ListenerRequestStatus {
+  const queueState = queueStatusFor(record.id);
+  const phase = queueState?.phase || (record.status === 'pending' ? 'pending' : record.status);
+  return {
+    status: record.status === 'pending' ? 'pending' : record.status === 'cancelled' ? 'cancelled' : record.status === 'failed' ? 'failed' : 'resolved',
+    success: record.status === 'resolved',
+    requestId: record.id,
+    phase,
+    ack: record.ack || null,
+    track: record.track || null,
+    queuePosition: queueState?.queuePosition ?? record.queuePosition ?? null,
+    etaSeconds: queueState?.etaSeconds ?? null,
+    outcome: record.outcome || null,
+    message: record.message || null,
+    dedication: record.dedication || null,
+    reminder: record.reminder || null,
+  };
+}
+
+export function getListenerRequestStatus(id: string): ListenerRequestStatus {
+  const entry = requests.get(id);
+  if (entry) return statusFromEntry(entry);
+  const record = requestLedger.get(id);
+  return record ? statusFromRecord(record) : { status: 'unknown', success: false };
+}
+
+export function getLatestAlexaRequestStatus(identity: string): ListenerRequestStatus | null {
+  const record = requestLedger.latestForAlexa(identity);
+  return record ? getListenerRequestStatus(record.id) : null;
+}
+
+export function getAlexaRequestStatus(identity: string, id: string): ListenerRequestStatus | null {
+  const record = requestLedger.get(id);
+  if (!record || record.source !== 'alexa' || record.alexaIdentity !== identity) return null;
+  return getListenerRequestStatus(id);
 }
 
 // A clean show's rule inside every draw, so a draw lands on what can air and
@@ -103,12 +218,29 @@ async function pickSimilarToTrack(reference, recentIds: Set<string>) {
 // Append the durable debug record once, at a request's terminal state. Best
 // effort: a logging hiccup must never affect the listener's outcome. Called from
 // resolveRequest's terminal closures and the crash catch below.
+function syncAlexaLedger(entry: any): void {
+  if (entry.source !== 'alexa') return;
+  void requestLedger.update(entry.id, {
+    status: entry.status,
+    track: entry.pick
+      ? { id: entry.pick.id, title: entry.pick.title, artist: entry.pick.artist }
+      : entry.track || null,
+    ack: entry.ack || null,
+    outcome: entry.outcome || null,
+    message: entry.message || null,
+    queuePosition: entry.queuePosition ?? null,
+    dedication: entry.dedication || null,
+    reminder: entry.reminder || null,
+  }).catch(error => queue.log('error', `request ledger update failed: ${error instanceof Error ? error.message : String(error)}`));
+}
+
 function recordOutcome(entry) {
   try {
     requestLog.record({
       t: new Date(entry.createdAt).toISOString(),
       id: String(entry.id).slice(0, 8),
       requester: entry.requester,
+      source: entry.source || 'browser',
       text: entry.text,
       rawText: entry.rawText ?? null,
       injection: entry.injection ?? null,
@@ -145,6 +277,7 @@ function recordOutcome(entry) {
   } catch (err) {
     queue.log('error', `request-log record failed: ${err.message}`);
   }
+  syncAlexaLedger(entry);
 }
 
 // Accumulate guard verdicts: one request can trip both the ack and intro guards.
@@ -228,7 +361,10 @@ async function resolveRequest(entry) {
   const { requester, text } = entry;
   entry.startedAt = Date.now();
 
+  if (entry.status === 'cancelled') return;
+
   const resolved = ({ ack, track, queuePosition }) => {
+    if (entry.status === 'cancelled') return;
     entry.outcome ||= entry.refused ? 'already-queued' : track ? 'matched' : 'chat';
     entry.status = 'resolved';
     entry.ack = ack || null;
@@ -237,6 +373,7 @@ async function resolveRequest(entry) {
     recordOutcome(entry);
   };
   const failed = (message) => {
+    if (entry.status === 'cancelled') return;
     entry.outcome ||= 'no-match';
     entry.status = 'failed';
     entry.message = message;
@@ -250,11 +387,13 @@ async function resolveRequest(entry) {
     queue.log('error', `getFullContext for request failed: ${err.message}`);
     ctx = {};
   }
+  if (entry.status === 'cancelled') return;
 
   // Roll, then post ONE event turn before any resolution path, so the agent, the
   // more-like-this shortcut and the cascade share it and no orphan event is left.
   try {
     await session.maybeRoll(ctx);
+    if (entry.status === 'cancelled') return;
     const cur = queue.current?.track || null;
     session.appendTurn({
       role: 'event', kind: 'request',
@@ -290,8 +429,10 @@ async function resolveRequest(entry) {
     // Same artist first, then real track similarity so a one-off collab credit
     // playing now doesn't dead-end the request.
     let pick = await pickMoreByArtist(refArtist, recentIds, reference?.track?.id);
+    if (entry.status === 'cancelled') return;
     if (!pick) {
       pick = await pickSimilarToTrack(reference, recentIds);
+      if (entry.status === 'cancelled') return;
       if (pick) entry.pickSource = 'more-like-this:similar';
     }
     if (!pick) {
@@ -311,10 +452,12 @@ async function resolveRequest(entry) {
       track: pick,
       context: ctx,
       requestedBy: requester,
+      dedication: entry.dedication || null,
       recap: queue.getDjRecap(),
       recentTracks: queue.getRecentTracks(),
       recentOpeners: queue.getRecentOpeners(),
     }, text);
+    if (entry.status === 'cancelled') return;
     if (generatedIntro.failure) {
       entry.introFailure = generatedIntro.failure;
       queue.log('error', 'more-like-this optional intro failed — queueing without speech');
@@ -326,7 +469,7 @@ async function resolveRequest(entry) {
     const introScript = generatedIntro.introScript;
     let introDropped = false;
     const pos = await queue.push({
-      track: pick, requestedBy: requester, intent: 'more_like_this', introScript,
+      track: pick, requestId: entry.id, requestedBy: requester, dedication: entry.dedication || null, intent: 'more_like_this', introScript,
       introKind: 'dj-speak',
       // Voice it as whoever wrote it: render and air happen later and would
       // otherwise re-resolve the speaker off the wall clock.
@@ -334,6 +477,7 @@ async function resolveRequest(entry) {
       introHostSpeech: generatedIntro.introHostSpeech,
       onStandInDropped: () => { introDropped = true; },
     });
+    if (entry.status === 'cancelled') return;
     entry.pick = pick;
     if (pos === -2) {
       // Blocklist refused the pick; decline with the standard not-found copy so
@@ -369,6 +513,7 @@ async function resolveRequest(entry) {
   // cascade below, so a request is never dropped.
   try {
     const agentRes = await djAgent.runRequest(queue, { requester, text });
+    if (entry.status === 'cancelled') return;
     if (agentRes) {
       // Thread the agent's own echo-guard verdict into the durable log; the
       // other paths set it inline.
@@ -415,6 +560,7 @@ async function resolveRequest(entry) {
   if (budget.requestsAllowed()) {
     try {
       matched = repairRequestMatch(await dj.matchRequest(text, { listenerName: requester, nowPlaying: currentTrack }), text) as typeof matched;
+      if (entry.status === 'cancelled') return;
     } catch (err) {
       entry.interpretationFallback = true;
       queue.log('error', `request interpretation failed: ${err.message} — trying library search`);
@@ -524,6 +670,7 @@ async function resolveRequest(entry) {
     ...(currentTrack?.id && ON_AIR_REFERENCE.test(text)
       ? { similarSongs: () => subsonic.getSimilarSongs(currentTrack.id, { count: 20 }) } : {}),
   });
+  if (entry.status === 'cancelled') return;
   const pick = selection.track;
   const pickSource = selection.source;
   entry.outcome = selection.outcome;
@@ -539,6 +686,11 @@ async function resolveRequest(entry) {
     return failed(selection.required?.length
       ? 'Could not verify a track meeting the requested language or genre requirements. Try simplifying the request.'
       : sorryNoMatch(requester));
+  }
+  if (!verifiedCandidateMatches(pick, entry.verifiedCandidate)) {
+    entry.pick = pick;
+    entry.pickSource = `${pickSource}:verified-candidate-mismatch`;
+    return failed(sorryNoMatch(requester));
   }
   // A search in the listener's own spelling answers in the library's ("Tupac"
   // finds 2Pac). That may be the same act, so the intro is not told it is not.
@@ -578,6 +730,7 @@ async function resolveRequest(entry) {
     track: pick,
     context: ctx,
     requestedBy: requester,
+    dedication: entry.dedication || null,
     artistMiss: !!entry.artistMiss,
     missedArtist: entry.missedArtist ?? null,
     requestSubstitution: selection.outcome === 'substituted',
@@ -585,6 +738,7 @@ async function resolveRequest(entry) {
     recentTracks: queue.getRecentTracks(),
     recentOpeners: queue.getRecentOpeners(),
   }, text);
+  if (entry.status === 'cancelled') return;
   if (generatedIntro.failure) {
     entry.introFailure = generatedIntro.failure;
     queue.log('error', 'request optional intro failed — queueing without speech');
@@ -599,7 +753,9 @@ async function resolveRequest(entry) {
   let introDropped = false;
   const pos = await queue.push({
     track: pick,
+    requestId: entry.id,
     requestedBy: requester,
+    dedication: entry.dedication || null,
     intent: matched.intent,
     introScript,
     introKind: 'dj-speak',
@@ -607,6 +763,7 @@ async function resolveRequest(entry) {
     introHostSpeech: generatedIntro.introHostSpeech,
     onStandInDropped: () => { introDropped = true; },
   });
+  if (entry.status === 'cancelled') return;
   entry.pick = pick;
   if (pos === -2) {
     // Blocklist refused the pick; standard not-found copy so it doesn't leak.
@@ -636,6 +793,246 @@ async function resolveRequest(entry) {
     track: { title: pick.title, artist: pick.artist },
     queuePosition: queue.upcoming.length,
   });
+}
+
+export type ListenerRequestSubmission = {
+  accepted: true;
+  requestId: string;
+  status: 'pending';
+  completion: Promise<ListenerRequestStatus>;
+} | {
+  accepted: false;
+  statusCode: number;
+  message?: string;
+  error?: string;
+  retryAfter?: number;
+};
+
+export async function submitListenerRequest(input: {
+  text: string;
+  name: string;
+  ip: string;
+  source: ListenerRequestSource;
+  alexaIdentity?: string;
+  verifiedCandidate?: AlexaVerifiedCandidate;
+  dedication?: RequestDedication;
+  /** Internal Alexa-only seam: the exact request cancelled by replacement. */
+  replacementOf?: string;
+}): Promise<ListenerRequestSubmission> {
+  const parsed = listenerRequestSchema.safeParse({ text: input.text, name: input.name });
+  if (!parsed.success) return { accepted: false, statusCode: 400, error: parsed.error.issues[0]?.message || 'Invalid request' };
+  const stripped = stripScriptedOpener(sanitizeRequestText(parsed.data.text));
+  if (!stripped.text) {
+    return {
+      accepted: false,
+      statusCode: 400,
+      error: stripped.injection
+        ? "Couldn't read a song request in that — try just the artist, title, or a vibe."
+        : 'Empty request',
+    };
+  }
+  let dedication: RequestDedication | null = null;
+  if (input.dedication) {
+    const dedicationParsed = listenerDedicationSchema.safeParse(input.dedication);
+    if (!dedicationParsed.success) return { accepted: false, statusCode: 400, error: dedicationParsed.error.issues[0]?.message || 'Invalid dedication' };
+    dedication = dedicationParsed.data;
+  }
+  const cfg = (settings.get() as any)?.requests || {};
+  if (REQUESTS_DISABLED || cfg.enabled === false) return { accepted: false, statusCode: 503, message: 'Requests are temporarily closed.' };
+  await listeners.refresh();
+  if (!listeners.djCallsAllowed()) {
+    return { accepted: false, statusCode: 503, message: "The DJ's on autopilot — requests reopen when someone's tuned in." };
+  }
+  const reservedNames = ['dj', 'admin', 'host', 'mod', 'moderator', (settings.get() as any)?.station || ''];
+  const requester = cleanRequesterName(input.name, reservedNames);
+  pruneRequests();
+  const replacement = input.replacementOf ? requestLedger.get(input.replacementOf) : null;
+  const latestReplacement = input.alexaIdentity
+    ? requestLedger.latestForAlexa(input.alexaIdentity)
+    : null;
+  const replacementAllowed = Boolean(
+    input.source === 'alexa'
+      && input.alexaIdentity
+      && replacement
+      && replacement.source === 'alexa'
+      && replacement.alexaIdentity === input.alexaIdentity
+      && replacement.status === 'cancelled'
+      && latestReplacement?.id === input.replacementOf,
+  );
+  if (input.replacementOf && !replacementAllowed) {
+    return { accepted: false, statusCode: 409, message: 'The request being replaced is no longer available.' };
+  }
+  const gate = checkRateLimit(input.ip, { allowReplacement: replacementAllowed });
+  if (!gate.ok) return { accepted: false, statusCode: 429, message: `Easy there — try again in ${gate.retryAfter}s.`, retryAfter: gate.retryAfter };
+  const globalGate = checkGlobalRateLimit();
+  if (!globalGate.ok) return { accepted: false, statusCode: 429, message: 'The request line is busy — try again in a few minutes.', retryAfter: globalGate.retryAfter };
+  const retryAfter = Number(cfg.cooldownSec) > 0 ? Number(cfg.cooldownSec) : 60;
+  if (cfg.onePendingPerIp !== false && stillInFlight(lastByIp.get(input.ip), queue.queuedIds())) {
+    return { accepted: false, statusCode: 429, message: 'Your last request is still queued — it airs first.', retryAfter };
+  }
+  if (queue.pendingListenerRequests() + resolvingRequestCount() >= (Number(cfg.maxPending) || 6)) {
+    return { accepted: false, statusCode: 429, message: "The request queue's full — try again in a few minutes.", retryAfter };
+  }
+  const id = randomUUID();
+  const entry: any = {
+    id,
+    status: 'pending',
+    requester,
+    text: stripped.text,
+    rawText: sanitizeRequestText(parsed.data.text),
+    injection: stripped.injection,
+    source: input.source,
+    clientKey: input.ip,
+    alexaIdentity: input.alexaIdentity,
+    verifiedCandidate: input.verifiedCandidate,
+    dedication,
+    ack: null,
+    track: null,
+    queuePosition: null,
+    message: null,
+    createdAt: Date.now(),
+  };
+  requests.set(id, entry);
+  lastByIp.set(input.ip, entry);
+  if (input.source === 'alexa') {
+    try {
+      await requestLedger.createPending({
+        id,
+        createdAt: entry.createdAt,
+        source: 'alexa',
+        requester,
+        text: stripped.text,
+        alexaIdentity: input.alexaIdentity,
+        dedication,
+      });
+    } catch (error) {
+      requests.delete(id);
+      if (lastByIp.get(input.ip) === entry) lastByIp.delete(input.ip);
+      queue.log('error', `request ledger create failed: ${error instanceof Error ? error.message : String(error)}`);
+      return { accepted: false, statusCode: 500, message: 'Unable to record the request right now.' };
+    }
+  }
+  commitRateLimit(input.ip);
+  commitGlobalRateLimit();
+  queue.log('request', `${requester}: "${stripped.text}" (id ${id.slice(0, 8)})${input.source === 'alexa' ? ' [Alexa]' : ''}`);
+  webhooks.notify('request.received', { requestedBy: requester, text: stripped.text, source: input.source });
+  const completion = Promise.resolve().then(async () => {
+    await resolveRequest(entry);
+    return getListenerRequestStatus(id);
+  }).catch(error => {
+    entry.status = 'failed';
+    entry.outcome = 'error';
+    entry.message = 'Something went wrong in the booth — try again.';
+    queue.log('error', `request resolution crashed: ${error instanceof Error ? error.message : String(error)}`);
+    recordOutcome(entry);
+    return getListenerRequestStatus(id);
+  });
+  return { accepted: true, requestId: id, status: 'pending', completion };
+}
+
+export async function saveAlexaRequestReminder(identity: string, id: string, reminder: RequestReminder): Promise<ListenerRequestStatus | null> {
+  const record = requestLedger.get(id);
+  if (!record || record.source !== 'alexa' || record.alexaIdentity !== identity) return null;
+  const before = getListenerRequestStatus(id);
+  if (before.phase !== 'queued' || before.reminder) return null;
+  const updated = await requestLedger.setReminder(id, reminder);
+  if (!updated) return null;
+  const entry = requests.get(id);
+  if (entry) entry.reminder = reminder;
+  const after = getListenerRequestStatus(id);
+  if (after.phase !== 'queued') {
+    await requestLedger.clearReminder(id);
+    if (entry) entry.reminder = null;
+    return null;
+  }
+  return after;
+}
+
+export async function clearAlexaRequestReminder(identity: string, id: string): Promise<boolean> {
+  const record = requestLedger.get(id);
+  if (!record || record.source !== 'alexa' || record.alexaIdentity !== identity || !record.reminder) return false;
+  const updated = await requestLedger.clearReminder(id);
+  const entry = requests.get(id);
+  if (entry) entry.reminder = null;
+  return !!updated;
+}
+
+export async function saveAlexaReminderConsent(identity: string, id: string, consent: RequestReminderConsent): Promise<boolean> {
+  const record = requestLedger.get(id);
+  if (!record || record.source !== 'alexa' || record.alexaIdentity !== identity) return false;
+  return !!(await requestLedger.setReminderConsent(id, consent));
+}
+
+export async function getAlexaReminderConsent(identity: string, permissionToken: string) {
+  return requestLedger.findReminderConsent(identity, permissionToken);
+}
+
+export async function clearAlexaReminderConsent(identity: string, id: string): Promise<boolean> {
+  const record = requestLedger.get(id);
+  if (!record || record.source !== 'alexa' || record.alexaIdentity !== identity) return false;
+  return !!(await requestLedger.clearReminderConsent(id));
+}
+
+async function cancelRequestById(id: string): Promise<ListenerRequestStatus | null> {
+  const entry = requests.get(id);
+  const current = getListenerRequestStatus(id);
+  if (current.status === 'unknown' || !['pending', 'queued'].includes(current.phase || '')) return current;
+  if (entry) {
+    entry.status = 'cancelled';
+    entry.outcome = 'cancelled';
+    entry.message = 'Cancelled by listener.';
+    entry.reminder = null;
+    if (lastByIp.get(entry.clientKey) === entry) lastByIp.delete(entry.clientKey);
+  }
+  const removed = await queue.removeUpcomingRequest(id);
+  if (!removed.ok && removed.reason === 'already-playing') return getListenerRequestStatus(id);
+  await requestLedger.update(id, { status: 'cancelled', outcome: 'cancelled', message: 'Cancelled by listener.', reminder: null });
+  if (entry) recordOutcome(entry);
+  return getListenerRequestStatus(id);
+}
+
+export async function cancelLatestAlexaRequest(identity: string): Promise<ListenerRequestStatus | null> {
+  const record = requestLedger.latestForAlexa(identity);
+  return record ? cancelRequestById(record.id) : null;
+}
+
+export async function replaceLatestAlexaRequest(identity: string, text: string): Promise<ListenerRequestSubmission> {
+  const previous = replacementLocks.get(identity) || Promise.resolve();
+  let release!: () => void;
+  const lock = new Promise<void>(resolve => { release = resolve; });
+  replacementLocks.set(identity, lock);
+  await previous;
+  try {
+    const current = requestLedger.latestForAlexa(identity);
+    if (current) {
+      const status = getListenerRequestStatus(current.id);
+      if (status.phase !== 'pending' && status.phase !== 'queued') {
+        return { accepted: false, statusCode: 429, message: 'Your previous request is already playing or has finished.' };
+      }
+      const cancelled = await cancelRequestById(current.id);
+      if (cancelled?.phase !== 'cancelled') {
+        return { accepted: false, statusCode: 429, message: 'Your previous request could not be replaced because it has reached the player.' };
+      }
+      return submitListenerRequest({
+        text,
+        name: '',
+        ip: `alexa:${identity}`,
+        source: 'alexa',
+        alexaIdentity: identity,
+        replacementOf: current.id,
+      });
+    }
+    return submitListenerRequest({ text, name: '', ip: `alexa:${identity}`, source: 'alexa', alexaIdentity: identity });
+  } finally {
+    release();
+    if (replacementLocks.get(identity) === lock) replacementLocks.delete(identity);
+  }
+}
+
+export async function reconcileRequestLedger(): Promise<void> {
+  const known = new Set<string>();
+  for (const item of [...queue.upcoming, queue.current, ...queue.history]) if (item?.requestId) known.add(item.requestId);
+  await requestLedger.interruptUnresolved(known);
 }
 
 // Validates + rate-limits synchronously, then resolves in the background.

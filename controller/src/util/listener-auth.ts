@@ -29,6 +29,7 @@ function mountPath(mount: string): string {
 export function listenerAuthDecision(opts: {
   enabled: boolean;
   password: string;
+  alexaEnabled?: boolean;
   action?: string;
   pass?: string;
   mount?: string;
@@ -47,7 +48,8 @@ export function listenerAuthDecision(opts: {
   // enabled. It is HMAC-signed with the station password, bound to this exact
   // mount, and checked here at connection time. The password itself never
   // leaves the controller.
-  if (verifyAlexaStreamToken(mountAuthToken(mount), opts.password, mountPath(mount))) return true;
+  if (opts.alexaEnabled === true
+    && verifyAlexaStreamToken(mountAuthToken(mount), opts.password, mountPath(mount))) return true;
   return false;
 }
 
