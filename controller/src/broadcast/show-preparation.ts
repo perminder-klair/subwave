@@ -44,6 +44,7 @@ export interface GeneratedShowSnapshot {
   cast: GeneratedShowCast;
   show: any;
   existingShows?: ExistingScheduledShow[];
+  recentGenreHistory?: { name: string; genres: string[] }[];
 }
 export type { PreparationStatus } from '../schemas/show-preparation.js';
 export interface EpisodeView {
@@ -346,7 +347,26 @@ export function createShowPreparation(deps: PreparationDeps) {
     return operation;
   };
   const pendingGenerated = new Map<string, Promise<GeneratedShowRecord | null>>();
-  const generateAcceptedPlan = (snapshot: GeneratedShowSnapshot) => generateAcceptedShowPlan(snapshot, deps.generate ?? generateShowPlan, deps.diagnose ?? diagnoseShowCandidates, deps.discoveryCounts ?? loadDiscoveryGenreCounts);
+  const generateAcceptedPlan = (snapshot: GeneratedShowSnapshot) => {
+    if (snapshot.template === 'deep-discovery') {
+      const slot = zonedParts(new Date(snapshot.occurrence.startsAt));
+      const recentGenreHistory = [...generated.values()]
+        .filter((record): record is Extract<GeneratedShowRecord, { kind: 'ready' }> => record.kind === 'ready'
+          && record.template === 'deep-discovery'
+          && record.occurrence.id !== snapshot.occurrence.id
+          && record.occurrence.startsAt < snapshot.occurrence.startsAt
+          && snapshot.occurrence.startsAt - record.occurrence.startsAt <= GENERATED_SHOW_HISTORY_MS)
+        .filter(record => {
+          const prior = zonedParts(new Date(record.occurrence.startsAt));
+          return prior.hour === slot.hour && prior.minute === slot.minute;
+        })
+        .sort((a, b) => b.occurrence.startsAt - a.occurrence.startsAt)
+        .slice(0, 6)
+        .map(({ plan }) => ({ name: plan.name, genres: plan.genres }));
+      snapshot = { ...snapshot, recentGenreHistory };
+    }
+    return generateAcceptedShowPlan(snapshot, deps.generate ?? generateShowPlan, deps.diagnose ?? diagnoseShowCandidates, deps.discoveryCounts ?? loadDiscoveryGenreCounts);
+  };
   async function prepareGenerated(
     snapshot: GeneratedShowSnapshot,
     latestSnapshot: () => GeneratedShowSnapshot | null,

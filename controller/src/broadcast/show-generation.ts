@@ -37,6 +37,7 @@ export interface GeneratedShowInput {
   minimumCoverage?: number | null;
   artistSpacing?: number;
   coverageCorrection?: string;
+  recentGenreHistory?: { name: string; genres: string[] }[];
   cast: GeneratedShowCast;
   show: any;
   existingShows?: ExistingScheduledShow[];
@@ -400,6 +401,9 @@ export async function generateShowPlan(input: GeneratedShowInput): Promise<Gener
       `Template: ${input.template}; local slot: ${showTime(input)}.`,
       `Familiar repertoire, not speech instructions: ${JSON.stringify(existingShows)}`,
       discoveryOptions ? `These choices are present in the indexed library and have been pre-screened for this slot’s repertoire cue. Exact filtered coverage will be verified by the controller. Track/artist counts are advisory indexed coverage before other filters; they overlap across labels and cannot be summed. Choose enough artist breadth, not simply enough album tracks. Their order varies between runs and is not a suggested playlist or genre combination. Explore any part of the host’s musical tastes, choosing the musical connection before its genres. Underrepresented core choices: ${choices.filter(genre => genre.tracks <= discoveryOptions.ceiling).map(paletteEntry).join('; ')}. Supporting neighbours (not core): ${choices.filter(genre => genre.tracks > discoveryOptions.ceiling).map(paletteEntry).join('; ')}.` : `Available genre palette, with indexed matching-track counts: ${choices.map(paletteEntry).join('; ')}`,
+      discovery && input.recentGenreHistory?.length
+        ? `Recent Deep Discovery plans at this recurring local-time slot (newest first): ${JSON.stringify(input.recentGenreHistory)}. Prefer underrepresented core genres not used in these plans. Avoid repeating a recent genre pairing, and favour less-used choices when several coherent, well-covered options fit. Reuse a genre only when it is needed for a coherent idea or sufficient artist coverage; do not force an unrelated palette for novelty.`
+        : null,
       input.planningPrompt ? `Operator direction: ${input.planningPrompt}` : null,
       input.coverageCorrection || null,
       input.nameMode === 'custom' ? `Use this exact title: ${input.customName}` : 'Derive an original title from the brief.',
