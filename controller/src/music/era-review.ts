@@ -456,6 +456,39 @@ export interface EraAlbumRow {
   copies: number;
 }
 
+/**
+ * The one rule for an album leaving "To review": the operator trusted it or
+ * gave it one year, or every track has a year. The Era tab's list and the
+ * Library counts line (library-overview.ts) both answer through it.
+ */
+export function eraAlbumDone(verdict: EraVerdict | null, tracksWithoutYear: number): boolean {
+  return verdict === 'trusted' || verdict === 'year' || tracksWithoutYear === 0;
+}
+
+/**
+ * How many albums the Era tab lists under "To review", over the same
+ * selection as listEraAlbums (untrusted tracks, plus every track of an
+ * album with a decision), without visiting the wide rows: the untrusted half
+ * reads idx_tracks_era_open (library-db/stats.ts) and the decided half scans
+ * that same index, never the rows (29 ms on a 72k-track library, against
+ * about 1 s for the listing's own selection).
+ */
+export function countEraToReview(d: Database): number {
+  const rows = d.prepare(
+    `WITH sel AS (
+       SELECT ${ERA_ALBUM_KEY_SQL} AS k, original_year FROM tracks WHERE era_untrusted = 1
+       UNION ALL
+       SELECT o.album_key AS k, t.original_year
+         FROM era_override o JOIN tracks t ON ${ERA_ALBUM_KEY_SQL} = o.album_key
+        WHERE t.era_untrusted IS NOT 1
+     )
+     SELECT o.verdict AS verdict, SUM(s.original_year IS NULL) AS open
+       FROM sel s LEFT JOIN era_override o ON o.album_key = s.k
+      GROUP BY s.k`,
+  ).all() as Array<{ verdict: EraVerdict | null; open: number }>;
+  return rows.filter(r => !eraAlbumDone(r.verdict ?? null, r.open)).length;
+}
+
 export function listEraAlbums(d: Database): EraAlbumRow[] {
   const rows = d.prepare(
     `SELECT
@@ -519,7 +552,7 @@ export function listEraAlbums(d: Database): EraAlbumRow[] {
     kind,
     kindSet,
     suggestedVerdict: suggestedDecision(kind),
-    done: verdict === 'trusted' || verdict === 'year' || r.year_not_found + r.year_unchecked === 0,
+    done: eraAlbumDone(verdict, r.year_not_found + r.year_unchecked),
     mainFolder: mainFolderOf(albumFiles),
     copies: albumFiles.length - groups.length,
     };
@@ -601,7 +634,7 @@ export function countEraSummary(d: Database): EraSummary {
   };
 }
 
-function csvField(v: unknown): string {
+export function csvField(v: unknown): string {
   if (v == null) return '';
   let s = String(v);
   // A spreadsheet opens a cell that starts with = + - @ (or a tab or CR before

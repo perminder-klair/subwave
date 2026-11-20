@@ -79,7 +79,9 @@ export default function AdminSettings() {
           <li>
             <strong>Shows</strong> — a show is a reusable definition: a name, a topic, a
             persona, a mood. Paint shows onto a weekly grid hour by hour; an empty hour
-            means the station runs autonomously for that hour.
+            means the station runs autonomously for that hour. The topic is the DJ's
+            brief; listeners read the show's listener description on the schedule and
+            the On Now card, or the brief when you leave that empty.
           </li>
           <li>
             <strong>Personas</strong> — the roster of DJ identities, one to ten. Each has

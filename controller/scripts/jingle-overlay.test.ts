@@ -494,3 +494,38 @@ test('the first overlay waits for its first voice marker and earns post-air book
     await new Promise(resolve => setTimeout(resolve, 1600));
   }
 });
+
+test('overlay draws only the show\'s listed jingles', async () => {
+  reset();
+  const at = Date.now();
+  setCache({
+    ...settings.get(),
+    shows: [{ id: 's_lunch', name: 'The lunch show', personaId: settings.get().personas[0].id, allowedJingles: ['a.wav'] }],
+    scheduleOverride: { showId: 's_lunch', startedAt: at - 60_000, expiresAt: at + 3600_000 },
+  });
+  const texts: string[] = [];
+  const stub = queue._airVoice;
+  queue._airVoice = (async (file, path, text, gain, opts) => { texts.push(text); return stub(file, path, text, gain, opts); }) as typeof airVoice;
+  try {
+    for (let n = 0; n < 6; n++) { startSong(); await queue.maybeAirJingleOverlay(); }
+  } finally { queue._airVoice = stub; }
+  assert.equal(handed.length, 6);
+  assert.deepEqual([...new Set(handed)], [join(jingleDir, 'a.wav')]);
+  assert.deepEqual([...new Set(texts)], ['Station A'], 'the ID keeps its spoken text, not its filename');
+});
+
+test('overlay skips with a booth line when none of the show\'s listed jingles exists', async () => {
+  reset();
+  const at = Date.now();
+  setCache({
+    ...settings.get(),
+    shows: [{ id: 's_lunch', name: 'The lunch show', personaId: settings.get().personas[0].id, allowedJingles: ['gone.wav'] }],
+    scheduleOverride: { showId: 's_lunch', startedAt: at - 60_000, expiresAt: at + 3600_000 },
+  });
+  const logs: string[] = [];
+  const realLog = queue.log;
+  queue.log = ((_kind: string, message: string) => { logs.push(message); }) as typeof queue.log;
+  try { startSong(); await queue.maybeAirJingleOverlay(); } finally { queue.log = realLog; }
+  assert.equal(handed.length, 0);
+  assert.ok(logs.some(l => l.includes('over-music ID skipped') && l.includes('The lunch show')), logs.join('\n'));
+});

@@ -195,6 +195,8 @@ export interface SettingsResponse {
   };
   // Absent on an old controller → treated as 'normal'.
   budget?: { mode: BudgetMode };
+  // The music server's address from Settings → Navidrome (the Music server tile's link).
+  navidrome?: { url?: string | null };
 }
 
 export type Tab = 'tracks' | 'browse' | 'search' | 'era' | 'history' | 'blocked';

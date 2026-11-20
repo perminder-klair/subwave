@@ -9,6 +9,7 @@ import * as session from './broadcast/session.js';
 import { getListenerCount } from './broadcast/listeners.js';
 import { zonedParts, zonedISODate, clockDisplay, spokenHourPhrase, spokenTimePhrases, spokenDaypartPhrase } from './time.js';
 import { nextShowChangeMs } from './broadcast/show-boundary.js';
+import { festivalActiveOn } from './schemas/settings.js';
 
 // The day-period → {vibe, show} table stays in code (these feed spoken-segment
 // prompts and show resolution). Each period's MOOD is operator-editable
@@ -38,21 +39,14 @@ export function getTimeContext(date = new Date()) {
 // Festival calendar — read from persisted settings so the operator can
 // add/edit/remove entries from the admin UI. settings.load() seeds
 // FESTIVAL_DEFAULTS when the key is absent; an emptied list stays empty
-// (the operator turned the calendar off), so no fallback here.
-const DAY_MS = 24 * 60 * 60 * 1000;
-
+// (the operator turned the calendar off), so no fallback here. Whether one is
+// on is festivalActiveOn (schemas/settings.ts), the rule the admin panel's
+// "now" badge runs too. Overlapping festivals: the first in list order wins.
 export function getFestivalContext(date = new Date()) {
-  const { year: y, month: m, day: d } = zonedParts(date);
-  const today = Date.UTC(y, m - 1, d);
+  const today = zonedParts(date);
   for (const f of getSettings().festivals ?? []) {
-    const window = f.windowDays || 0;
-    // Compare real dates so the window spans month and year boundaries
-    // (New Year's Day with windowDays 3 is active from Dec 29). Adjacent
-    // years cover a window reaching across Dec 31 / Jan 1.
-    for (const yy of [y - 1, y, y + 1]) {
-      if (Math.abs(Date.UTC(yy, f.month - 1, f.day) - today) <= window * DAY_MS) {
-        return { name: f.name, mood: f.mood, description: f.description || '' };
-      }
+    if (festivalActiveOn(f, today)) {
+      return { name: f.name, mood: f.mood, description: f.description || '' };
     }
   }
   return null;
