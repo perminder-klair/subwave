@@ -378,7 +378,7 @@ export async function livePickerScope(queue: any, { audioWaypoint = null, showAt
   // below and, when small, becomes the showPoolTracks source.
   const showLibraryPool = await timePhase('pick.showLibraryPool', () => strictShowLibraryPoolSliced(library.candidateFilterTrackBatches(), {
     show: activeShow, excludedIds, resolvedGenres: genreLock ?? [], minTrackSec, maxTrackSec,
-  }));
+  }, library.candidateFilterTracks));
   const noRepeat = timePhase('pick.noRepeatGuard', () => showNoRepeatGuard(
     settings.get().llm?.noRepeatWindow ?? 0,
     librarySize,

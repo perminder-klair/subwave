@@ -718,7 +718,7 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
       // Same catalogue the agent path sizes its window from.
       showLibraryPool: await strictShowLibraryPoolSliced(library.candidateFilterTrackBatches(), {
         show: activeShow, excludedIds, resolvedGenres: strictGenreResolution.genres, minTrackSec, maxTrackSec,
-      }),
+      }, library.candidateFilterTracks),
     },
   );
   const effN = noRepeat.window;

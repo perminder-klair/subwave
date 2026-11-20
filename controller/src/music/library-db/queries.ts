@@ -374,19 +374,30 @@ function candidateFilterTrack(row: CandidateFilterRow): ReturnType<typeof candid
   };
 }
 
-// Build strict-show pools pagewise so large libraries don't block the
-// controller while SQLite reads and row projections run.
+// Rows per page of the paged strict-show scan: small enough that one page's
+// read and row mapping is a short slice of the event loop, large enough that a
+// 50k-track library is ~100 pages rather than thousands of setImmediate hops.
+export const CANDIDATE_FILTER_PAGE_ROWS = 500;
+
+// candidateFilterTracks()'s projection, read in rowid pages with a yield
+// between them, so a strict-show pool build doesn't block the controller for
+// the whole catalogue. Pages are not one snapshot. A restore or reset between
+// pages swaps or closes the handle, and the next page throws rather than read
+// a closed statement or splice two libraries: the caller falls back to the
+// whole synchronous read (strictShowLibraryPoolSliced).
 export async function* candidateFilterTrackBatches(): AsyncGenerator<ReturnType<typeof candidateFilterTracks>> {
-  const stmt = requireDb().prepare(`SELECT rowid AS candidate_rowid, id, title, artist, year, original_year,
+  const handle = requireDb();
+  const stmt = handle.prepare(`SELECT rowid AS candidate_rowid, id, title, artist, year, original_year,
     is_compilation, era_untrusted, genres, genre, moods, audio_moods, energy, duration_sec,
     vocal_ranges_json, ${SQL_TAIL_VOCAL_RANGES} AS tail_vocal_ranges_json, explicit_status
     FROM tracks WHERE rowid > ? ORDER BY rowid LIMIT ?`);
   let after = 0;
   while (true) {
-    const rows = stmt.all(after, 500) as Array<CandidateFilterRow & { candidate_rowid: number }>;
+    if (requireDb() !== handle) throw new Error('library-db reopened during a paged candidate scan');
+    const rows = stmt.all(after, CANDIDATE_FILTER_PAGE_ROWS) as Array<CandidateFilterRow & { candidate_rowid: number }>;
     if (!rows.length) return;
-    yield rows.map(candidateFilterTrack);
     after = rows.at(-1)!.candidate_rowid;
+    yield rows.map(candidateFilterTrack);
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
 }
