@@ -37,6 +37,7 @@ Each one records a measured failure.
 - Back-to-back jingles carry `queuedSec`; only a jingle shorter than the crossfade holds the next one back. Presses queued together do not burst (`request.queue` resolves one ahead); it bites on back-to-back rotate jingles and on a gated press with another one resolved behind it.
 - The `jingles` playlist keeps `id="jingles"` and the stdlib server commands. Renaming it or setting `register_server_commands=false` makes the controller's `jingles.reload` answer "unknown command", which the controller silently reads as "no rotate".
 - On a jingle seam the incoming gestures stand down (`not jingle_out`), and a jingle is never blended: the seam is a `sequence`, the one exception to the full-buffer blend.
+- A jingle seam builds no operator it does not air: `dj_transition` hands it the raw `a.source`/`b.source` and skips the faded, effected and delayed `a_source`/`b_source`, because an unconnected operator leaks a clock (`dj_transition`'s comment, `scripts/fx-render-test.sh orphans`, #2372).
 
 **Transitions**
 - Fade duration equals the buffer (`d` is what is actually buffered); shorter fades in a fixed buffer sum to +6 dB. There are two measured exceptions: the chop's incoming fade runs on `chop_dd`, and a stem-blend clip seam fades both sides over the cue lead.
@@ -66,4 +67,4 @@ Each one records a measured failure.
 
 ## Testing
 
-`scripts/fx-render-test.sh` (`xchain`, `loopcheck`, `loopgaps`, `jingledry`, `jingleseam`) and `scripts/stem-seam-test.sh` render lifted copies of this file's blocks in Docker. A harness that has drifted from `radio.liq` proves nothing: `controller/scripts/dissolve-wash-shape.test.ts` and `transition-mixer-seams.test.ts` pin the mirrored harness copies to it, and `stem-seam-cues.test.ts` covers the stem-seam harness. `jingle-play.test.ts` pins radio.liq's jingle code directly. A harness that tests the dead-air guard must build the duck and bed `add`s; `output.dummy` on the bare rotate is how a false claim shipped once.
+`scripts/fx-render-test.sh` (`xchain`, `loopcheck`, `loopgaps`, `jingledry`, `jingleseam`, `orphans`) and `scripts/stem-seam-test.sh` render lifted copies of this file's blocks in Docker. A harness that has drifted from `radio.liq` proves nothing: `controller/scripts/dissolve-wash-shape.test.ts` and `transition-mixer-seams.test.ts` pin the mirrored harness copies to it, and `stem-seam-cues.test.ts` covers the stem-seam harness. `jingle-play.test.ts` pins radio.liq's jingle code directly. A harness that tests the dead-air guard must build the duck and bed `add`s; `output.dummy` on the bare rotate is how a false claim shipped once.

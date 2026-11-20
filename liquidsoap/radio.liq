@@ -880,14 +880,16 @@ def dj_transition(a, b) =
   # not free an operator that was built but never wired in: each one stays
   # behind as its own never-started clock (`source.dynamic` + `track_audio_amplify`
   # + `fade_in`/`fade_out`, ticks 0 in `clock.dump`) and the stream clock scans
-  # every one of them each frame. About 3 leaked per jingle cycle, 1,478 after
-  # 8 days, until the clock could no longer run in real time and reset the
-  # outputs every ~4 minutes. So a jingle seam builds only what it uses: the
-  # outgoing washout/loop gestures stand down when the outgoing side is a
-  # jingle, a_source is the raw a.source then, and b_source is the raw b.source
-  # on every jingle seam. (scripts/fx-render-test.sh orphans)
-  washing = a.metadata["liq_washout"] == "true" and not boundary_fading and not jingle_out
-  looping = a.metadata["liq_loop"] == "true" and not washing and not boundary_fading and not jingle_out
+  # every one of them each frame. About 3 leaked per jingle cycle; one station
+  # held 1,475 after 22 days, when the clock could no longer run in real time
+  # and reset its outputs about 100 times a day (#2372). So a jingle seam builds
+  # only what it airs: a_source is the raw a.source when the outgoing side is a
+  # jingle, b_source is the raw b.source on every jingle seam, and the clip
+  # seam's delay (b_delay) is not built on one. The outgoing washout/loop never
+  # arm then either: a jingle never carries their flags.
+  # (scripts/fx-render-test.sh orphans)
+  washing = a.metadata["liq_washout"] == "true" and not boundary_fading
+  looping = a.metadata["liq_loop"] == "true" and not washing and not boundary_fading
   sweeping = b.metadata["liq_sweep"] == "true" and not looping and not boundary_fading and not jingle_out
   dissolving = b.metadata["liq_dissolve"] == "true" and not washing and not looping and not boundary_fading and not jingle_out
   chopping = b.metadata["liq_chop"] == "true" and not washing and not looping and not boundary_fading and not jingle_out
@@ -1512,7 +1514,7 @@ def dj_transition(a, b) =
       b_source
     end
   b_source =
-    if b_delay > 0. then
+    if b_delay > 0. and not (jingle_in or jingle_out) then
       sequence(merge=true, [blank(duration=b_delay), b_source])
     else
       b_source
