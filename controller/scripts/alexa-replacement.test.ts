@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, rename, rmdir } from 'node:fs/promises';
+import { mkdir, readFile, rename, rmdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { afterEach, beforeEach, mock, type TestContext } from 'node:test';
@@ -13,7 +13,7 @@ const { queue } = await import('../src/broadcast/queue.js');
 const { requestAgent } = await import('../src/broadcast/dj-agent/agents.js');
 const ledger = await import('../src/broadcast/request-ledger.js');
 const { commitGlobalRateLimit } = await import('../src/middleware/ratelimit.js');
-const { submitListenerRequest, replaceLatestAlexaRequest, getLatestAlexaRequestStatus } = await import('../src/routes/request.js');
+const { submitListenerRequest, replaceLatestAlexaRequest, getLatestAlexaRequestStatus, reconcileRequestLedger } = await import('../src/routes/request.js');
 
 let now = Date.now();
 beforeEach(async () => {
@@ -136,6 +136,54 @@ test('a replacement reuses its own waiting slot and reserves the last hourly slo
   assert.equal(ledger.get(id)?.status, 'cancelled');
   assert.equal(ledger.latestForAlexa(identity)?.id, result.requestId);
   assert.deepEqual(queue.upcoming.map(item => item.requestId), [result.requestId]);
+});
+
+test('ledger persistence failure after player removal fails closed and startup reconciliation agrees with the queue', async t => {
+  const identity = 'ledger-commit-failure';
+  const oldId = await queued(t, identity);
+  const backup = ledger.ledgerPath + '.backup';
+  const remove = queue.removeUpcomingRequest.bind(queue);
+  let blocked = false;
+  t.mock.method(queue, 'removeUpcomingRequest', async (requestId: string) => {
+    const result = await remove(requestId);
+    if (result.ok && !blocked) {
+      blocked = true;
+      await rename(ledger.ledgerPath, backup);
+      await mkdir(ledger.ledgerPath);
+    }
+    return result;
+  });
+
+  try {
+    const result = await replaceLatestAlexaRequest(identity, 'Replacement song');
+    assert.ok(blocked, 'the player removed the old item before ledger persistence failed');
+    assert.ok(!result.accepted, 'must not acknowledge a replacement whose receipt could not be committed');
+    assert.equal(result.statusCode, 500);
+    assert.deepEqual(queue.upcoming, []);
+    assert.equal(ledger.latestForAlexa(identity)?.id, oldId, 'failed swap must not publish the staged receipt as latest');
+  } finally {
+    await rmdir(ledger.ledgerPath).catch(() => {});
+    await rename(backup, ledger.ledgerPath);
+  }
+
+  const durableBeforeRecovery = JSON.parse(await readFile(ledger.ledgerPath, 'utf8'));
+  const staged = durableBeforeRecovery.records.find((row: { id: string }) => row.id !== oldId);
+  const previous = ledger.latestForAlexa(identity);
+  assert.ok(staged, 'staged replacement remains represented until recovery can settle it');
+  assert.ok(previous?.alexaIdentity);
+  assert.equal(durableBeforeRecovery.latestAlexa[previous.alexaIdentity], oldId);
+  assert.deepEqual(durableBeforeRecovery.replacementRecovery, {
+    previousId: oldId,
+    replacementId: staged.id,
+    identity: previous.alexaIdentity,
+  }, 'the durable journal lets restart reconciliation distinguish whether the player released the old item');
+
+  await reconcileRequestLedger();
+  assert.equal(ledger.get(oldId)?.status, 'interrupted');
+  assert.equal(ledger.get(staged.id)?.status, 'interrupted');
+  assert.equal(ledger.latestForAlexa(identity)?.id, oldId);
+  assert.equal(getLatestAlexaRequestStatus(identity)?.phase, 'interrupted');
+  assert.deepEqual(queue.upcoming, []);
 });
 
 test('a refused replacement keeps its pending predecessor resolving', async t => {

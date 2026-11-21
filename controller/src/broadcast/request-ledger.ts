@@ -56,6 +56,7 @@ interface StoredLedger {
   salt: string;
   records: RequestLedgerRecord[];
   latestAlexa: Record<string, string>;
+  replacementRecovery: { previousId: string; replacementId: string; identity: string } | null;
 }
 
 const LEDGER_PATH = `${STATE_DIR}/request-ledger.json`;
@@ -68,6 +69,7 @@ function blankStore(): StoredLedger {
     salt: randomBytes(24).toString('hex'),
     records: [],
     latestAlexa: {},
+    replacementRecovery: null,
   };
 }
 
@@ -84,6 +86,12 @@ function loadStore(): StoredLedger {
       latestAlexa: parsed.latestAlexa && typeof parsed.latestAlexa === 'object'
         ? { ...parsed.latestAlexa } as Record<string, string>
         : {},
+      replacementRecovery: parsed.replacementRecovery
+        && typeof parsed.replacementRecovery.previousId === 'string'
+        && typeof parsed.replacementRecovery.replacementId === 'string'
+        && typeof parsed.replacementRecovery.identity === 'string'
+        ? { ...parsed.replacementRecovery }
+        : null,
     };
   } catch {
     return blankStore();
@@ -178,16 +186,70 @@ export async function discardUnclaimedPending(id: string) {
   await persist();
 }
 
-// Publish both sides of the swap in the same ledger snapshot. Until player
-// removal succeeds, the owner's latest pointer still names the original.
-export function recordCancellation(id: string, replacement?: { id: string; identity: string }) {
-  if (replacement) {
-    const row = get(replacement.id);
-    if (!row || row.status !== 'pending' || row.alexaIdentity) throw new Error('Missing staged replacement');
-    row.alexaIdentity = replacement.identity;
-    store.latestAlexa[replacement.identity] = row.id;
+// A durable intent bridges the player-removal side effect and the final
+// receipt swap. If the controller stops or the final ledger write fails after
+// removal, startup can settle both receipts from the queue's known request ids.
+export async function beginReplacementRecovery(previousId: string, replacementId: string, identity: string) {
+  const previous = get(previousId);
+  const next = get(replacementId);
+  if (!previous || !next || next.status !== 'pending' || next.alexaIdentity) {
+    throw new Error('Missing receipt for replacement recovery');
   }
-  return update(id, { status: 'cancelled', outcome: 'cancelled', message: 'Cancelled by listener.', reminder: null });
+  if (store.replacementRecovery) throw new Error('Another replacement recovery is already in progress');
+  const transaction = { previousId, replacementId, identity };
+  store.replacementRecovery = transaction;
+  try {
+    await persist();
+  } catch (error) {
+    store.replacementRecovery = null;
+    throw error;
+  }
+}
+
+export async function abortReplacementRecovery(previousId: string, replacementId: string) {
+  const current = store.replacementRecovery;
+  if (!current || current.previousId !== previousId || current.replacementId !== replacementId) return;
+  store.replacementRecovery = null;
+  try {
+    await persist();
+  } catch (error) {
+    store.replacementRecovery = current;
+    throw error;
+  }
+}
+
+// Publish both sides of a replacement in one ledger snapshot. A failed write
+// rolls the in-memory mutation back too, so callers can fail closed without
+// pointing the identity at a replacement the durable ledger never recorded.
+export async function recordCancellation(id: string, replacement?: { id: string; identity: string }) {
+  const previous = get(id);
+  if (!previous) return null;
+  if (!replacement) {
+    return update(id, { status: 'cancelled', outcome: 'cancelled', message: 'Cancelled by listener.', reminder: null });
+  }
+
+  const next = get(replacement.id);
+  if (!next || next.status !== 'pending' || next.alexaIdentity) throw new Error('Missing staged replacement');
+  const previousRecord = { ...previous };
+  const nextRecord = { ...next };
+  const previousLatestId = store.latestAlexa[replacement.identity];
+  const recovery = store.replacementRecovery;
+  if (recovery && (recovery.previousId !== id || recovery.replacementId !== replacement.id || recovery.identity !== replacement.identity)) {
+    throw new Error('Replacement recovery does not match the receipt swap');
+  }
+  next.alexaIdentity = replacement.identity;
+  store.latestAlexa[replacement.identity] = next.id;
+  store.replacementRecovery = null;
+  try {
+    return await update(id, { status: 'cancelled', outcome: 'cancelled', message: 'Cancelled by listener.', reminder: null });
+  } catch (error) {
+    Object.assign(previous, previousRecord);
+    Object.assign(next, nextRecord);
+    if (previousLatestId) store.latestAlexa[replacement.identity] = previousLatestId;
+    else delete store.latestAlexa[replacement.identity];
+    store.replacementRecovery = recovery;
+    throw error;
+  }
 }
 
 export async function update(id: string, patch: Partial<Omit<RequestLedgerRecord, 'id' | 'createdAt'>>) {
@@ -258,7 +320,46 @@ export function latestForAlexa(identity: string): RequestLedgerRecord | null {
 
 /** Mark uncertain pending work as interrupted during startup reconciliation. */
 export async function interruptUnresolved(knownRequestIds: Set<string>) {
+  const recordsBefore = store.records.slice();
+  const snapshots = new Map(recordsBefore.map(row => [row, { ...row }]));
+  const latestBefore = { ...store.latestAlexa };
+  const recoveryBefore = store.replacementRecovery;
   let changed = false;
+  const recovery = store.replacementRecovery;
+  if (recovery) {
+    const previous = get(recovery.previousId);
+    const next = get(recovery.replacementId);
+    if (knownRequestIds.has(recovery.previousId)) {
+      // The player did not release the old request. Keep it as the listener's
+      // latest and fail the staged replacement, which was never submitted.
+      if (previous?.alexaIdentity) store.latestAlexa[recovery.identity] = previous.id;
+      if (next) {
+        next.status = 'failed';
+        next.outcome = 'error';
+        next.message = 'Replacement was not accepted because the previous request remained queued.';
+        next.updatedAt = Date.now();
+      }
+    } else {
+      // The old queue item is gone but the final receipt swap did not commit.
+      // No replacement was submitted, so neither receipt may claim it is queued.
+      if (previous) {
+        previous.status = 'interrupted';
+        previous.outcome = 'interrupted';
+        previous.message = 'The request left the queue before its replacement could be recorded.';
+        previous.reminder = null;
+        previous.updatedAt = Date.now();
+        store.latestAlexa[recovery.identity] = previous.id;
+      }
+      if (next) {
+        next.status = 'interrupted';
+        next.outcome = 'interrupted';
+        next.message = 'Replacement was not accepted because its queue change could not be recorded.';
+        next.updatedAt = Date.now();
+      }
+    }
+    store.replacementRecovery = null;
+    changed = true;
+  }
   for (const row of store.records) {
     if (row.status === 'pending' && !knownRequestIds.has(row.id)) {
       row.status = 'interrupted';
@@ -267,7 +368,17 @@ export async function interruptUnresolved(knownRequestIds: Set<string>) {
       changed = true;
     }
   }
-  if (changed) await persist();
+  if (changed) {
+    try {
+      await persist();
+    } catch (error) {
+      store.records = recordsBefore;
+      for (const [row, snapshot] of snapshots) Object.assign(row, snapshot);
+      store.latestAlexa = latestBefore;
+      store.replacementRecovery = recoveryBefore;
+      throw error;
+    }
+  }
 }
 
 export const ledgerPath = LEDGER_PATH;

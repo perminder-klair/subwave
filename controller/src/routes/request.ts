@@ -118,7 +118,7 @@ function queueStatusFor(id: string): { phase: RequestPhase; queuePosition?: numb
 
 function statusFromEntry(entry: any): ListenerRequestStatus {
   const queueState = queueStatusFor(entry.id);
-  const phase = queueState?.phase || (entry.status === 'resolved' ? 'resolved' : entry.status);
+  const phase = queueState?.phase || entry.phase || (entry.status === 'resolved' ? 'resolved' : entry.status);
   return {
     status: entry.status === 'pending' ? 'pending' : entry.status === 'cancelled' ? 'cancelled' : entry.status === 'failed' ? 'failed' : 'resolved',
     success: entry.status === 'resolved',
@@ -139,7 +139,7 @@ function statusFromRecord(record: requestLedger.RequestLedgerRecord): ListenerRe
   const queueState = queueStatusFor(record.id);
   const phase = queueState?.phase || (record.status === 'pending' ? 'pending' : record.status);
   return {
-    status: record.status === 'pending' ? 'pending' : record.status === 'cancelled' ? 'cancelled' : record.status === 'failed' ? 'failed' : 'resolved',
+    status: record.status === 'pending' ? 'pending' : record.status === 'cancelled' ? 'cancelled' : record.status === 'resolved' ? 'resolved' : 'failed',
     success: record.status === 'resolved',
     requestId: record.id,
     phase,
@@ -921,6 +921,9 @@ async function admitListenerRequest(input: ListenerRequestInput, replacementId?:
       });
       if (replacementId && input.alexaIdentity) {
         const cancelled = await cancelRequestById(replacementId, { id, identity: input.alexaIdentity });
+        if (cancelled?.outcome === 'replacement-ledger-error') {
+          return { accepted: false, statusCode: 500, message: cancelled.message || 'The replacement could not be safely recorded.' };
+        }
         if (cancelled?.phase !== 'cancelled') {
           requests.delete(id);
           await requestLedger.discardUnclaimedPending(id);
@@ -1004,9 +1007,60 @@ async function cancelRequestById(id: string, replacement?: { id: string; identit
   const entry = requests.get(id);
   const current = getListenerRequestStatus(id);
   if (current.status === 'unknown' || !['pending', 'queued'].includes(current.phase || '')) return current;
+  if (replacement && current.phase === 'queued') {
+    try {
+      await requestLedger.beginReplacementRecovery(id, replacement.id, replacement.identity);
+    } catch (error) {
+      queue.log('error', `replacement recovery journal could not be written: ${String(error)}`);
+      requests.delete(replacement.id);
+      await requestLedger.discardUnclaimedPending(replacement.id)
+        .catch(cleanupError => queue.log('error', `staged replacement cleanup failed: ${String(cleanupError)}`));
+      return {
+        ...current,
+        outcome: 'replacement-ledger-error',
+        message: 'The replacement could not be safely recorded; your previous request is still queued.',
+      };
+    }
+  }
   if (current.phase === 'queued') {
     const removed = await queue.removeUpcomingRequest(id);
-    if (!removed.ok) return getListenerRequestStatus(id);
+    if (!removed.ok) {
+      if (replacement) {
+        await requestLedger.abortReplacementRecovery(id, replacement.id)
+          .catch(error => queue.log('error', `replacement recovery journal cleanup failed: ${String(error)}`));
+      }
+      return getListenerRequestStatus(id);
+    }
+  }
+  if (replacement) {
+    try {
+      const cancelled = await requestLedger.recordCancellation(id, replacement);
+      if (!cancelled) throw new Error('Previous request receipt was not found');
+    } catch (error) {
+      const message = current.phase === 'queued'
+        ? 'The previous request was removed, but the replacement could not be safely recorded.'
+        : 'The replacement could not be recorded; your previous request is still active.';
+      if (entry && current.phase === 'queued') {
+        entry.status = 'failed';
+        entry.phase = 'interrupted';
+        entry.outcome = 'interrupted';
+        entry.message = message;
+        entry.reminder = null;
+        if (lastByIp.get(entry.clientKey) === entry) lastByIp.delete(entry.clientKey);
+      }
+      requests.delete(replacement.id);
+      if (current.phase !== 'queued') {
+        await requestLedger.discardUnclaimedPending(replacement.id)
+          .catch(recoveryError => queue.log('error', `staged replacement cleanup failed: ${String(recoveryError)}`));
+      }
+      queue.log('error', `request ledger replacement save failed: ${String(error)}`);
+      if (entry && current.phase === 'queued') recordOutcome(entry);
+      return {
+        ...getListenerRequestStatus(id),
+        outcome: 'replacement-ledger-error',
+        message,
+      };
+    }
   }
   // Pending resolution observes cancellation before its next queue write.
   // For an existing item, ownership changes only once the player releases it.
@@ -1017,8 +1071,10 @@ async function cancelRequestById(id: string, replacement?: { id: string; identit
     entry.reminder = null;
     if (lastByIp.get(entry.clientKey) === entry) lastByIp.delete(entry.clientKey);
   }
-  await requestLedger.recordCancellation(id, replacement)
-    .catch(error => queue.log('error', `request ledger cancellation save failed: ${String(error)}`));
+  if (!replacement) {
+    await requestLedger.recordCancellation(id)
+      .catch(error => queue.log('error', `request ledger cancellation save failed: ${String(error)}`));
+  }
   if (entry) recordOutcome(entry);
   return getListenerRequestStatus(id);
 }
