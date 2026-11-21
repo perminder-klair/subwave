@@ -300,6 +300,26 @@ test('cancelling an accepted Alexa request while the model is resolving leaves t
   assert.equal(queue.upcoming.length, 0);
 });
 
+test('cancellation during the agent enqueue wait cannot queue the resolved track', async t => {
+  let cancellation: Promise<any> | undefined;
+  t.mock.method(requestAgent, 'run', async () => {
+    // The first microtask lets the agent pass its pre-wait cancellation check;
+    // the second runs while waitForCancellation is suspended.
+    queueMicrotask(() => queueMicrotask(() => {
+      cancellation = cancelLatestAlexaRequest('cancel-during-enqueue-wait');
+    }));
+    return answer(confirmed);
+  });
+
+  const receipt = await submit('cancel-during-enqueue-wait');
+  const result = await receipt.completion;
+  assert.ok(cancellation, 'the cancellation must run during the enqueue wait');
+  assert.equal((await cancellation)?.phase, 'cancelled');
+  assert.equal(result.phase, 'cancelled');
+  assert.deepEqual(queue.upcoming, []);
+  assert.equal(ledger.get(receipt.requestId)?.status, 'cancelled');
+});
+
 test('an aged pending receipt remains cancellable after another submission prunes the request map', async t => {
   const started = deferred();
   const release = deferred();

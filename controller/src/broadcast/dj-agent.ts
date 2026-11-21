@@ -2118,6 +2118,10 @@ async function runRequestViaAgent(queue: any, { requester, text, alexa }: Reques
     // awaited lookup, re-pick and intro rewrite, immediately before insertion.
     if (alexa?.isCancelled()) return null;
     if (alexa && await alexa.waitForCancellation?.()) return null;
+    // The wait itself yields to CancelRequestIntent. Recheck immediately after
+    // it and keep this check adjacent to push: queue.push inserts synchronously,
+    // so no cancellation can interleave between this decision and insertion.
+    if (alexa?.isCancelled()) return null;
     const pos = await queue.push({
       track: trackFields(song),
       ...(alexa && { requestId: alexa.requestId, dedication }),
