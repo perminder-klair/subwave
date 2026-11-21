@@ -162,6 +162,7 @@ const NAV_SECTIONS: NavSection[] = [
         children: [
           { href: '/admin/playlists', id: 'playlists', label: 'Playlists', icon: ListMusic },
           { href: '/observatory', id: 'observatory', label: 'Observatory', icon: Telescope },
+          { href: '/admin/library/sub-flow', id: 'sub-flow', label: 'Sub/Flow', icon: AudioLines },
         ],
       },
       {
@@ -252,6 +253,7 @@ const FOOTER_LINKS: { href: string; label: string; icon: NavIcon; pill: string }
 // Playlists, DJ Doc and Stations aren't sidebar items, so they're resolved
 // explicitly; their crumb sections mirror where the rail stays lit.
 function resolveCrumb(pathname: string | null): { section?: string; page: string } {
+  if (pathname?.startsWith('/admin/library/sub-flow')) return { section: 'Library', page: 'Sub/Flow' };
   if (pathname?.startsWith('/admin/playlists')) return { section: 'Programming', page: 'Playlists' };
   if (pathname?.startsWith('/admin/shows/schedule')) return { section: 'Programming', page: 'Schedule' };
   if (pathname?.startsWith('/admin/doctor')) return { section: 'Monitor', page: 'DJ Doc' };

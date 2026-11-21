@@ -24,6 +24,7 @@ import { migrateImportedPersona } from '../personas/import-migration.js';
 import { requireAdmin } from '../middleware/auth.js';
 import * as jingles from '../broadcast/jingles.js';
 import * as sfx from '../broadcast/sfx.js';
+import * as subFlows from '../music/sub-flow.js';
 import * as blocklist from '../music/blocklist.js';
 import { clearWalk } from '../music/library-walk.js';
 import {
@@ -48,7 +49,7 @@ const RESTORABLE = new Set<string>([...INCLUDE_FILES, ...INCLUDE_DIRS]);
 // through the skill import's guards, so any tool.mjs arrives quarantined.
 // blocklist.json goes through blocklist.restore (the boot parser, and the live
 // in-memory list, which a file copy would leave stale until a restart).
-const ROUTED_FILES = new Set<string>(['jingles.json', 'jingles.m3u', 'sfx.json', 'blocklist.json']);
+const ROUTED_FILES = new Set<string>(['jingles.json', 'jingles.m3u', 'sfx.json', 'sub-flows.json', 'blocklist.json']);
 
 // manifest.json, settings.json, a theme and a sidecar are read into memory, so
 // each is bounded by its DECLARED size before it is inflated. Generous: a
@@ -170,6 +171,12 @@ async function applyBackupZip(body: Buffer): Promise<RestoreOutcome> {
   // The routed members, read and checked before anything is written, so a bad
   // one refuses the restore rather than landing half of it.
   const sidecars: { file: 'jingles.json' | 'sfx.json'; data: unknown }[] = [];
+  const flowBackup = readJsonMember(zip, 'sub-flows.json');
+  if (flowBackup && 'error' in flowBackup) return { ok: false, status: 400, error: `${flowBackup.error} in backup` };
+  if (flowBackup && 'data' in flowBackup) {
+    try { subFlows.validateBackup(flowBackup.data); }
+    catch { return { ok: false, status: 400, error: 'invalid sub-flows.json in backup' }; }
+  }
   for (const file of ['jingles.json', 'sfx.json'] as const) {
     const read = readJsonMember(zip, file);
     if (!read) continue;
@@ -233,6 +240,10 @@ async function applyBackupZip(body: Buffer): Promise<RestoreOutcome> {
         : await sfx.restoreMeta(data);
       for (const name of dropped) skipped.push(`${file}: "${name}" is not a usable entry`);
       restored.push(file);
+    }
+    if (flowBackup && 'data' in flowBackup) {
+      subFlows.restore(flowBackup.data);
+      restored.push('sub-flows.json');
     }
     if (blocklistDoc !== undefined) {
       const { dropped } = await blocklist.restore(blocklistDoc);

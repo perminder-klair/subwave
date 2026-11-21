@@ -378,7 +378,7 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
         });
         const body = await res.json().catch(() => null);
         if (!res.ok) return { ok: false, message: body?.error || `queue failed (${res.status})` };
-        return { ok: true, message: 'queued' };
+        return { ok: true, message: body?.flow ? `Queued Flow “${body.flow.name}” · ${body.flow.size} tracks starting with “${body.track.title}”` : 'queued' };
       } catch (err) {
         return { ok: false, message: err instanceof Error ? err.message : 'queue failed' };
       }
