@@ -647,6 +647,12 @@ downbeat for 69% of clips, against 12% for the old grid
 while loaded
 (`ANALYZE_DOWNBEAT_THREADS` sets the cores). BPM and key don't change.
 
+On the licence: Beat This!'s code and weights are MIT, but upstream says some
+of its training audio is copyrighted
+([CPJKU/beat_this#18](https://github.com/CPJKU/beat_this/issues/18),
+[#21](https://github.com/CPJKU/beat_this/issues/21)). That is why it stays
+opt-in, and why it will be looked at again before it is ever on by default.
+
 Tracks analysed before you turned it on keep their old grid until they are
 analysed again. To redo just the grids (head and tail windows, no CLAP or
 Demucs):
