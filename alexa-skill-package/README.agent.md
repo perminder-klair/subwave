@@ -359,7 +359,7 @@ Representative Hindi/Hinglish phrases include:
 | --- | --- | --- |
 | `AMAZON.HelpIntent` | “help” | Explains supported radio commands. |
 | `AMAZON.StopIntent` | “stop” | Stops the skill/audio session. |
-| `AMAZON.CancelIntent` | “cancel” | Cancels the current Alexa interaction; do not confuse it with the custom request cancellation. |
+| `AMAZON.CancelIntent` | “cancel” | Stops playback and remains available when optional listener actions are disabled. |
 | `AMAZON.PauseIntent` | “pause” | Pauses audio when supported by the active session. |
 | `AMAZON.ResumeIntent` | “resume” | Resumes paused audio. |
 | `AMAZON.FallbackIntent` | An unrelated phrase | Confirms that the request was not understood and gives a useful recovery prompt. |
@@ -387,7 +387,8 @@ locale and record the response, HTTP result, and backend log correlation.
 - `AMAZON.PauseIntent`: pause an active stream.
 - `AMAZON.ResumeIntent`: resume it.
 - `AMAZON.StopIntent`: stop the session/audio.
-- `AMAZON.CancelIntent`: cancel an in-progress Alexa dialogue.
+- `AMAZON.CancelIntent`: stop playback; it is required behavior and cannot be disabled.
+- `CancelRequestIntent`: cancel the listener's latest waiting song request; this action is configurable.
 - `AMAZON.FallbackIntent`: send an unrelated phrase.
 - `AMAZON.YesIntent` and `AMAZON.NoIntent`: run only where a confirmation prompt
   exists.

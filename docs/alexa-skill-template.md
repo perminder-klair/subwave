@@ -31,6 +31,29 @@ The script generates these files locally:
 The generated files and `alexa-skill-package/alexa.env` are ignored by Git. The
 tracked `.template` files contain only neutral tokens.
 
+The tracked package layout is:
+
+```text
+alexa-skill-package/
+├── README.md
+├── README.agent.md
+├── alexa.env.example
+├── skill.json.template
+└── interactionModels/
+    └── custom/
+        ├── en-IN.json.template
+        ├── en-US.json.template
+        └── hi-IN.json.template
+```
+
+Generated `skill.json` and locale model JSON files are local build outputs and
+are ignored by Git. The controller's Alexa runtime dependencies are documented
+in [Alexa voice control](alexa-skill.md#controller-runtime-packages).
+
+The built-in `AMAZON.CancelIntent` stops playback and is always available.
+`CancelRequestIntent` is the separate listener capability for cancelling the
+listener's latest waiting request.
+
 The preparation script checks the endpoint format and common Alexa invocation
 name restrictions before generating JSON. Alexa/ASK validation remains the
 final authority for locale-specific naming rules.

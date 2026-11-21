@@ -64,7 +64,7 @@ The exact console labels can change, but the required values are:
    | `AMAZON.ResumeIntent` | use the built-in intent |
    | `AMAZON.PauseIntent` | use the built-in intent |
    | `AMAZON.StopIntent` | use the built-in intent |
-   | `AMAZON.CancelIntent` | use the built-in intent |
+   | `AMAZON.CancelIntent` | use the built-in intent; stops radio playback |
    | `AMAZON.HelpIntent` | use the built-in intent |
    | `AMAZON.FallbackIntent` | use the built-in intent |
 
@@ -95,6 +95,11 @@ The exact console labels can change, but the required values are:
 | `Alexa, pause Subwave Radio` | Stops the live stream and says `Radio paused.` |
 | `Alexa, resume Subwave Radio` | Starts the stream again at the current live edge |
 | `Alexa, stop Subwave Radio` | Stops playback and says `Radio stopped.` |
+| `Alexa, cancel` | Stops playback; this required built-in action cannot be disabled by listener intent policy |
+
+`CancelRequestIntent` is the separate, configurable action that cancels the
+listener's latest waiting song request. `AMAZON.CancelIntent` stops playback
+and remains available even when optional listener capabilities are disabled.
 
 Live radio has no seekable recording position. Resume therefore starts a fresh
 connection at the live edge; it cannot resume the same song position.
@@ -119,6 +124,19 @@ at request time, so a name change is reflected without restarting the controller
 - One station deployment maps to one skill and one selected public stream URL. A
   multi-station directory, random station selection, and “next station” are not
   part of this first version.
+
+## Controller runtime packages
+
+The controller declares these Alexa SDK packages directly:
+
+- `ask-sdk-core` 2.14.0
+- `ask-sdk-express-adapter` 2.14.0
+- `ask-sdk-model` 1.86.0
+
+The adapter also brings `node-forge` 1.4.3 and a nested `body-parser` 1.x
+dependency, resolved as 1.20.9 in the current lockfile. `ask-sdk-core` brings
+`ask-sdk-runtime` 2.14.0 transitively. These versions are recorded in
+`controller/package-lock.json`.
 
 ## Acceptance checklist
 

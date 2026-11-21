@@ -1637,10 +1637,10 @@ router.get('/alexa/connection', requireAdmin, (_req, res) => {
   });
 });
 
-// This route shares the Alexa router with the raw-body skill webhook. The
-// router is mounted before the controller-wide JSON parser so Amazon's
-// signature verification sees the original bytes; parse this small admin-only
-// draft explicitly instead of letting it fall through as an empty object.
+// This route shares the Alexa router with the raw-body skill webhook.
+// configureHttp skips JSON parsing for the skill webhook so Amazon's signature
+// verification sees the original bytes; parse this small admin-only draft
+// explicitly instead of letting it fall through as an empty object.
 router.post('/alexa/connection/test', requireAdmin, express.json({ limit: '10kb' }), async (req, res) => {
   try {
     const saved = defaultRuntime().getSettings();

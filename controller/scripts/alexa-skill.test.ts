@@ -13,7 +13,12 @@ const { DEFAULTS } = await import('../src/settings/defaults.js');
 const { alexaPatchSchema } = await import('../src/schemas/settings.js');
 const { verifyAlexaStreamToken } = await import('../src/alexa/token.js');
 const { AlexaListenerFeatureService } = await import('../src/alexa/listener-features.js');
-const { decideAlexaCapability, normalizeAlexaIntentPolicy } = await import('../src/alexa/intent-policy.js');
+const {
+  alexaIntentCapabilities,
+  alexaIntentGroups,
+  decideAlexaCapability,
+  normalizeAlexaIntentPolicy,
+} = await import('../src/alexa/intent-policy.js');
 const { createAlexaSkill, router, testAlexaConnection } = await import('../src/routes/alexa.js');
 const { configureHttp, httpErrorHandler } = await import('../src/middleware/http.js');
 const { verifiedCandidateMatches } = await import('../src/routes/request.js');
@@ -105,6 +110,24 @@ test('Alexa intent policy normalizes unknown capabilities and keeps required beh
   assert.equal(decideAlexaCapability(policy, 'request.song').allowed, false);
   assert.equal(decideAlexaCapability(policy, 'playback.pause').allowed, true);
   assert.equal(decideAlexaCapability(policy, 'system.help').allowed, true);
+});
+
+test('Alexa cancel stops playback as required behavior, not request management', () => {
+  const capabilities = alexaIntentCapabilities();
+  const cancelRequest = capabilities.find(capability => capability.id === 'request.cancel');
+  const stopPlayback = capabilities.find(capability => capability.id === 'playback.stop');
+  const groups = alexaIntentGroups();
+  const requestManagement = groups.find(group => group.id === 'request-management');
+  const required = groups.find(group => group.id === 'required');
+
+  assert.deepEqual(cancelRequest?.intentNames, ['CancelRequestIntent']);
+  assert.equal(cancelRequest?.configurable, true);
+  assert.equal(stopPlayback?.intentNames.includes('AMAZON.CancelIntent'), true);
+  assert.equal(stopPlayback?.group, 'required');
+  assert.equal(stopPlayback?.configurable, false);
+  assert.equal(stopPlayback?.required, true);
+  assert.equal(requestManagement?.capabilities.some(capability => capability.intentNames.includes('AMAZON.CancelIntent')), false);
+  assert.equal(required?.capabilities.some(capability => capability.intentNames.includes('AMAZON.CancelIntent')), true);
 });
 
 test('Alexa intent policy survives a cold settings load and preserves granular choices', async () => {

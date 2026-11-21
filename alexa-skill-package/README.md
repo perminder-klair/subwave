@@ -356,8 +356,10 @@ reliable.
 - `AMAZON.NavigateHomeIntent`
 
 `AMAZON.YesIntent` and `AMAZON.NoIntent` are used when the skill asks for a
-confirmation. `AMAZON.CancelIntent` cancels the current Alexa interaction; it
-is separate from the custom `CancelRequestIntent`.
+confirmation. `AMAZON.CancelIntent` stops playback and remains available even
+when optional listener capabilities are disabled. The custom
+`CancelRequestIntent` is the separate action that cancels the listener's latest
+waiting request and can be controlled by the station's intent policy.
 
 `StartRadioIntent` and `PlayRadioIntent` are the explicit custom controls for
 starting or playing the radio. They are included in each locale template. Do
