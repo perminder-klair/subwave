@@ -2,11 +2,14 @@ import { researchGapsInDatabase } from './research-gaps.js';
 import {researchProgress,researchStorage} from './research-diagnostics.js';
 import { researchQueueDetails } from './research-worker.js';
 import type Database from 'better-sqlite3';
-import { geniusQueueReadout, researchStoreReadoutInDatabase, researchStoreExploreInDatabase, researchEntityDossierInDatabase } from './research-repository.js';
+import { geniusQueueReadout, researchStoreReadoutInDatabase, researchStoreExploreInDatabase, researchEntityDossierInDatabase, researchStoreSummaryInDatabase, researchStoreCoverageInDatabase } from './research-repository.js';
 import { liveNotesSummary } from './live-summary.js';
 import { heardOnAir } from './heard-on-air.js';
+import { brainCoverageInDatabase } from './brain-coverage.js';
+import { brainAlbumCoverageInDatabase, type BrainAlbumType } from './brain-album-research.js';
 
 export type DashboardRead = {kind:'explore'; input: Parameters<typeof researchStoreExploreInDatabase>[1]}
+  | {kind:'status'} | {kind:'brain-coverage'} | {kind:'brain-album-coverage'; entityType: BrainAlbumType; entityId: string}
   | {kind:'dossier'; entityType: Parameters<typeof researchEntityDossierInDatabase>[1]; entityId: string}
   | {kind:'research-gaps'} | {kind:'storage'} | { kind: 'readout'; queue?: boolean }
   | { kind: 'live-summary'; args: [Parameters<typeof liveNotesSummary>[0], Parameters<typeof liveNotesSummary>[1], Parameters<typeof liveNotesSummary>[2]] }
@@ -15,6 +18,9 @@ export type DashboardRead = {kind:'explore'; input: Parameters<typeof researchSt
 /** Pure reads: worker owns the read-only snapshot; no settings or queue mutations. */
 export function dashboardReadInDatabase(db: Database.Database, input: DashboardRead) {
   switch (input.kind) {
+    case 'status': return {summary:researchStoreSummaryInDatabase(db),coverage:researchStoreCoverageInDatabase(db)};
+    case 'brain-coverage': return brainCoverageInDatabase(db);
+    case 'brain-album-coverage': return brainAlbumCoverageInDatabase(db, input.entityType, input.entityId);
     case 'explore': return researchStoreExploreInDatabase(db, input.input);
     case 'dossier': return researchEntityDossierInDatabase(db, input.entityType, input.entityId);
     case 'research-gaps': return researchGapsInDatabase(db);

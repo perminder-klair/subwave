@@ -15,11 +15,17 @@ import { eligibleSleeveNotesForSegmentInDatabase, inspectExtendedSleeveNoteInDat
   type SleeveNoteSelectionCandidate } from './link-selection.js';
 import * as settings from '../settings.js';
 
-let child: ChildProcess | null = null;
 let sequence = 0;
-let idleTimer: ReturnType<typeof setTimeout> | null = null;
-const pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void;
-  timer: ReturnType<typeof setTimeout> }>();
+function createComputeWorker() {
+  return {child: null as ChildProcess | null, idleTimer: null as ReturnType<typeof setTimeout> | null,
+    pending: new Map<number, {resolve: (value: unknown) => void; reject: (error: Error) => void;
+      timer: ReturnType<typeof setTimeout>}>()};
+}
+const interactiveWorker = createComputeWorker();
+const dashboardWorker = createComputeWorker();
+const readoutWorker = createComputeWorker();
+const reconciliationWorker = createComputeWorker();
+type ComputeWorker = ReturnType<typeof createComputeWorker>;
 let selectionChild: ChildProcess | null = null;
 let selectionSequence = 0;
 let selectionIdleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -32,19 +38,28 @@ const dashboardFlights = new Map<string, Promise<string>>();
 let dashboardEpoch = 0;
 const inFlight = new Map<string, Promise<string>>();
 
-function clearIdleTimer() { if (idleTimer) clearTimeout(idleTimer); idleTimer = null; }
-function releaseWhenIdle() {
-  clearIdleTimer();
-  if (!pending.size) { child?.channel?.unref(); idleTimer = setTimeout(stopConnectionCompute, 60_000).unref(); }
+function clearIdleTimer(worker: ComputeWorker) { if (worker.idleTimer) clearTimeout(worker.idleTimer); worker.idleTimer = null; }
+function releaseWhenIdle(worker: ComputeWorker) {
+  clearIdleTimer(worker);
+  if (!worker.pending.size) {
+    worker.child?.channel?.unref();
+    worker.idleTimer = setTimeout(() => stopComputeWorker(worker), 60_000).unref();
+  }
+}
+function stopComputeWorker(worker: ComputeWorker): void {
+  clearIdleTimer(worker);
+  const previous = worker.child;
+  worker.child = null;
+  previous?.kill();
+  for (const call of worker.pending.values()) { clearTimeout(call.timer); call.reject(new Error('Connection worker stopped')); }
+  worker.pending.clear();
 }
 export function stopConnectionCompute(): void {
-  clearIdleTimer();
+  stopComputeWorker(interactiveWorker);
+  stopComputeWorker(dashboardWorker);
+  stopComputeWorker(readoutWorker);
+  stopComputeWorker(reconciliationWorker);
   stopSleeveSelectionCompute();
-  const previous = child;
-  child = null;
-  previous?.kill();
-  for (const call of pending.values()) { clearTimeout(call.timer); call.reject(new Error('Connection worker stopped')); }
-  pending.clear();
 }
 
 /** Restored revisions may equal old values while their actual facts differ. */
@@ -137,38 +152,41 @@ function selectInChild(path: string, selection: SleeveNoteSelectionInput): Promi
 }
 
 function compute<T>(path: string, kind: 'overview' | 'matches' | 'discoveries' | 'library-stories' | 'dashboard', edges?: readonly ConnectionEdgeType[], input?: Parameters<typeof searchResearchStoriesInDatabase>[1], dashboard?: DashboardRead): Promise<T> {
-  clearIdleTimer();
-  if (!child) {
+  const worker = kind === 'matches' ? reconciliationWorker
+    : kind === 'dashboard' ? dashboard?.kind === 'readout' ? readoutWorker : dashboardWorker : interactiveWorker;
+  clearIdleTimer(worker);
+  if (!worker.child) {
     const proc = fork(fileURLToPath(new URL('./connection-compute-worker.ts', import.meta.url)), [], {
       execArgv: ['--import', import.meta.resolve('tsx')],
       serialization: 'advanced', stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
     });
-    child = proc;
+    worker.child = proc;
     proc.stderr?.on('data', (chunk: Buffer) => console.warn('[sleeve-notes] Connection worker:', chunk.toString().trim()));
-    const failed = (error: Error) => { if (child === proc) { stopConnectionCompute(); console.warn('[sleeve-notes]', error.message); } };
+    (proc.stderr as Socket | null)?.unref();
+    const failed = (error: Error) => { if (worker.child === proc) { stopComputeWorker(worker); console.warn('[sleeve-notes]', error.message); } };
     proc.on('error', failed);
     proc.on('exit', (code) => failed(new Error(`Connection worker exited (${code})`)));
     proc.on('message', (message: { id: number; result?: unknown; error?: string }) => {
-      const call = pending.get(message.id);
+      const call = worker.pending.get(message.id);
       if (!call) return;
-      clearTimeout(call.timer); pending.delete(message.id);
+      clearTimeout(call.timer); worker.pending.delete(message.id);
       if (message.error) call.reject(new Error(message.error)); else call.resolve(message.result);
-      releaseWhenIdle();
+      releaseWhenIdle(worker);
     });
     proc.unref(); proc.channel?.unref();
   }
-  const proc = child;
+  const proc = worker.child;
   proc.channel?.ref();
   return new Promise<T>((resolve, reject) => {
     const id = ++sequence;
     const timer = setTimeout(() => {
-      stopConnectionCompute();
+      stopComputeWorker(worker);
       reject(new Error('Connection calculation timed out'));
     }, 60_000).unref();
-    pending.set(id, { resolve: (result) => resolve(result as T), reject, timer });
+    worker.pending.set(id, { resolve: (result) => resolve(result as T), reject, timer });
     proc.send({ id, path, kind, edges, input, dashboard }, (error) => {
       if (error) {
-        clearTimeout(timer); pending.delete(id); reject(error); releaseWhenIdle();
+        clearTimeout(timer); worker.pending.delete(id); reject(error); releaseWhenIdle(worker);
       }
     });
   });

@@ -10,9 +10,9 @@ import { researchAllowed } from '../broadcast/dj-budget.js';
 // saved-data GET allowlist is available; research and writes remain gated.
 import express from 'express';
 import { getStationTimezone } from '../time.js';
-import { brainAlbumCoverageInDatabase, queueBrainAlbumInDatabase, queueBrainLibraryAlbumInDatabase, type BrainAlbumType } from '../sleeve-notes/brain-album-research.js';
+import { queueBrainAlbumInDatabase, queueBrainLibraryAlbumInDatabase, type BrainAlbumType } from '../sleeve-notes/brain-album-research.js';
 import { addLegacySegmentConversations } from '../sleeve-notes/legacy-segment-transcripts.js';
-import { brainCoverageInDatabase, queueBrainArtistInDatabase, queueBrainLibrarySeedInDatabase } from '../sleeve-notes/brain-coverage.js';
+import { queueBrainArtistInDatabase, queueBrainLibrarySeedInDatabase } from '../sleeve-notes/brain-coverage.js';
 import { randomUUID } from 'node:crypto';
 import { seriesCheckSchema } from '../schemas/sleeve-notes-series.js';
 import { sparkFeedbackSchema } from '../schemas/sleeve-notes-feedback.js';
@@ -45,10 +45,7 @@ import {
   requeueCachedWikipediaResearch,
   researchConnectionsGraph,
   resolveConnectionLocalTrack,
-  researchStoreCoverage,
-  searchResearchStoriesInDatabase,
   reconcileConfiguredSeries,
-  researchStoreSummary,
   latestSourceDocumentForResearch,
   searchConnections,
   type ConnectionEdgeType,
@@ -403,6 +400,7 @@ router.get('/sleeve-notes/status', requireAdmin, async (_req, res) => {
   const collectionPaused = value.djBehaviour.sleeveNotesCollectionPaused === true;
   const blockedReason = researchBlockReason();
   const collectionRunning = blockedReason === null;
+  const stored = enabled ? JSON.parse(await cachedDashboardRead({kind:'status'})) : null;
   res.json({
     enabled,
     timezone: getStationTimezone(),
@@ -417,13 +415,13 @@ router.get('/sleeve-notes/status', requireAdmin, async (_req, res) => {
     reviewReady: enabled ? reviewReadyCount() : withCachedRead(reviewReadyCount),
     collectionPaused,
     collectionBlockedReason: blockedReason,
-    coverage: enabled ? researchStoreCoverage() : {},
+    coverage: stored?.coverage ?? {},
     // Temporary development readout for the live MusicBrainz → Wikipedia → LLM
     // path. It remains read-only and deliberately does not expose notes on air.
     replacement: enabled ? {
       admissionActive: true,
       researchWorkerActive: collectionRunning,
-      ...researchStoreSummary(),
+      ...stored.summary,
     } : null,
     onAirExposure: enabled,
   });
@@ -615,20 +613,12 @@ router.get('/sleeve-notes/stories', requireAdmin, async (req,res) => {
   const input={search:typeof req.query.search==='string'?req.query.search.slice(0,120):'',
     category:typeof req.query.category==='string'?req.query.category.slice(0,100):'',recent:req.query.recent==='1',withdrawn:req.query.withdrawn==='1',
     limit:Math.max(1,Math.min(100,number(req.query.limit,30))),offset:Math.max(0,number(req.query.offset,0))};
-  if (input.category === 'library-connections') {
-    const read = async () => {
-      const result = await libraryConnectionStoriesInBackground(openSleeveNotesDb(), input);
-      const reviews = storedClaimReviews(result.claims.map(claim => claim.id));
-      return {...result, claims: result.claims.map(claim => ({...claim, review: reviews[claim.id] ?? null}))};
-    };
-    return res.json(await (settings.get().djBehaviour.extendedSleeveNotes === true ? read() : withCachedRead(read)));
-  }
-  const read=()=>{
-    const result=searchResearchStoriesInDatabase(openSleeveNotesDb(),input);
+  const read=async()=>{
+    const result=await libraryConnectionStoriesInBackground(openSleeveNotesDb(),input);
     const reviews=storedClaimReviews(result.claims.map(claim=>claim.id));
     return {...result,claims:result.claims.map(claim=>({...claim,review:reviews[claim.id]??null}))};
   };
-  return res.json(settings.get().djBehaviour.extendedSleeveNotes===true?read():withCachedRead(read));
+  return res.json(await (settings.get().djBehaviour.extendedSleeveNotes===true?read():withCachedRead(read)));
 });
 
 router.get('/sleeve-notes/explore', requireAdmin, async (req, res) => {
@@ -757,16 +747,18 @@ router.get('/sleeve-notes/connections/library/:recordingId', requireAdmin, async
 router.get('/sleeve-notes/connections/coverage', requireAdmin, async (_req, res) => {
   await settings.load();
   const active = settings.get().djBehaviour.extendedSleeveNotes === true;
-  const read = () => ({ active, artists: brainCoverageInDatabase(openSleeveNotesDb()) });
-  return res.json(active ? read() : withCachedRead(read));
+  const read = () => cachedDashboardRead({kind:'brain-coverage'});
+  const artists = JSON.parse(await (active ? read() : withCachedRead(read)));
+  return res.json({active, artists});
 });
 
 router.get('/sleeve-notes/connections/album-coverage', requireAdmin, async (req,res) => {
   const type=String(req.query.entityType??''),id=String(req.query.entityId??'').trim();
   if(!['release','release-group','library-album'].includes(type)||!id||id.length>300)return res.status(400).json({error:'Choose an album from Station Brain'});
   await settings.load(); const active=settings.get().djBehaviour.extendedSleeveNotes===true;
-  const read=()=>({active,coverage:brainAlbumCoverageInDatabase(openSleeveNotesDb(),type as BrainAlbumType,id)});
-  return res.json(active?read():withCachedRead(read));
+  const read=()=>cachedDashboardRead({kind:'brain-album-coverage',entityType:type as BrainAlbumType,entityId:id});
+  const coverage=JSON.parse(await (active?read():withCachedRead(read)));
+  return res.json({active,coverage});
 });
 
 router.post('/sleeve-notes/connections/research', requireAdmin, async (req, res) => {

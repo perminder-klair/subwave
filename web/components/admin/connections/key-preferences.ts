@@ -9,13 +9,14 @@ type KeySettings = {
   includeExternal: boolean;
   includeUnresearchedArtists: boolean;
   pathLimit: number;
+  detailedRendering: boolean;
   layoutFolded: boolean;
   controlsFolded: boolean;
   keyFolded: boolean;
 };
 const DEFAULTS: KeySettings = {
   edgeTypes: ALL_EDGE_TYPES, includeExternal: true, includeUnresearchedArtists: true, pathLimit: 2400,
-  layoutFolded: false, controlsFolded: false, keyFolded: false,
+  detailedRendering: false, layoutFolded: false, controlsFolded: false, keyFolded: false,
 };
 function validSetting<K extends keyof KeySettings>(name: K, value: unknown): value is KeySettings[K] {
   if (name === 'edgeTypes') return Array.isArray(value) && value.every(type => ALL_EDGE_TYPES.includes(type));

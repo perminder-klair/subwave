@@ -36,6 +36,9 @@ test('worker reads match direct results, count sources/facts independently, and 
     {kind:'dossier',entityType:'artist',entityId:'missing'},
     {kind:'readout'}, {kind:'readout',queue:false}, {kind:'live-summary',args:[{subsonic_id:'track',title:'Song',artist:'Band'},null,null]},
     {kind:'heard-on-air',offset:0,filters:{usage:'sleeve-notes'}},
+    {kind:'brain-coverage'},
+    {kind:'status'},
+    {kind:'brain-album-coverage',entityType:'release',entityId:'missing'},
   ];
   for(const input of inputs) {
     let yielded = false;

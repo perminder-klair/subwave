@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useReducedMotion } from 'motion/react';
 import ForceGraph2D, { type ForceGraphMethods, type LinkObject, type NodeObject } from 'react-force-graph-2d';
-import { ChevronDown, ChevronUp, Expand, Focus, LayoutGrid, Maximize2, Network, Minus, Plus, RotateCcw, Shrink } from 'lucide-react';
+import { ChevronDown, ChevronUp, Expand, Focus, LayoutGrid, Maximize2, Network, Minus, Plus, RotateCcw, Shrink, Sparkles } from 'lucide-react';
 import type { ConnectionEdge, ConnectionEdgeType, ConnectionGraphData, ConnectionNode } from './types';
 import { LEGEND_GROUPS } from './filters';
 import { reconcileBrainNetwork, type BrainNetwork } from './brain-network';
@@ -64,6 +64,7 @@ export default function BrainCanvas({ data, visibleData = data, edgeTypes, inclu
   const [layoutMode, setLayoutMode] = useState<LayoutMode>('force');
   const [density, setDensity] = useState<Density>('compact');
   const [pathLimit, setPathLimit] = useBrainKeySetting('pathLimit');
+  const [detailedRendering, setDetailedRendering] = useBrainKeySetting('detailedRendering');
   const prefersReducedMotion = useReducedMotion();
   const [lite, setLite] = useState(false);
   const reducedMotion = prefersReducedMotion || lite;
@@ -174,13 +175,16 @@ export default function BrainCanvas({ data, visibleData = data, edgeTypes, inclu
     .slice(0, overview ? 14 : 8).map((node) => node.id)), [visibleData, overview]);
 
   const setForceSpacing = useCallback((nextDensity: Density) => {
-    const charge = graph.current?.d3Force('charge') as { strength?: (value: number) => unknown } | undefined;
+    const charge = graph.current?.d3Force('charge') as { strength?: (value: number) => unknown;
+      distanceMax?: (value: number) => unknown; theta?: (value: number) => unknown } | undefined;
     const link = graph.current?.d3Force('link') as { distance?: (value: number) => unknown } | undefined;
     const strength = nextDensity === 'spread' ? (overview ? -105 : -220) : (overview ? -45 : -100);
     const distance = nextDensity === 'spread' ? (overview ? 95 : 130) : (overview ? 48 : 70);
     charge?.strength?.(strength);
+    charge?.distanceMax?.(largeMap ? 600 : Infinity);
+    charge?.theta?.(largeMap ? 1.2 : 0.9);
     link?.distance?.(distance);
-  }, [overview]);
+  }, [overview, largeMap]);
 
   useEffect(() => {
     if (!container.current) return;
@@ -265,6 +269,10 @@ export default function BrainCanvas({ data, visibleData = data, edgeTypes, inclu
     ctx.save();
     ctx.globalAlpha = dimmed ? 0.18 : active || node.kind === 'contributor' ? 1
       : unexplored ? (lightMap ? 0.6 : 0.35) : lightMap ? 1 : node.local ? Math.min(1, (node.researched === false ? 0.35 : 0.65) + Math.log2(1 + (node.verifiedConnectionCount ?? 0)) * 0.08) : 0.55;
+    if (largeMap && !detailedRendering && !active && node.local && node.kind === 'artist' && scale < LABEL_POPULATION_MIN_ZOOM) {
+      ctx.fillStyle = color; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+      ctx.restore(); return;
+    }
     if (!lightMap && (isCurrent || active || (node.verifiedConnectionCount ?? 0) > 0)) {
       const pulse = isCurrent && !reducedMotion && !largeMap ? 1 + Math.sin(performance.now() / 650) * 0.18 : 1;
       const glow = ctx.createRadialGradient(x, y, r, x, y, r * 4 * pulse);
@@ -443,7 +451,7 @@ export default function BrainCanvas({ data, visibleData = data, edgeTypes, inclu
       {size.width > 0 && <ForceGraph2D<ConnectionNode, LinkData>
         ref={graph} width={size.width} height={size.height} graphData={network} backgroundColor={background}
         warmupTicks={largeMap ? reducedMotion ? 32 : 0 : reducedMotion ? 160 : 60}
-        cooldownTicks={reducedMotion ? 0 : 120} cooldownTime={3500}
+        cooldownTicks={reducedMotion || layoutMode !== 'force' ? 0 : largeMap ? 45 : 120} cooldownTime={largeMap ? 1500 : 3500}
         d3AlphaDecay={0.035} d3VelocityDecay={0.35} minZoom={largeMap ? 0.025 : 0.12} maxZoom={8}
         autoPauseRedraw={largeMap || reducedMotion || !visibleNodes.has(currentNodeId ?? '')}
         nodeVisibility={(node) => visibleNodes.has(node.id)}
@@ -506,6 +514,10 @@ export default function BrainCanvas({ data, visibleData = data, edgeTypes, inclu
           const next = density === 'compact' ? 'spread' : 'compact'; setDensity(next); setForceSpacing(next); graph.current?.d3ReheatSimulation();
         }} title={density === 'compact' ? 'Increase spacing between nodes' : 'Reduce spacing between nodes'}
           className="flex min-h-11 items-center gap-1 px-2 text-[11px] hover:bg-overlay md:min-h-8">{density === 'compact' ? 'Spread' : 'Compact'}</button>}
+        {largeMap && <button type="button" aria-label="Detailed rendering" aria-pressed={detailedRendering}
+          onClick={() => setDetailedRendering(value => !value)}
+          title={detailedRendering ? 'Turn off distant artist glow and outlines for smoother navigation' : 'Restore distant artist glow and outlines; may be slower on large maps'}
+          className={`flex min-h-11 items-center gap-1 px-2 text-[11px] hover:bg-overlay focus-visible:outline-2 focus-visible:outline-offset-2 md:min-h-8 ${detailedRendering ? 'bg-overlay' : ''}`}><Sparkles className="size-3.5" aria-hidden="true" />Glow &amp; detail</button>}
         </div>
       </BrainPanel>
       <BrainPanel label="Map controls" className={`${styles.glass} absolute top-3 right-3 p-1 text-ink`}>

@@ -1935,7 +1935,11 @@ export interface ResearchStoreSummary {
 export interface ResearchStoreCoverage { processed: number; queued: number; 'retry-at': number; failed: number; }
 
 export function researchStoreCoverage(): ResearchStoreCoverage {
-  const rows = open().prepare(`SELECT state, COUNT(*) AS count FROM sleeve_research_jobs
+  return researchStoreCoverageInDatabase(open());
+}
+
+export function researchStoreCoverageInDatabase(db: Database.Database): ResearchStoreCoverage {
+  const rows = db.prepare(`SELECT state, COUNT(*) AS count FROM sleeve_research_jobs
     WHERE provider = 'genius' AND capability = 'connections' GROUP BY state`).all() as Array<{ state: string; count: number }>;
   const counts = Object.fromEntries(rows.map((row) => [row.state, row.count])) as Record<string, number>;
   return { processed: counts.complete ?? 0, queued: counts.queued ?? 0,
@@ -2013,6 +2017,8 @@ export function searchResearchStoriesInDatabase(db:Database.Database,input:{sear
   const term=(input.search??'').trim().slice(0,120);
   const libraryOnly=input.category==='library-connections';
   const category=libraryOnly?'musical-connections':input.category??'';
+  const claimScope=`${input.withdrawn?"c.enabled=0 AND c.operator_state<>'deleted'":'c.enabled=1'}
+    ${libraryOnly?`AND c.id IN (${libraryRelationshipClaimsSql(db)})`:''}`;
   const base=`SELECT COALESCE(a.name, ra.name, album_artist.name) AS artist,
     COALESCE(r.title, local_release.title, (SELECT rg_release.title FROM sleeve_releases rg_release
       WHERE c.entity_type = 'release-group'
@@ -2034,17 +2040,21 @@ export function searchResearchStoriesInDatabase(db:Database.Database,input:{sear
         OR (c.entity_type='release-group' AND rel.musicbrainz_release_group_id=c.entity_id)
       ORDER BY rr.release_id,rr.recording_id LIMIT 1)
     JOIN sleeve_source_documents s ON s.id = c.source_document_id
-    WHERE ${input.withdrawn?"c.enabled=0 AND c.operator_state<>'deleted'":'c.enabled=1'}
-      ${libraryOnly?`AND c.id IN (${libraryRelationshipClaimsSql(db)})`:''}`;
+    WHERE ${claimScope}`;
+  const categoryFilter=`(? = '' OR category = ? OR (? = 'stories-only' AND category NOT IN ('credits', 'musical-connections')))`;
   const where=`(? = '' OR instr(lower(COALESCE(artist,'') || ' ' || COALESCE(recording,'') || ' ' || category || ' ' || topic || ' ' || wording),lower(?)) > 0)
-    AND (? = '' OR category = ? OR (? = 'stories-only' AND category NOT IN ('credits', 'musical-connections')))`;
+    AND ${categoryFilter}`;
   // Recent is a named filter over the latest 80 facts, not the search default.
   const rows=`SELECT * FROM (${base} ORDER BY c.updated_at DESC,c.id DESC ${input.recent?'LIMIT 80':''})`;
+  const countedRows=input.recent?rows:`SELECT * FROM (${base})`;
   const args=[term,term,category,category,category];
-  const total=(db.prepare(`SELECT COUNT(*) AS n FROM (${rows}) WHERE ${where}`).get(...args) as {n:number}).n;
+  const total=(!term&&!input.recent
+    ? db.prepare(`SELECT COUNT(*) AS n FROM sleeve_claims c JOIN sleeve_source_documents s ON s.id=c.source_document_id
+        WHERE ${claimScope} AND ${categoryFilter}`).get(category,category,category)
+    : db.prepare(`SELECT COUNT(*) AS n FROM (${countedRows}) WHERE ${where}`).get(...args)) as {n:number};
   const claims=db.prepare(`${rows} WHERE ${where} LIMIT ? OFFSET ?`).all(...args,limit,offset) as ResearchStoreReadout['claims'];
   const categories=(db.prepare(`SELECT DISTINCT category FROM sleeve_claims WHERE ${input.withdrawn?"enabled=0 AND operator_state<>'deleted'":'enabled=1'} ORDER BY category`).all() as Array<{category:string}>).map(row=>row.category);
-  return {claims,total,limit,offset,categories};
+  return {claims,total:total.n,limit,offset,categories};
 }
 
 export function researchStoreReadout(limit = 80): ResearchStoreReadout {
