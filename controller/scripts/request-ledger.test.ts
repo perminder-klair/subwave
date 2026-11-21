@@ -9,6 +9,21 @@ process.env.STATE_DIR = stateDir;
 
 const ledger = await import('../src/broadcast/request-ledger.js');
 
+test('history pruning preserves the identity pointer for active work until it settles', async t => {
+  const now = Date.now();
+  const started = now - 25 * 60 * 60_000;
+  let clock = started;
+  t.mock.method(Date, 'now', () => clock);
+  const identity = 'ledger-slow';
+  const pending = { createdAt: started, source: 'alexa' as const, requester: '', text: 'a track' };
+  await ledger.createPending({ ...pending, id: 'slow', alexaIdentity: identity });
+  clock = now;
+  await ledger.createPending({ ...pending, id: 'trigger', createdAt: Date.now() });
+  assert.equal(ledger.latestForAlexa(identity)?.id, 'slow');
+  await ledger.update('slow', { status: 'cancelled' });
+  assert.equal(ledger.latestForAlexa(identity)?.status, 'cancelled');
+});
+
 test('Alexa identities are salted, kind-scoped, and never persisted raw', async () => {
   const rawPersonId = 'amzn1.person.raw-private-value';
   const rawUserId = 'amzn1.ask.account.raw-private-value';

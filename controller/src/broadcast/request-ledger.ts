@@ -107,10 +107,17 @@ let pendingPersist = Promise.resolve();
 
 function prune(now = Date.now()) {
   const cutoff = now - RETENTION_MS;
+  // Pending receipts connect an Alexa identity to its live resolver. Keep
+  // them addressable even when a busy station fills its history window.
+  let keptHistory = 0;
   store.records = store.records
-    .filter(row => row.updatedAt >= cutoff)
     .sort((a, b) => b.updatedAt - a.updatedAt)
-    .slice(0, MAX_RECORDS);
+    .filter(row => {
+      if (row.status === 'pending') return true;
+      if (row.updatedAt < cutoff || keptHistory >= MAX_RECORDS) return false;
+      keptHistory++;
+      return true;
+    });
   const liveIds = new Set(store.records.map(row => row.id));
   for (const [identity, id] of Object.entries(store.latestAlexa)) {
     if (!liveIds.has(id)) delete store.latestAlexa[identity];

@@ -91,11 +91,14 @@ const replacementLocks = new Map<string, Promise<void>>();
 
 function pruneRequests() {
   const cutoff = Date.now() - REQUEST_TTL_MS;
+  const queuedRequests = new Set(queue.upcoming.map(item => item.requestId));
   for (const [id, entry] of requests) {
-    if (entry.createdAt < cutoff) requests.delete(id);
+    // The resolver and cancellation must see the same entry until it settles.
+    // A queued receipt also owns its listener's slot until the item leaves.
+    if (entry.createdAt < cutoff && entry.status !== 'pending' && !queuedRequests.has(id)) requests.delete(id);
   }
   for (const [ip, entry] of lastByIp) {
-    if (entry.createdAt < cutoff) lastByIp.delete(ip);
+    if (!requests.has(entry.id)) lastByIp.delete(ip);
   }
 }
 
@@ -697,7 +700,7 @@ async function resolveRequest(entry) {
       : sorryNoMatch(requester));
   }
   if (!verifiedCandidateMatches(pick, entry.verifiedCandidate)) {
-    entry.pick = pick;
+    entry.outcome = 'no-match';
     entry.pickSource = `${pickSource}:verified-candidate-mismatch`;
     return failed(sorryNoMatch(requester));
   }
@@ -929,6 +932,7 @@ export async function submitListenerRequest(input: {
     await resolveRequest(entry);
     return getListenerRequestStatus(id);
   }).catch(error => {
+    if (entry.status === 'cancelled') return getListenerRequestStatus(id);
     entry.status = 'failed';
     entry.outcome = 'error';
     entry.message = 'Something went wrong in the booth — try again.';
@@ -986,6 +990,12 @@ async function cancelRequestById(id: string): Promise<ListenerRequestStatus | nu
   const entry = requests.get(id);
   const current = getListenerRequestStatus(id);
   if (current.status === 'unknown' || !['pending', 'queued'].includes(current.phase || '')) return current;
+  if (current.phase === 'queued') {
+    const removed = await queue.removeUpcomingRequest(id);
+    if (!removed.ok) return getListenerRequestStatus(id);
+  }
+  // Pending resolution observes cancellation before its next queue write.
+  // For an existing item, ownership changes only once the player releases it.
   if (entry) {
     entry.status = 'cancelled';
     entry.outcome = 'cancelled';
@@ -993,8 +1003,6 @@ async function cancelRequestById(id: string): Promise<ListenerRequestStatus | nu
     entry.reminder = null;
     if (lastByIp.get(entry.clientKey) === entry) lastByIp.delete(entry.clientKey);
   }
-  const removed = await queue.removeUpcomingRequest(id);
-  if (!removed.ok && removed.reason === 'already-playing') return getListenerRequestStatus(id);
   await requestLedger.update(id, { status: 'cancelled', outcome: 'cancelled', message: 'Cancelled by listener.', reminder: null });
   if (entry) recordOutcome(entry);
   return getListenerRequestStatus(id);

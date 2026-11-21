@@ -12,7 +12,8 @@ globalThis.fetch = async () => new Response(null, { status: 503 });
 const settings = await import('../src/settings.js');
 const { queue } = await import('../src/broadcast/queue.js');
 const { requestAgent } = await import('../src/broadcast/dj-agent/agents.js');
-const { runRequest } = await import('../src/broadcast/dj-agent.js');
+const ledger = await import('../src/broadcast/request-ledger.js');
+const requestLog = await import('../src/broadcast/request-log.js');
 const { windowMessages } = await import('../src/broadcast/session.js');
 const { submitListenerRequest, cancelLatestAlexaRequest, getLatestAlexaRequestStatus } = await import('../src/routes/request.js');
 
@@ -67,15 +68,31 @@ test('a conflicting model pick cannot replace an observed, confirmed Alexa candi
   assert.deepEqual(queue.upcoming.map(item => item.track.id), [confirmed.id]);
 });
 
-test('when discovery misses the confirmed ID, the agent yields to the constrained fallback', async t => {
+test('a submission fails when the agent misses the confirmed ID and direct search finds another recording', async t => {
   const run = answer(other);
   run.extras.seen.delete(confirmed.id);
-  t.mock.method(requestAgent, 'run', async () => run);
-  const result = await runRequest(queue, {
-    requester: 'anon', text: confirmed.title,
-    alexa: { requestId: 'missing', verifiedCandidate: confirmed, isCancelled: () => false },
+  const agent = t.mock.method(requestAgent, 'run', async () => run);
+  let searches = 0;
+  t.mock.method(globalThis, 'fetch', async (input: Parameters<typeof fetch>[0]) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.pathname.endsWith('/search3')) {
+      searches++;
+      // Identical catalogue names, different recording ID.
+      return Response.json({ 'subsonic-response': { status: 'ok', searchResult3: {
+        song: [{ ...confirmed, id: 'other-recording' }],
+      } } });
+    }
+    return new Response(null, { status: 400 });
   });
-  assert.equal(result, null);
+  const receipt = await submit('missing-listener', true);
+  const result = await receipt.completion;
+  assert.equal(agent.mock.callCount(), 1);
+  assert.ok(searches > 0);
+  const log = requestLog.recentRequests.find(row => row.id === receipt.requestId.slice(0, 8));
+  assert.match(log?.pickSource || '', /:verified-candidate-mismatch$/);
+  assert.equal(result.status, 'failed');
+  assert.equal(result.outcome, 'no-match');
+  assert.equal(ledger.get(receipt.requestId)?.track, null);
   assert.deepEqual(queue.upcoming, []);
 });
 
@@ -96,4 +113,52 @@ test('cancelling an accepted Alexa request while the model is resolving leaves t
   }
   assert.equal((await receipt.completion).phase, 'cancelled');
   assert.equal(queue.upcoming.length, 0);
+});
+
+test('an aged pending receipt remains cancellable after another submission prunes the request map', async t => {
+  const started = deferred();
+  const release = deferred();
+  let calls = 0;
+  t.mock.method(requestAgent, 'run', async () => {
+    if (++calls === 1) {
+      started.resolve();
+      await release.promise;
+      return answer(confirmed);
+    }
+    return answer(other);
+  });
+  const receipt = await submit('slow-listener');
+  await started.promise;
+  const later = Date.now() + 11 * 60_000;
+  t.mock.method(Date, 'now', () => later);
+  try {
+    const trigger = await submit('prune-listener');
+    assert.equal((await trigger.completion).phase, 'queued');
+    assert.equal((await cancelLatestAlexaRequest('slow-listener'))?.phase, 'cancelled');
+  } finally {
+    release.resolve();
+  }
+  assert.equal((await receipt.completion).phase, 'cancelled');
+  assert.equal(ledger.get(receipt.requestId)?.status, 'cancelled');
+  assert.deepEqual(queue.upcoming.map(item => item.track.id), [other.id]);
+});
+
+test('a refused player removal preserves the queued receipt and its one-pending hold', async t => {
+  await settings.update({ requests: { onePendingPerIp: true } } as never);
+  t.mock.method(requestAgent, 'run', async () => answer(confirmed));
+  const identity = 'player-listener';
+  const receipt = await submit(identity);
+  assert.equal((await receipt.completion).phase, 'queued');
+  t.mock.method(queue, 'removeUpcomingRequest', async () => ({ ok: false, reason: 'already-playing' }));
+  const status = await cancelLatestAlexaRequest(identity);
+  assert.equal(status?.status, 'resolved');
+  assert.equal(status.phase, 'queued');
+  assert.equal(ledger.get(receipt.requestId)?.status, 'resolved');
+  assert.deepEqual(queue.upcoming.map(item => item.requestId), [receipt.requestId]);
+  // Past the receipt TTL and the per-listener cooldown, only the queued hold applies.
+  const later = Date.now() + 11 * 60_000;
+  t.mock.method(Date, 'now', () => later);
+  const retry = await submitListenerRequest({ text: 'Another song', name: '', ip: identity, source: 'alexa', alexaIdentity: identity });
+  assert.ok(!retry.accepted);
+  assert.match(retry.message || '', /last request is still queued/);
 });
