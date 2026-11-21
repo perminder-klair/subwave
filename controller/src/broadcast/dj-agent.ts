@@ -1764,6 +1764,7 @@ interface RequestAgentInput {
     dedication?: RequestDedication | null;
     verifiedCandidate?: AlexaVerifiedCandidate;
     isCancelled: () => boolean;
+    waitForCancellation?: () => Promise<boolean>;
   };
 }
 
@@ -2116,6 +2117,7 @@ async function runRequestViaAgent(queue: any, { requester, text, alexa }: Reques
     // Queue.push inserts synchronously. Check the live receipt after every
     // awaited lookup, re-pick and intro rewrite, immediately before insertion.
     if (alexa?.isCancelled()) return null;
+    if (alexa && await alexa.waitForCancellation?.()) return null;
     const pos = await queue.push({
       track: trackFields(song),
       ...(alexa && { requestId: alexa.requestId, dedication }),

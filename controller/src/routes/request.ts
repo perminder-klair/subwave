@@ -360,6 +360,29 @@ function resolvingRequestCount(): number {
   return n;
 }
 
+type ReplacementDecision = {
+  promise: Promise<boolean>;
+  resolve: (cancel: boolean) => void;
+};
+
+function createReplacementDecision(entry: any): ReplacementDecision {
+  let resolve!: (cancel: boolean) => void;
+  const decision: ReplacementDecision = {
+    promise: new Promise<boolean>(settle => { resolve = settle; }),
+    resolve,
+  };
+  entry.replacementDecision = decision;
+  return decision;
+}
+
+async function awaitReplacementDecision(entry: any): Promise<boolean> {
+  const decision = entry.replacementDecision as ReplacementDecision | undefined;
+  if (!decision) return false;
+  const cancel = await decision.promise;
+  if (entry.replacementDecision === decision) delete entry.replacementDecision;
+  return cancel;
+}
+
 async function resolveRequest(entry) {
   const { requester, text } = entry;
   entry.startedAt = Date.now();
@@ -471,6 +494,8 @@ async function resolveRequest(entry) {
     }
     const introScript = generatedIntro.introScript;
     let introDropped = false;
+    if (await awaitReplacementDecision(entry)) return;
+    if (entry.status === 'cancelled') return;
     const pos = await queue.push({
       track: pick, requestId: entry.id, requestedBy: requester, dedication: entry.dedication || null, intent: 'more_like_this', introScript,
       introKind: 'dj-speak',
@@ -522,6 +547,7 @@ async function resolveRequest(entry) {
         dedication: entry.dedication,
         verifiedCandidate: entry.verifiedCandidate,
         isCancelled: () => entry.status === 'cancelled',
+        waitForCancellation: () => awaitReplacementDecision(entry),
       } : undefined,
     });
     if (entry.status === 'cancelled') return;
@@ -763,6 +789,8 @@ async function resolveRequest(entry) {
 
   // 4. Enqueue. push() dedups a track a concurrent request already queued (#619).
   let introDropped = false;
+  if (await awaitReplacementDecision(entry)) return;
+  if (entry.status === 'cancelled') return;
   const pos = await queue.push({
     track: pick,
     requestId: entry.id,
@@ -1007,39 +1035,52 @@ async function cancelRequestById(id: string, replacement?: { id: string; identit
   const entry = requests.get(id);
   const current = getListenerRequestStatus(id);
   if (current.status === 'unknown' || !['pending', 'queued'].includes(current.phase || '')) return current;
-  // Stop an in-flight resolver synchronously before any ledger I/O. It checks
-  // this marker before its queue push; a persistence wait must not let the old
-  // track slip into the queue after a replacement has begun.
-  if (replacement && current.phase === 'pending' && entry) {
-    entry.status = 'cancelled';
-    entry.outcome = 'cancelled';
-    entry.message = 'Cancelled by listener.';
-    entry.reminder = null;
-    if (lastByIp.get(entry.clientKey) === entry) lastByIp.delete(entry.clientKey);
-  }
+  const pendingReplacement = replacement && current.phase === 'pending' && entry
+    ? createReplacementDecision(entry)
+    : null;
   if (replacement) {
     try {
       await requestLedger.beginReplacementRecovery(id, replacement.id, replacement.identity);
     } catch (error) {
       queue.log('error', `replacement recovery journal could not be written: ${String(error)}`);
+      if (pendingReplacement) {
+        if (entry?.replacementDecision === pendingReplacement) delete entry.replacementDecision;
+        pendingReplacement.resolve(false);
+      }
       requests.delete(replacement.id);
       await requestLedger.discardUnclaimedPending(replacement.id)
         .catch(cleanupError => queue.log('error', `staged replacement cleanup failed: ${String(cleanupError)}`));
-      if (entry && current.phase === 'pending') {
-        entry.phase = 'interrupted';
-        entry.outcome = 'interrupted';
-        entry.message = 'The request was stopped, but its replacement could not be safely recorded.';
-        if (lastByIp.get(entry.clientKey) === entry) lastByIp.delete(entry.clientKey);
-        recordOutcome(entry);
-      }
       return {
         ...current,
         outcome: 'replacement-ledger-error',
         message: current.phase === 'pending'
-          ? 'The request was stopped, but the replacement could not be safely recorded.'
+          ? 'The replacement could not be safely recorded; your previous request is still pending.'
           : 'The replacement could not be safely recorded; your previous request is still queued.',
       };
     }
+  }
+  if (pendingReplacement) {
+    const latest = getListenerRequestStatus(id);
+    if (latest.phase !== 'pending' || entry.status !== 'pending') {
+      if (entry.replacementDecision === pendingReplacement) delete entry.replacementDecision;
+      pendingReplacement.resolve(false);
+      await requestLedger.abortReplacementRecovery(id, replacement!.id)
+        .catch(error => queue.log('error', `replacement recovery journal cleanup failed: ${String(error)}`));
+      requests.delete(replacement!.id);
+      await requestLedger.discardUnclaimedPending(replacement!.id)
+        .catch(cleanupError => queue.log('error', `staged replacement cleanup failed: ${String(cleanupError)}`));
+      return {
+        ...latest,
+        outcome: 'replacement-unavailable',
+        message: 'Your previous request changed before it could be replaced.',
+      };
+    }
+    entry.status = 'cancelled';
+    entry.outcome = 'cancelled';
+    entry.message = 'Cancelled by listener.';
+    entry.reminder = null;
+    if (lastByIp.get(entry.clientKey) === entry) lastByIp.delete(entry.clientKey);
+    pendingReplacement.resolve(true);
   }
   if (current.phase === 'queued') {
     const removed = await queue.removeUpcomingRequest(id);

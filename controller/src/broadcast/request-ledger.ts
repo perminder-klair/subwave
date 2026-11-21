@@ -126,9 +126,14 @@ function isRecord(value: unknown): value is RequestLedgerRecord {
 const store = loadStore();
 let pendingPersist = Promise.resolve();
 let replacementRecoveryBarrierForTests: (() => Promise<void>) | null = null;
+let replacementRecoveryPersistFailureForTests: Error | null = null;
 
 export function _setReplacementRecoveryBarrierForTests(barrier: (() => Promise<void>) | null) {
   replacementRecoveryBarrierForTests = barrier;
+}
+
+export function _setReplacementRecoveryPersistFailureForTests(error: Error | null) {
+  replacementRecoveryPersistFailureForTests = error;
 }
 
 function prune(now = Date.now()) {
@@ -218,6 +223,7 @@ export async function beginReplacementRecovery(previousId: string, replacementId
   const transaction = { previousId, replacementId, identity };
   store.replacementRecoveries[replacementId] = transaction;
   try {
+    if (replacementRecoveryPersistFailureForTests) throw replacementRecoveryPersistFailureForTests;
     await persist();
   } catch (error) {
     delete store.replacementRecoveries[replacementId];

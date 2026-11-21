@@ -29,6 +29,7 @@ beforeEach(async () => {
 });
 afterEach(() => {
   ledger._setReplacementRecoveryBarrierForTests(null);
+  ledger._setReplacementRecoveryPersistFailureForTests(null);
   mock.restoreAll();
 });
 
@@ -288,10 +289,7 @@ test('an accepted replacement stops its pending resolver before ledger persisten
       }),
     ]);
     assert.equal(entered, true, 'pending replacement must reach recovery while holding the resolver stop marker');
-    assert.equal(getLatestAlexaRequestStatus('pending-race')?.phase, 'cancelled');
-
-    oldModel.resolve();
-    assert.equal((await old.completion).phase, 'cancelled');
+    assert.equal(getLatestAlexaRequestStatus('pending-race')?.phase, 'pending');
     assert.equal(queue.upcoming.some(item => item.requestId === old.requestId || item.track.id === 'old-pending-track'), false);
   } finally {
     oldModel.resolve();
@@ -303,8 +301,42 @@ test('an accepted replacement stops its pending resolver before ledger persisten
   const result = await replacement;
   assert.ok(result.accepted);
   assert.equal((await result.completion).phase, 'queued');
+  assert.equal((await old.completion).phase, 'cancelled');
   assert.deepEqual(queue.upcoming.map(item => item.track.id), ['replacement-track']);
   assert.equal(ledger.get(old.requestId)?.status, 'cancelled');
+});
+
+test('a pending original survives replacement journal persistence failure', async t => {
+  const oldModel = deferred();
+  const oldModelStarted = deferred();
+  let calls = 0;
+  t.mock.method(requestAgent, 'run', async () => {
+    calls++;
+    if (calls === 1) {
+      oldModelStarted.resolve();
+      await oldModel.promise;
+      return modelPick('old-surviving-track');
+    }
+    return modelPick('replacement-never-accepted');
+  });
+  const old = await submit('pending-journal-failure');
+  assert.ok(old.accepted);
+  await oldModelStarted.promise;
+  try {
+    ledger._setReplacementRecoveryPersistFailureForTests(new Error('journal write failed'));
+    const result = await replaceLatestAlexaRequest('pending-journal-failure', 'Replacement title');
+    assert.ok(!result.accepted);
+    assert.equal(result.statusCode, 500);
+    assert.match(result.message || '', /still pending/i);
+    assert.equal(getLatestAlexaRequestStatus('pending-journal-failure')?.phase, 'pending');
+    assert.equal(ledger.latestForAlexa('pending-journal-failure')?.id, old.requestId);
+
+    oldModel.resolve();
+    assert.equal((await old.completion).phase, 'queued');
+    assert.deepEqual(queue.upcoming.map(item => item.track.id), ['old-surviving-track']);
+  } finally {
+    oldModel.resolve();
+  }
 });
 
 test('concurrent replacements serialize and reuse the pending receipt at capacity', async t => {
