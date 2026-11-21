@@ -2148,6 +2148,15 @@ def source_fingerprint(path, complete):
         return None
 
 
+def _remove_owned_download(owned, path):
+    """Remove a file analyze() downloaded itself; a caller's path is theirs."""
+    if owned and path is not None:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
 def bind_grid_source(head, outro, source):
     if source is not None:
         for data, key in ((head, "grid_provenance"), (outro, "gridProvenance")):
@@ -3886,7 +3895,6 @@ def analyze(
     # decode-length validation; False = definitively truncated → skipped.
     owned = path is None
     src_path = None
-    fingerprint = None
     decoded_tmp = None
     audio_embedding = None
     vocal_ranges = None
@@ -3930,6 +3938,7 @@ def analyze(
         # CLAP vector. Returning here avoids re-running every CPU acoustic
         # feature (and Demucs via an env default) merely to fill that one column.
         if embedding_only:
+            _remove_owned_download(owned, src_path)
             return {"audio_embedding": audio_embedding} if audio_embedding is not None else {}
         # Decode once WITH channels (a mono file still comes back 1-D): the
         # loudness meter needs real stereo for a correct BS.1770 channel sum
@@ -3940,8 +3949,6 @@ def analyze(
             librosa, path, sr=ANALYZE_SR, mono=False, duration=ANALYZE_SECONDS
         )
         y = librosa.to_mono(y_src)
-        if DOWNBEATS and get_downbeat_tracker() is not None:
-            fingerprint = source_fingerprint(src_path, complete)
         # Outro (tail) features — only meaningful off a complete file; a
         # byte-capped download's "tail" is mid-song. Best-effort like the rest.
         # With an UNKNOWN completeness (old caller) the original path's
@@ -4008,6 +4015,9 @@ def analyze(
             # the controller does not stamp a track whose stems are incomplete.
             if stems_dir and stems_dir_to_write(stems_dir, stems_require_marker) is None:
                 stems_cached = None
+    except BaseException:
+        _remove_owned_download(owned, src_path)
+        raise
     finally:
         if placed_src is not None:
             placed_src.close_window()
@@ -4016,17 +4026,19 @@ def analyze(
                 os.remove(decoded_tmp)
             except OSError:
                 pass
-        if owned and src_path is not None:
-            try:
-                os.remove(src_path)
-            except OSError:
-                pass
 
-    if y is None or len(y) == 0:
-        raise RuntimeError("decoded empty audio")
+    # An owned download outlives the head window only so a learned grid can
+    # name its bytes: the source is hashed once a learned grid exists, as
+    # analyze_facets does, never on a librosa grid or a failed inference.
+    try:
+        if y is None or len(y) == 0:
+            raise RuntimeError("decoded empty audio")
 
-    result = facet_head(y, sr, librosa)
-    bind_grid_source(result, outro, fingerprint)
+        result = facet_head(y, sr, librosa)
+        if result.get("grid_provenance") or (outro and outro.get("gridProvenance")):
+            bind_grid_source(result, outro, source_fingerprint(src_path, complete))
+    finally:
+        _remove_owned_download(owned, src_path)
     # When vocal activity was measured, the start of the first vocal range is a
     # truer intro than the energy heuristic (an instrumental intro is exactly
     # the vocal-free leading region). Prefer it; fall back to the heuristic for
