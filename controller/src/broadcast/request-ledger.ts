@@ -155,17 +155,47 @@ export function alexaIdentityKey(value: string, kind: 'user' | 'person' = 'user'
 export async function createPending(record: Omit<RequestLedgerRecord, 'updatedAt' | 'status'>) {
   const now = Date.now();
   const next: RequestLedgerRecord = { ...record, status: 'pending', updatedAt: now };
+  const previousId = next.alexaIdentity && store.latestAlexa[next.alexaIdentity];
   store.records = [next, ...store.records.filter(row => row.id !== next.id)];
   updateLatestAlexa(next);
-  await persist();
+  try {
+    await persist();
+  } catch (error) {
+    store.records = store.records.filter(row => row.id !== next.id);
+    if (next.alexaIdentity && store.latestAlexa[next.alexaIdentity] === next.id) {
+      if (previousId) store.latestAlexa[next.alexaIdentity] = previousId;
+      else delete store.latestAlexa[next.alexaIdentity];
+    }
+    throw error;
+  }
   return next;
+}
+
+// A replacement is written without an owner until the player releases the
+// old request. A refusal can therefore discard it without moving "my latest".
+export async function discardUnclaimedPending(id: string) {
+  store.records = store.records.filter(row => !(row.id === id && row.status === 'pending' && !row.alexaIdentity));
+  await persist();
+}
+
+// Publish both sides of the swap in the same ledger snapshot. Until player
+// removal succeeds, the owner's latest pointer still names the original.
+export function recordCancellation(id: string, replacement?: { id: string; identity: string }) {
+  if (replacement) {
+    const row = get(replacement.id);
+    if (!row || row.status !== 'pending' || row.alexaIdentity) throw new Error('Missing staged replacement');
+    row.alexaIdentity = replacement.identity;
+    store.latestAlexa[replacement.identity] = row.id;
+  }
+  return update(id, { status: 'cancelled', outcome: 'cancelled', message: 'Cancelled by listener.', reminder: null });
 }
 
 export async function update(id: string, patch: Partial<Omit<RequestLedgerRecord, 'id' | 'createdAt'>>) {
   const row = store.records.find(entry => entry.id === id);
   if (!row) return null;
   Object.assign(row, patch, { updatedAt: Date.now() });
-  updateLatestAlexa(row);
+  // Only admission changes an owner's latest pointer. A background update to
+  // an older receipt may complete in the same millisecond as a replacement.
   await persist();
   return row;
 }

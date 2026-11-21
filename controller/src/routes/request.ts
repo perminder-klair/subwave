@@ -23,7 +23,7 @@ import {
 } from '../util/request-guard.js';
 import {
   checkRateLimit, checkGlobalRateLimit, commitRateLimit, commitGlobalRateLimit, clientIp,
-  REQUESTS_DISABLED,
+  REQUESTS_DISABLED, reserveRequestBudget,
 } from '../middleware/ratelimit.js';
 import { validatePublicBody } from '../middleware/validate.js';
 import { listenerDedicationSchema, listenerRequestSchema } from '../schemas/request.js';
@@ -820,7 +820,7 @@ export type ListenerRequestSubmission = {
   retryAfter?: number;
 };
 
-export async function submitListenerRequest(input: {
+interface ListenerRequestInput {
   text: string;
   name: string;
   ip: string;
@@ -828,9 +828,15 @@ export async function submitListenerRequest(input: {
   alexaIdentity?: string;
   verifiedCandidate?: AlexaVerifiedCandidate;
   dedication?: RequestDedication;
-  /** Internal Alexa-only seam: the exact request cancelled by replacement. */
-  replacementOf?: string;
-}): Promise<ListenerRequestSubmission> {
+}
+
+export function submitListenerRequest(input: ListenerRequestInput): Promise<ListenerRequestSubmission> {
+  return input.source === 'alexa' && input.alexaIdentity
+    ? withAlexaRequestLock(input.alexaIdentity, () => admitListenerRequest(input))
+    : admitListenerRequest(input);
+}
+
+async function admitListenerRequest(input: ListenerRequestInput, replacementId?: string): Promise<ListenerRequestSubmission> {
   const parsed = listenerRequestSchema.safeParse({ text: input.text, name: input.name });
   if (!parsed.success) return { accepted: false, statusCode: 400, error: parsed.error.issues[0]?.message || 'Invalid request' };
   const stripped = stripScriptedOpener(sanitizeRequestText(parsed.data.text));
@@ -858,31 +864,27 @@ export async function submitListenerRequest(input: {
   const reservedNames = ['dj', 'admin', 'host', 'mod', 'moderator', (settings.get() as any)?.station || ''];
   const requester = cleanRequesterName(input.name, reservedNames);
   pruneRequests();
-  const replacement = input.replacementOf ? requestLedger.get(input.replacementOf) : null;
-  const latestReplacement = input.alexaIdentity
-    ? requestLedger.latestForAlexa(input.alexaIdentity)
-    : null;
-  const replacementAllowed = Boolean(
-    input.source === 'alexa'
-      && input.alexaIdentity
-      && replacement
-      && replacement.source === 'alexa'
-      && replacement.alexaIdentity === input.alexaIdentity
-      && replacement.status === 'cancelled'
-      && latestReplacement?.id === input.replacementOf,
-  );
-  if (input.replacementOf && !replacementAllowed) {
-    return { accepted: false, statusCode: 409, message: 'The request being replaced is no longer available.' };
+  if (replacementId) {
+    const phase = getListenerRequestStatus(replacementId).phase;
+    if (phase !== 'pending' && phase !== 'queued') {
+      return { accepted: false, statusCode: 429, message: 'Your previous request is already playing or has finished.' };
+    }
   }
-  const gate = checkRateLimit(input.ip, { allowReplacement: replacementAllowed });
+  const gate = checkRateLimit(input.ip, { allowReplacement: !!replacementId });
   if (!gate.ok) return { accepted: false, statusCode: 429, message: `Easy there — try again in ${gate.retryAfter}s.`, retryAfter: gate.retryAfter };
   const globalGate = checkGlobalRateLimit();
   if (!globalGate.ok) return { accepted: false, statusCode: 429, message: 'The request line is busy — try again in a few minutes.', retryAfter: globalGate.retryAfter };
   const retryAfter = Number(cfg.cooldownSec) > 0 ? Number(cfg.cooldownSec) : 60;
-  if (cfg.onePendingPerIp !== false && stillInFlight(lastByIp.get(input.ip), queue.queuedIds())) {
+  const previous = lastByIp.get(input.ip);
+  if (cfg.onePendingPerIp !== false && previous && previous.id !== replacementId && stillInFlight(previous, queue.queuedIds())) {
     return { accepted: false, statusCode: 429, message: 'Your last request is still queued — it airs first.', retryAfter };
   }
-  if (queue.pendingListenerRequests() + resolvingRequestCount() >= (Number(cfg.maxPending) || 6)) {
+  let pending = queue.pendingListenerRequests() + resolvingRequestCount();
+  if (replacementId) {
+    if (requests.get(replacementId)?.status === 'pending') pending--;
+    if (queue.upcoming.some(item => item.requestId === replacementId && item.requestedBy && !item.operator)) pending--;
+  }
+  if (pending >= (Number(cfg.maxPending) || 6)) {
     return { accepted: false, statusCode: 429, message: "The request queue's full — try again in a few minutes.", retryAfter };
   }
   const id = randomUUID();
@@ -905,8 +907,8 @@ export async function submitListenerRequest(input: {
     createdAt: Date.now(),
   };
   requests.set(id, entry);
-  lastByIp.set(input.ip, entry);
   if (input.source === 'alexa') {
+    const releaseBudget = reserveRequestBudget(input.ip);
     try {
       await requestLedger.createPending({
         id,
@@ -914,16 +916,28 @@ export async function submitListenerRequest(input: {
         source: 'alexa',
         requester,
         text: stripped.text,
-        alexaIdentity: input.alexaIdentity,
+        alexaIdentity: replacementId ? undefined : input.alexaIdentity,
         dedication,
       });
+      if (replacementId && input.alexaIdentity) {
+        const cancelled = await cancelRequestById(replacementId, { id, identity: input.alexaIdentity });
+        if (cancelled?.phase !== 'cancelled') {
+          requests.delete(id);
+          await requestLedger.discardUnclaimedPending(id);
+          return { accepted: false, statusCode: 429, message: 'Your previous request could not be replaced because it has reached the player.' };
+        }
+      }
     } catch (error) {
       requests.delete(id);
-      if (lastByIp.get(input.ip) === entry) lastByIp.delete(input.ip);
+      if (replacementId && requestLedger.get(id)) await requestLedger.discardUnclaimedPending(id).catch(cleanupError =>
+        queue.log('error', `request ledger cleanup failed: ${String(cleanupError)}`));
       queue.log('error', `request ledger create failed: ${error instanceof Error ? error.message : String(error)}`);
       return { accepted: false, statusCode: 500, message: 'Unable to record the request right now.' };
+    } finally {
+      releaseBudget();
     }
   }
+  lastByIp.set(input.ip, entry);
   commitRateLimit(input.ip);
   commitGlobalRateLimit();
   queue.log('request', `${requester}: "${stripped.text}" (id ${id.slice(0, 8)})${input.source === 'alexa' ? ' [Alexa]' : ''}`);
@@ -986,7 +1000,7 @@ export async function clearAlexaReminderConsent(identity: string, id: string): P
   return !!(await requestLedger.clearReminderConsent(id));
 }
 
-async function cancelRequestById(id: string): Promise<ListenerRequestStatus | null> {
+async function cancelRequestById(id: string, replacement?: { id: string; identity: string }): Promise<ListenerRequestStatus | null> {
   const entry = requests.get(id);
   const current = getListenerRequestStatus(id);
   if (current.status === 'unknown' || !['pending', 'queued'].includes(current.phase || '')) return current;
@@ -1003,47 +1017,37 @@ async function cancelRequestById(id: string): Promise<ListenerRequestStatus | nu
     entry.reminder = null;
     if (lastByIp.get(entry.clientKey) === entry) lastByIp.delete(entry.clientKey);
   }
-  await requestLedger.update(id, { status: 'cancelled', outcome: 'cancelled', message: 'Cancelled by listener.', reminder: null });
+  await requestLedger.recordCancellation(id, replacement)
+    .catch(error => queue.log('error', `request ledger cancellation save failed: ${String(error)}`));
   if (entry) recordOutcome(entry);
   return getListenerRequestStatus(id);
 }
 
 export async function cancelLatestAlexaRequest(identity: string): Promise<ListenerRequestStatus | null> {
-  const record = requestLedger.latestForAlexa(identity);
-  return record ? cancelRequestById(record.id) : null;
+  return withAlexaRequestLock(identity, () => {
+    const record = requestLedger.latestForAlexa(identity);
+    return record ? cancelRequestById(record.id) : Promise.resolve(null);
+  });
 }
 
-export async function replaceLatestAlexaRequest(identity: string, text: string): Promise<ListenerRequestSubmission> {
+async function withAlexaRequestLock<T>(identity: string, action: () => Promise<T>): Promise<T> {
   const previous = replacementLocks.get(identity) || Promise.resolve();
   let release!: () => void;
   const lock = new Promise<void>(resolve => { release = resolve; });
   replacementLocks.set(identity, lock);
   await previous;
   try {
-    const current = requestLedger.latestForAlexa(identity);
-    if (current) {
-      const status = getListenerRequestStatus(current.id);
-      if (status.phase !== 'pending' && status.phase !== 'queued') {
-        return { accepted: false, statusCode: 429, message: 'Your previous request is already playing or has finished.' };
-      }
-      const cancelled = await cancelRequestById(current.id);
-      if (cancelled?.phase !== 'cancelled') {
-        return { accepted: false, statusCode: 429, message: 'Your previous request could not be replaced because it has reached the player.' };
-      }
-      return submitListenerRequest({
-        text,
-        name: '',
-        ip: `alexa:${identity}`,
-        source: 'alexa',
-        alexaIdentity: identity,
-        replacementOf: current.id,
-      });
-    }
-    return submitListenerRequest({ text, name: '', ip: `alexa:${identity}`, source: 'alexa', alexaIdentity: identity });
+    return await action();
   } finally {
     release();
     if (replacementLocks.get(identity) === lock) replacementLocks.delete(identity);
   }
+}
+
+export function replaceLatestAlexaRequest(identity: string, text: string): Promise<ListenerRequestSubmission> {
+  return withAlexaRequestLock(identity, () => admitListenerRequest({
+    text, name: '', ip: `alexa:${identity}`, source: 'alexa', alexaIdentity: identity,
+  }, requestLedger.latestForAlexa(identity)?.id));
 }
 
 export async function reconcileRequestLedger(): Promise<void> {
