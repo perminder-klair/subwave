@@ -9,7 +9,9 @@ import MakeARequest from './what/MakeARequest';
 import BehindTheDesk from './what/BehindTheDesk';
 import UnderTheHood from './what/UnderTheHood';
 import Navidrome from './landing/Navidrome';
+import Classified from './landing/Classified';
 import Coda from './what/Coda';
+import { IS_OFFICIAL_HOST } from '@/lib/site';
 import type { ShowcaseStation } from '@/lib/stations';
 
 export default function Landing({ stations = [] }: { stations?: ShowcaseStation[] }) {
@@ -33,6 +35,7 @@ export default function Landing({ stations = [] }: { stations?: ShowcaseStation[
         <BehindTheDesk />
         <UnderTheHood />
         <Navidrome />
+        {IS_OFFICIAL_HOST && <Classified />}
         <Coda />
         <StationFooter />
       </main>
