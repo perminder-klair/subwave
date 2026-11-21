@@ -1,0 +1,80 @@
+{
+  "reference_pr": "https://github.com/perminder-klair/subwave/pull/2244",
+  "reference_commit": "dc4bbbc4443eeb6e1f811315d0fae3e6c5f27a8a",
+  "model_sha256": "5cff50fb031bc4a43b036f0af4835cf60bf8d43e6ccc8a7e676ed89db53f6eaf",
+  "cases": [
+    {
+      "id": "rozalla",
+      "seconds": 213.6,
+      "beats": 473,
+      "downbeats": 117,
+      "identical": true
+    },
+    {
+      "id": "gusto",
+      "seconds": 231.69333333333333,
+      "beats": 482,
+      "downbeats": 124,
+      "identical": true
+    },
+    {
+      "id": "cubik",
+      "seconds": 213.53333333333333,
+      "beats": 426,
+      "downbeats": 109,
+      "identical": true
+    },
+    {
+      "id": "afro-left",
+      "seconds": 454.50448979591835,
+      "beats": 948,
+      "downbeats": 246,
+      "identical": true
+    },
+    {
+      "id": "urban-cookie-collective",
+      "seconds": 222.53333333333333,
+      "beats": 478,
+      "downbeats": 120,
+      "identical": true
+    },
+    {
+      "id": "the-launch",
+      "seconds": 193.26666666666668,
+      "beats": 430,
+      "downbeats": 118,
+      "identical": true
+    },
+    {
+      "id": "el-nino",
+      "seconds": 226.54666666666665,
+      "beats": 504,
+      "downbeats": 140,
+      "identical": true
+    },
+    {
+      "id": "rozalla-12s",
+      "seconds": 12.0,
+      "beats": 23,
+      "downbeats": 7,
+      "identical": true
+    },
+    {
+      "id": "rozalla-20s",
+      "seconds": 20.0,
+      "beats": 42,
+      "downbeats": 11,
+      "identical": true
+    },
+    {
+      "id": "rozalla-40s",
+      "seconds": 40.0,
+      "beats": 86,
+      "downbeats": 22,
+      "identical": true
+    }
+  ],
+  "flat_and_facet_identical": true,
+  "real_model_downbeat_tests_passed": 17,
+  "legacy_characterisation_fixtures_passed": 11
+}

@@ -385,6 +385,11 @@ services:
       - ANALYZE_WHOLE_FILE_TIMEOUT_S=\${ANALYZE_WHOLE_FILE_TIMEOUT_S:-}
       - ANALYZE_CLAP_WINDOWS=\${ANALYZE_CLAP_WINDOWS:-}
       - ANALYZE_OUTRO_SECONDS=\${ANALYZE_OUTRO_SECONDS:-}
+      # Real downbeats for the bar grid: beat-this (Beat This!, heavy image
+      # only, ANALYZER_HEAVY=1; audible with stem blends on). Unset, anything
+      # else or a lean image = librosa's every-4th-beat grid.
+      - ANALYZE_DOWNBEATS=\${ANALYZE_DOWNBEATS:-}
+      - ANALYZE_DOWNBEAT_THREADS=\${ANALYZE_DOWNBEAT_THREADS:-}
       # CLAP isn't gated, but anonymous HF downloads are rate-limited. Same var
       # as tts-heavy — set once and both sidecars pick it up.
       - HF_TOKEN=\${HF_TOKEN:-}
@@ -748,6 +753,11 @@ services:
       - ANALYZE_WHOLE_FILE_TIMEOUT_S=\${ANALYZE_WHOLE_FILE_TIMEOUT_S:-}
       - ANALYZE_CLAP_WINDOWS=\${ANALYZE_CLAP_WINDOWS:-}
       - ANALYZE_OUTRO_SECONDS=\${ANALYZE_OUTRO_SECONDS:-}
+      # Real downbeats for the bar grid: beat-this (Beat This!, heavy image
+      # only, ANALYZER_HEAVY=1; audible with stem blends on). Unset, anything
+      # else or a lean image = librosa's every-4th-beat grid.
+      - ANALYZE_DOWNBEATS=\${ANALYZE_DOWNBEATS:-}
+      - ANALYZE_DOWNBEAT_THREADS=\${ANALYZE_DOWNBEAT_THREADS:-}
       # Anonymous HF downloads are rate-limited; same var as tts-heavy.
       - HF_TOKEN=\${HF_TOKEN:-}
     volumes:
@@ -1047,6 +1057,11 @@ services:
       - ANALYZE_WHOLE_FILE_TIMEOUT_S=\${ANALYZE_WHOLE_FILE_TIMEOUT_S:-}
       - ANALYZE_CLAP_WINDOWS=\${ANALYZE_CLAP_WINDOWS:-}
       - ANALYZE_OUTRO_SECONDS=\${ANALYZE_OUTRO_SECONDS:-}
+      # Real downbeats for the bar grid: beat-this (Beat This!, heavy image
+      # only, ANALYZER_HEAVY=1; audible with stem blends on). Unset, anything
+      # else or a lean image = librosa's every-4th-beat grid.
+      - ANALYZE_DOWNBEATS=\${ANALYZE_DOWNBEATS:-}
+      - ANALYZE_DOWNBEAT_THREADS=\${ANALYZE_DOWNBEAT_THREADS:-}
       # Anonymous HF downloads are rate-limited; same var as tts-heavy.
       - HF_TOKEN=\${HF_TOKEN:-}
     volumes:
@@ -1549,6 +1564,21 @@ SITE_URL=
 #                         # complete file for outro analysis (fade-vs-cold
 #                         # ending, tail loudness/tempo — drives the
 #                         # ending-aware crossfade). Pure librosa, cheap
+# ANALYZE_DOWNBEATS=      # beat-this = take the bar grid (beats + bars, head
+#                         # and tail windows) from the Beat This! model, so
+#                         # stem-blend cues land on real downbeats. Needs the
+#                         # heavy analyzer image (ANALYZER_HEAVY=1), the only
+#                         # one that ships the model, and is audible only with
+#                         # stem blends on. Unset/anything else, or a lean
+#                         # image = librosa's every-4th-beat guess, whose bar
+#                         # phase is arbitrary. Costs ~3 s per track on two
+#                         # cores and up to ~225 MB more analyzer memory while
+#                         # loaded. Existing tracks keep their old grid until
+#                         # re-analysed: see docs/tts-heavy.md, "Real downbeats".
+#                         # Opt-in also for licence reasons: code and weights
+#                         # are MIT, but some training audio is copyrighted
+#                         # (CPJKU/beat_this#18, #21); see CREDITS.md
+# ANALYZE_DOWNBEAT_THREADS=2 # onnxruntime threads per analyzer worker
 #
 # Which heavy-TTS engines the tts-heavy sidecar loads. Chatterbox AND PocketTTS
 # are both baked into the image, but each costs RAM + a first-boot weight
