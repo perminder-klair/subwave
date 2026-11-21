@@ -120,15 +120,8 @@ configureHttp(app);
 const startup = createStartupGate();
 app.use(startup.middleware);
 
-// Amazon's official Express adapter must see the raw request body before any
-// JSON parser runs; it verifies Alexa's signature against those exact bytes.
-// Mount this route before the controller-wide parser, while still keeping it
-// behind the startup gate like every other state consumer.
+// configureHttp leaves the webhook body for the ASK adapter to parse and verify.
 app.use(alexaRoutes);
-
-// Global cap for small JSON payloads; the persona-avatar route re-applies its own
-// larger cap. The 100 KB default was below the data URLs the avatar picker posts.
-app.use(express.json({ limit: '600kb' }));
 
 // Routes. `requireAdmin` is applied per-route inside the admin modules.
 app.use(publicRoutes);

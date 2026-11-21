@@ -16,12 +16,19 @@ export function configureHttp(app: Express): void {
   }));
   // Parser failures must carry CORS headers too, so cross-origin clients can read them.
   app.use(cors);
-  app.use(express.json({ limit: '600kb' }));
-  app.use((req, _res, next) => {
-    // Express 5 leaves unparsed bodies undefined. Optional-body routes and
-    // schema defaults previously received an empty object in Express 4.
-    if (req.body === undefined) req.body = {};
-    next();
+  const parseJson = express.json({ limit: '600kb' });
+  app.use((req, res, next) => {
+    // ASK's ExpressAdapter rejects a pre-set req.body and needs the original
+    // bytes for signature verification. Its webhook owns parsing this body.
+    if (req.method === 'POST' && /^\/alexa\/?$/i.test(req.path)) return next();
+
+    parseJson(req, res, (err?: unknown) => {
+      if (err) return next(err);
+      // Express 5 leaves unparsed bodies undefined. Optional-body routes and
+      // schema defaults previously received an empty object in Express 4.
+      if (req.body === undefined) req.body = {};
+      next();
+    });
   });
 }
 

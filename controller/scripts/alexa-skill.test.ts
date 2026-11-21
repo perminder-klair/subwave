@@ -15,6 +15,7 @@ const { verifyAlexaStreamToken } = await import('../src/alexa/token.js');
 const { AlexaListenerFeatureService } = await import('../src/alexa/listener-features.js');
 const { decideAlexaCapability, normalizeAlexaIntentPolicy } = await import('../src/alexa/intent-policy.js');
 const { createAlexaSkill, router, testAlexaConnection } = await import('../src/routes/alexa.js');
+const { configureHttp, httpErrorHandler } = await import('../src/middleware/http.js');
 const { verifiedCandidateMatches } = await import('../src/routes/request.js');
 const settings = await import('../src/settings.js');
 
@@ -554,11 +555,13 @@ test('Alexa rejects a skill request with the wrong configured skill id', async (
   );
 });
 
-test('the Express endpoint keeps Alexa request bytes ahead of the global JSON parser', async () => {
+test('the Alexa webhook reaches signature verification through configureHttp', async t => {
   const express = (await import('express')).default;
   const app = express();
+  configureHttp(app);
   app.use(router);
-  app.use(express.json());
+  app.use(httpErrorHandler);
+  await settings.update({ alexa: { enabled: true, skillId } });
   const server = createServer(app);
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   server.unref();
@@ -566,16 +569,21 @@ test('the Express endpoint keeps Alexa request bytes ahead of the global JSON pa
   try {
     const address = server.address();
     assert.ok(address && typeof address === 'object');
-    const response = await fetch(`http://127.0.0.1:${address.port}/alexa`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(launch()),
-    });
-    const body = await response.text();
+    for (const contentType of ['application/json', 'application/json; charset=UTF-8']) {
+      await t.test(contentType, async () => {
+        const response = await fetch(`http://127.0.0.1:${address.port}/alexa`, {
+          method: 'POST',
+          headers: { 'content-type': contentType },
+          body: JSON.stringify(launch()),
+        });
+        const body = await response.text();
 
-    assert.equal(response.status, 400);
-    assert.match(body, /Request verification failed/i);
-    assert.doesNotMatch(body, /Do not register any parsers before using the adapter/i);
+        // The real SDK must reject this unsigned envelope at signature verification.
+        assert.equal(response.status, 400, body);
+        assert.match(body, /Request verification failed/i);
+        assert.doesNotMatch(body, /Do not register any parsers before using the adapter/i);
+      });
+    }
   } finally {
     await new Promise<void>(resolve => server.close(() => resolve()));
   }
@@ -606,10 +614,12 @@ test('the Alexa webhook is unavailable while the station player is private', asy
   }
 });
 
-test('the connection test parses an unsaved enabled draft before the global JSON parser', async () => {
+test('the connection test parses an unsaved enabled draft through configureHttp', async () => {
   const express = (await import('express')).default;
   const app = express();
+  configureHttp(app);
   app.use(router);
+  app.use(httpErrorHandler);
   const server = createServer(app);
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   server.unref();
