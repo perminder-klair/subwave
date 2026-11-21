@@ -27,7 +27,10 @@ beforeEach(async () => {
   queue.history = [];
   queue.current = null;
 });
-afterEach(() => mock.restoreAll());
+afterEach(() => {
+  ledger._setReplacementRecoveryBarrierForTests(null);
+  mock.restoreAll();
+});
 
 function modelPick(id: string) {
   const track = { id, artist: 'River Band', title: id, duration: 180 };
@@ -248,6 +251,60 @@ test('a refused replacement keeps its pending predecessor resolving', async t =>
   } finally { release.resolve(); }
   assert.equal((await old.completion).phase, 'queued');
   assert.deepEqual(queue.upcoming.map(item => item.requestId), [old.requestId]);
+});
+
+test('an accepted replacement stops its pending resolver before ledger persistence and never queues the old track', async t => {
+  const oldModel = deferred();
+  const oldModelStarted = deferred();
+  let calls = 0;
+  t.mock.method(requestAgent, 'run', async () => {
+    calls++;
+    if (calls === 1) {
+      oldModelStarted.resolve();
+      await oldModel.promise;
+      return modelPick('old-pending-track');
+    }
+    return modelPick('replacement-track');
+  });
+  const old = await submit('pending-race');
+  assert.ok(old.accepted);
+  await oldModelStarted.promise;
+
+  const recoveryStarted = deferred();
+  const finishRecovery = deferred();
+  ledger._setReplacementRecoveryBarrierForTests(async () => {
+    recoveryStarted.resolve();
+    await finishRecovery.promise;
+  });
+
+  let replacement: ReturnType<typeof replaceLatestAlexaRequest> | undefined;
+  try {
+    replacement = replaceLatestAlexaRequest('pending-race', 'Replacement title');
+    const entered = await Promise.race([
+      recoveryStarted.promise.then(() => true),
+      new Promise<boolean>(resolve => {
+        const timer = setTimeout(() => resolve(false), 2_000);
+        timer.unref();
+      }),
+    ]);
+    assert.equal(entered, true, 'pending replacement must reach recovery while holding the resolver stop marker');
+    assert.equal(getLatestAlexaRequestStatus('pending-race')?.phase, 'cancelled');
+
+    oldModel.resolve();
+    assert.equal((await old.completion).phase, 'cancelled');
+    assert.equal(queue.upcoming.some(item => item.requestId === old.requestId || item.track.id === 'old-pending-track'), false);
+  } finally {
+    oldModel.resolve();
+    finishRecovery.resolve();
+    ledger._setReplacementRecoveryBarrierForTests(null);
+  }
+
+  assert.ok(replacement);
+  const result = await replacement;
+  assert.ok(result.accepted);
+  assert.equal((await result.completion).phase, 'queued');
+  assert.deepEqual(queue.upcoming.map(item => item.track.id), ['replacement-track']);
+  assert.equal(ledger.get(old.requestId)?.status, 'cancelled');
 });
 
 test('concurrent replacements serialize and reuse the pending receipt at capacity', async t => {

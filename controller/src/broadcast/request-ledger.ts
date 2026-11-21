@@ -125,6 +125,11 @@ function isRecord(value: unknown): value is RequestLedgerRecord {
 
 const store = loadStore();
 let pendingPersist = Promise.resolve();
+let replacementRecoveryBarrierForTests: (() => Promise<void>) | null = null;
+
+export function _setReplacementRecoveryBarrierForTests(barrier: (() => Promise<void>) | null) {
+  replacementRecoveryBarrierForTests = barrier;
+}
 
 function prune(now = Date.now()) {
   const cutoff = now - RETENTION_MS;
@@ -209,6 +214,7 @@ export async function beginReplacementRecovery(previousId: string, replacementId
     throw new Error('Missing receipt for replacement recovery');
   }
   if (store.replacementRecoveries[replacementId]) throw new Error('Replacement recovery is already in progress');
+  await replacementRecoveryBarrierForTests?.();
   const transaction = { previousId, replacementId, identity };
   store.replacementRecoveries[replacementId] = transaction;
   try {

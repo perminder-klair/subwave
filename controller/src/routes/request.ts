@@ -1007,7 +1007,17 @@ async function cancelRequestById(id: string, replacement?: { id: string; identit
   const entry = requests.get(id);
   const current = getListenerRequestStatus(id);
   if (current.status === 'unknown' || !['pending', 'queued'].includes(current.phase || '')) return current;
-  if (replacement && current.phase === 'queued') {
+  // Stop an in-flight resolver synchronously before any ledger I/O. It checks
+  // this marker before its queue push; a persistence wait must not let the old
+  // track slip into the queue after a replacement has begun.
+  if (replacement && current.phase === 'pending' && entry) {
+    entry.status = 'cancelled';
+    entry.outcome = 'cancelled';
+    entry.message = 'Cancelled by listener.';
+    entry.reminder = null;
+    if (lastByIp.get(entry.clientKey) === entry) lastByIp.delete(entry.clientKey);
+  }
+  if (replacement) {
     try {
       await requestLedger.beginReplacementRecovery(id, replacement.id, replacement.identity);
     } catch (error) {
@@ -1015,10 +1025,19 @@ async function cancelRequestById(id: string, replacement?: { id: string; identit
       requests.delete(replacement.id);
       await requestLedger.discardUnclaimedPending(replacement.id)
         .catch(cleanupError => queue.log('error', `staged replacement cleanup failed: ${String(cleanupError)}`));
+      if (entry && current.phase === 'pending') {
+        entry.phase = 'interrupted';
+        entry.outcome = 'interrupted';
+        entry.message = 'The request was stopped, but its replacement could not be safely recorded.';
+        if (lastByIp.get(entry.clientKey) === entry) lastByIp.delete(entry.clientKey);
+        recordOutcome(entry);
+      }
       return {
         ...current,
         outcome: 'replacement-ledger-error',
-        message: 'The replacement could not be safely recorded; your previous request is still queued.',
+        message: current.phase === 'pending'
+          ? 'The request was stopped, but the replacement could not be safely recorded.'
+          : 'The replacement could not be safely recorded; your previous request is still queued.',
       };
     }
   }
@@ -1039,9 +1058,18 @@ async function cancelRequestById(id: string, replacement?: { id: string; identit
     } catch (error) {
       const message = current.phase === 'queued'
         ? 'The previous request was removed, but the replacement could not be safely recorded.'
-        : 'The replacement could not be recorded; your previous request is still active.';
+        : 'The request was stopped, but the replacement could not be safely recorded.';
       if (entry && current.phase === 'queued') {
         entry.status = 'failed';
+        entry.phase = 'interrupted';
+        entry.outcome = 'interrupted';
+        entry.message = message;
+        entry.reminder = null;
+        if (lastByIp.get(entry.clientKey) === entry) lastByIp.delete(entry.clientKey);
+      } else if (entry && current.phase === 'pending') {
+        // Keep `cancelled` as the resolver's stop signal. The ledger write did
+        // not commit, so the latest receipt explains that the work was stopped
+        // but cannot be safely replayed.
         entry.phase = 'interrupted';
         entry.outcome = 'interrupted';
         entry.message = message;
