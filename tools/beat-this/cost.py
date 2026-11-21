@@ -47,7 +47,7 @@ def main():
 
         out["ort_import_s"] = round(time.perf_counter() - t, 3)
         sys.path.insert(0, os.path.join(HERE, "..", "..", "controller", "scripts"))
-        import analyze_worker as aw
+        import beat_this_grid as grid
 
         so = ort.SessionOptions()
         so.intra_op_num_threads = threads
@@ -59,7 +59,7 @@ def main():
         sess = ort.InferenceSession(model, so, providers=["CPUExecutionProvider"])
         out["session_s"] = round(time.perf_counter() - t, 3)
         out["rss_after_session_mib"] = round(vm("VmRSS"), 1)
-        tracker = aw.DownbeatTracker(model, threads)
+        tracker = grid.DownbeatTracker(model, threads)
         tracker.session = sess
         tracker.input_name = sess.get_inputs()[0].name
         tracker.track(y30, sr, librosa)  # warm-up
