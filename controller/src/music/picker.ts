@@ -26,7 +26,7 @@ import { resolveShowPlaylistPool, resolveExcludedPlaylistIds, type PlaylistPool 
 import { allowsMoodPlaylistDiscovery } from './discovery-policy.js';
 import { episodeUnderSteer, openingArtistSpan, spaceOpeningList, steeredShow } from './steer.js';
 import type { Steer } from '../schemas/steer.js';
-import { hardRecentFor, showNoRepeatGuard, strictShowLibraryPool } from './show-recency.js';
+import { hardRecentFor, showNoRepeatGuard, strictShowLibraryPoolSliced } from './show-recency.js';
 import * as likes from '../broadcast/likes.js';
 import { ARTIST_VARIETY_WINDOW } from '../broadcast/dj-agent/artist-guard.js';
 import { groundPickNote } from '../broadcast/dj-agent/pick-note.js';
@@ -716,9 +716,9 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
       minTrackSec,
       maxTrackSec,
       // Same catalogue the agent path sizes its window from.
-      showLibraryPool: strictShowLibraryPool(activeShow?.filtersStrict ? library.candidateFilterTracks() : null, {
+      showLibraryPool: await strictShowLibraryPoolSliced(library.candidateFilterTrackBatches(), {
         show: activeShow, excludedIds, resolvedGenres: strictGenreResolution.genres, minTrackSec, maxTrackSec,
-      }),
+      }, library.candidateFilterTracks),
     },
   );
   const effN = noRepeat.window;

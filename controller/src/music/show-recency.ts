@@ -120,18 +120,44 @@ export function airableAnchorTracks<T extends ShowTrack>(
 // a few hours, every discovery source came back empty, and each pick fell to
 // the fallback pool. A strict playlist was already clamped to its own size; a
 // strict filter is the same kind of closed catalogue.
+type StrictShowPoolOptions = {
+  show: RecencyShow;
+  excludedIds: Set<string> | null;
+  resolvedGenres?: string[];
+  minTrackSec?: number | null;
+  maxTrackSec?: number | null;
+};
+
 export function strictShowLibraryPool<T extends ShowTrack>(
   libraryTracks: T[] | null | undefined,
-  opts: {
-    show: RecencyShow;
-    excludedIds: Set<string> | null;
-    resolvedGenres?: string[];
-    minTrackSec?: number | null;
-    maxTrackSec?: number | null;
-  },
+  opts: StrictShowPoolOptions,
 ): T[] | null {
   if (!opts.show?.filtersStrict || !libraryTracks) return null;
   return airableAnchorTracks(libraryTracks, opts);
+}
+
+// strictShowLibraryPool over a library read in pages, yielding between them so
+// the SQL read and row mapping never block the controller for the whole
+// catalogue. The pages are only COLLECTED here: airableAnchorTracks runs once,
+// on the whole set, because its strict locks never-starve per dimension, and
+// applied page by page a page with no genre match would skip the genre lock and
+// bring every row on it into the pool. A scan that fails part-way (the library
+// was restored, reset or closed between pages) falls back at once to the whole
+// synchronous read, the pre-paging behaviour; with no fallback it throws.
+export async function strictShowLibraryPoolSliced<T extends ShowTrack>(
+  libraryBatches: AsyncIterable<T[]>,
+  opts: StrictShowPoolOptions,
+  wholeLibrary?: () => T[],
+): Promise<T[] | null> {
+  if (!opts.show?.filtersStrict) return null;
+  const rows: T[] = [];
+  try {
+    for await (const page of libraryBatches) for (const row of page) rows.push(row);
+  } catch (err) {
+    if (!wholeLibrary) throw err;
+    return strictShowLibraryPool(wholeLibrary(), opts);
+  }
+  return strictShowLibraryPool(rows, opts);
 }
 
 export function showNoRepeatGuard(

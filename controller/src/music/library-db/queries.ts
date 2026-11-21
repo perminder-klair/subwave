@@ -302,6 +302,25 @@ export function genreCentroids(): GenreCentroid[] {
   addGenreVectors(acc, GENRE_WALK_START);
   return centroidsOf(acc);
 }
+type CandidateFilterRow = {
+  id: string;
+  title: string | null;
+  artist: string | null;
+  year: number | null;
+  original_year: number | null;
+  is_compilation: number | null;
+  era_untrusted: number | null;
+  genres: string | null;
+  genre: string | null;
+  moods: string | null;
+  audio_moods: string | null;
+  energy: EnergyValue;
+  vocal_ranges_json: string | null;
+  tail_vocal_ranges_json: string | null;
+  duration_sec: number | null;
+  explicit_status: ExplicitStatus | null;
+};
+
 // Whole-library projection for the Show-editor candidate diagnostic: the fields
 // the strict show locks use, none of the heavy analysis JSON.
 export function candidateFilterTracks(): Array<{
@@ -327,29 +346,15 @@ export function candidateFilterTracks(): Array<{
   // Carried, so a clean show's walk over this whole projection is no per-row read.
   explicitStatus: ExplicitStatus | null;
 }> {
-  type CandidateFilterRow = {
-    id: string;
-    title: string | null;
-    artist: string | null;
-    year: number | null;
-    original_year: number | null;
-    is_compilation: number | null;
-    era_untrusted: number | null;
-    genres: string | null;
-    genre: string | null;
-    moods: string | null;
-    audio_moods: string | null;
-    energy: EnergyValue;
-    vocal_ranges_json: string | null;
-    tail_vocal_ranges_json: string | null;
-    duration_sec: number | null;
-    explicit_status: ExplicitStatus | null;
-  };
   const rows = requireDb().prepare(`SELECT id, title, artist, year, original_year,
     is_compilation, era_untrusted, genres, genre, moods, audio_moods, energy, duration_sec,
     vocal_ranges_json, ${SQL_TAIL_VOCAL_RANGES} AS tail_vocal_ranges_json, explicit_status
     FROM tracks`).all() as CandidateFilterRow[];
-  return rows.map((row) => ({
+  return rows.map(candidateFilterTrack);
+}
+
+function candidateFilterTrack(row: CandidateFilterRow): ReturnType<typeof candidateFilterTracks>[number] {
+  return {
     id: row.id,
     title: row.title ?? null,
     artist: row.artist ?? null,
@@ -366,7 +371,35 @@ export function candidateFilterTracks(): Array<{
     ...parseTailVocalRangesJson(row.tail_vocal_ranges_json),
     durationSec: row.duration_sec ?? null,
     explicitStatus: row.explicit_status ?? null,
-  }));
+  };
+}
+
+// Rows per page of the paged strict-show scan: small enough that one page's
+// read and row mapping is a short slice of the event loop, large enough that a
+// 50k-track library is ~100 pages rather than thousands of setImmediate hops.
+export const CANDIDATE_FILTER_PAGE_ROWS = 500;
+
+// candidateFilterTracks()'s projection, read in rowid pages with a yield
+// between them, so a strict-show pool build doesn't block the controller for
+// the whole catalogue. Pages are not one snapshot. A restore or reset between
+// pages swaps or closes the handle, and the next page throws rather than read
+// a closed statement or splice two libraries: the caller falls back to the
+// whole synchronous read (strictShowLibraryPoolSliced).
+export async function* candidateFilterTrackBatches(): AsyncGenerator<ReturnType<typeof candidateFilterTracks>> {
+  const handle = requireDb();
+  const stmt = handle.prepare(`SELECT rowid AS candidate_rowid, id, title, artist, year, original_year,
+    is_compilation, era_untrusted, genres, genre, moods, audio_moods, energy, duration_sec,
+    vocal_ranges_json, ${SQL_TAIL_VOCAL_RANGES} AS tail_vocal_ranges_json, explicit_status
+    FROM tracks WHERE rowid > ? ORDER BY rowid LIMIT ?`);
+  let after = 0;
+  while (true) {
+    if (requireDb() !== handle) throw new Error('library-db reopened during a paged candidate scan');
+    const rows = stmt.all(after, CANDIDATE_FILTER_PAGE_ROWS) as Array<CandidateFilterRow & { candidate_rowid: number }>;
+    if (!rows.length) return;
+    after = rows.at(-1)!.candidate_rowid;
+    yield rows.map(candidateFilterTrack);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
 }
 
 // A prepared artist episode's catalogue as the mirror holds it (#2333): every
