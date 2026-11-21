@@ -79,6 +79,22 @@ await settings.update({ requests: { enabled: true, cooldownSec: 5, perIpHourlyCa
 assert.equal(checkRateLimit('10.0.0.1').ok, true);
 assert.equal(checkRateLimit('10.0.0.1').ok, false); // inside 5s cooldown
 
+// A replacement may reuse only the cooldown slot belonging to the request it
+// just cancelled. It stamps a fresh cooldown, so a later ordinary request is
+// still held back.
+const replacementIp = '10.0.0.77';
+assert.equal(checkRateLimit(replacementIp).ok, true);
+assert.equal(checkRateLimit(replacementIp).ok, false);
+assert.equal(checkRateLimit(replacementIp, { allowReplacement: true }).ok, true);
+assert.equal(checkRateLimit(replacementIp).ok, false);
+
+// The hourly budget remains hard when the cooldown is bypassed.
+const cappedReplacementIp = '10.0.0.78';
+await settings.update({ requests: { cooldownSec: 5, perIpHourlyCap: 1 } });
+assert.equal(checkRateLimit(cappedReplacementIp).ok, true);
+commitRateLimit(cappedReplacementIp);
+assert.equal(checkRateLimit(cappedReplacementIp, { allowReplacement: true }).ok, false);
+
 // Global bucket: 5 allowed across ANY ips, 6th refused with a retryAfter.
 for (let i = 0; i < 5; i++) {
   assert.equal(checkGlobalRateLimit().ok, true);

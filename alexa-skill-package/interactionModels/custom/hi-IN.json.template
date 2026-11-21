@@ -1,0 +1,341 @@
+{
+  "interactionModel": {
+    "languageModel": {
+      "intents": [
+        {
+          "name": "StartRadioIntent",
+          "samples": [
+            "radio शुरू करो",
+            "station शुरू करो",
+            "radio चलाओ",
+            "station play करो",
+            "radio chalu karo",
+            "station chalao",
+            "start listening"
+          ]
+        },
+        {
+          "name": "PlayRadioIntent",
+          "samples": [
+            "radio बजाओ",
+            "station बजाओ",
+            "radio play करो",
+            "play the radio"
+          ]
+        },
+        {
+          "slots": [
+            {
+              "name": "requestText",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "name": "RequestSongIntent",
+          "samples": [
+            "{requestText} बजाने की request करो",
+            "radio पर request करो {requestText}",
+            "मुझे सुनना है {requestText}",
+            "{requestText} के लिए request करो",
+            "request करो {requestText}",
+            "radio पर {requestText} की request करो",
+            "क्या तुम {requestText} play कर सकते हो",
+            "{requestText} बजाओ",
+            "{requestText} सुनाओ",
+            "radio पर {requestText} चलाओ",
+            "radio par {requestText} chalao",
+            "mujhe {requestText} sunna hai",
+            "play {requestText}"
+          ]
+        },
+        {
+          "name": "RequestStatusIntent",
+          "samples": [
+            "मेरी request का status क्या है",
+            "मैंने क्या request किया",
+            "मेरी request कब बजेगी",
+            "क्या मेरी song request ready है",
+            "meri request ka status kya hai",
+            "meri request kab chalegi",
+            "maine kya request kiya"
+          ]
+        },
+        {
+          "name": "CancelRequestIntent",
+          "samples": [
+            "मेरी request cancel करो",
+            "मेरी song request cancel करो",
+            "waiting request cancel करो",
+            "meri request cancel karo",
+            "meri song request cancel karo"
+          ]
+        },
+        {
+          "slots": [
+            {
+              "name": "requestText",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "name": "ReplaceRequestIntent",
+          "samples": [
+            "मेरी request को बदलकर {requestText}",
+            "मेरी song request बदलकर {requestText}",
+            "waiting request की जगह request करो {requestText}",
+            "meri request ko badal kar {requestText}",
+            "meri request replace karo {requestText}"
+          ]
+        },
+        {
+          "name": "NowPlayingIntent",
+          "samples": [
+            "अभी कौन सा गाना बज रहा है",
+            "कौन सा song चल रहा है",
+            "radio पर क्या बज रहा है",
+            "abhi kya baj raha hai",
+            "abhi kaunsa song chal raha hai",
+            "radio par kya baj raha hai"
+          ]
+        },
+        {
+          "name": "WhatIsPlayingIntent",
+          "samples": [
+            "अभी क्या बज रहा है बताओ",
+            "station पर क्या बज रहा है",
+            "tell me what is playing",
+            "station par kya baj raha hai"
+          ]
+        },
+        {
+          "name": "CurrentSongIntent",
+          "samples": [
+            "अभी के गाने का नाम बताओ",
+            "current song ka naam kya hai",
+            "tell me the current song"
+          ]
+        },
+        {
+          "name": "PreviousTrackIntent",
+          "samples": [
+            "इससे पहले कौन सा गाना बजा",
+            "पिछला गाना कौन सा था",
+            "last song बताओ",
+            "pichla song kya tha",
+            "isse pehle kaunsa gaana baja"
+          ]
+        },
+        {
+          "name": "UpcomingIntent",
+          "samples": [
+            "अगला गाना कौन सा है",
+            "आगे कौन सा song बजेगा",
+            "next song बताओ",
+            "next song kya hai",
+            "agla gaana kaunsa hai",
+            "aage kya bajega"
+          ]
+        },
+        {
+          "name": "NextSongIntent",
+          "samples": [
+            "अगला गाना बताओ",
+            "next gaana batao",
+            "what song comes after this",
+            "iske baad kya bajega"
+          ]
+        },
+        {
+          "name": "WhatIsNextIntent",
+          "samples": [
+            "radio पर next क्या है",
+            "what comes next on the radio",
+            "radio par next kya hai",
+            "which track plays next"
+          ]
+        },
+        {
+          "name": "QueuePreviewIntent",
+          "samples": [
+            "आगे कौन कौन से गाने हैं",
+            "अगले songs बताओ",
+            "queue का preview बताओ",
+            "aage ka queue batao",
+            "agale songs batao"
+          ]
+        },
+        {
+          "name": "StationStatusIntent",
+          "samples": [
+            "क्या station online है",
+            "क्या radio चल रहा है",
+            "station check करो",
+            "radio online hai kya",
+            "station chal raha hai kya"
+          ]
+        },
+        {
+          "name": "MoreLikeThisIntent",
+          "samples": [
+            "इस जैसा और गाना बजाओ",
+            "ऐसे ही और गाने सुनाओ",
+            "more like this",
+            "aise hi aur gaane bajao",
+            "इस गाने जैसा कुछ और चलाओ"
+          ]
+        },
+        {
+          "name": "AnotherByArtistIntent",
+          "samples": [
+            "इस artist का एक और गाना बजाओ",
+            "इसी कलाकार का कोई और गाना सुनाओ",
+            "another song by this artist",
+            "same artist ka ek aur gaana"
+          ]
+        },
+        {
+          "name": "RecentTracksIntent",
+          "samples": [
+            "हाल में कौन से गाने बजे",
+            "अभी हाल में क्या बजा",
+            "recent tracks बताओ",
+            "what played recently"
+          ]
+        },
+        {
+          "slots": [
+            {
+              "name": "detailType",
+              "type": "AlexaDetailType"
+            }
+          ],
+          "name": "TrackDetailsIntent",
+          "samples": [
+            "इस गाने का {detailType} बताओ",
+            "current song का {detailType} क्या है",
+            "इस track की पूरी details बताओ",
+            "tell me all details about this song"
+          ]
+        },
+        {
+          "name": "CurrentShowIntent",
+          "samples": [
+            "अभी कौन सा show चल रहा है",
+            "अभी DJ कौन है",
+            "radio पर अभी क्या show है",
+            "what is on air right now"
+          ]
+        },
+        {
+          "slots": [
+            {
+              "name": "requestText",
+              "type": "AMAZON.SearchQuery"
+            },
+            {
+              "name": "dedicationTarget",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "name": "DedicationIntent",
+          "samples": [
+            "dedicate करो {requestText}",
+            "{dedicationTarget} के लिए dedication करो",
+            "एक गाना dedicate करना है",
+            "ek dedication karni hai",
+            "इस गाने को dedicate करो",
+            "किसी के लिए गाना बजाओ"
+          ]
+        },
+        {
+          "name": "RequestReminderIntent",
+          "samples": [
+            "मेरी request बजने से पहले याद दिलाओ",
+            "मेरे गाने के लिए reminder लगाओ",
+            "meri request se pehle reminder lagao",
+            "requested song bajne se pehle yaad dilao"
+          ]
+        },
+        {
+          "name": "AMAZON.HelpIntent"
+        },
+        {
+          "name": "AMAZON.StopIntent"
+        },
+        {
+          "name": "AMAZON.CancelIntent"
+        },
+        {
+          "name": "AMAZON.PauseIntent"
+        },
+        {
+          "name": "AMAZON.ResumeIntent"
+        },
+        {
+          "name": "AMAZON.FallbackIntent"
+        },
+        {
+          "name": "AMAZON.YesIntent"
+        },
+        {
+          "name": "AMAZON.NoIntent"
+        },
+        {
+          "name": "AMAZON.NavigateHomeIntent"
+        }
+      ],
+      "types": [
+        {
+          "name": "AlexaDetailType",
+          "values": [
+            { "name": { "value": "album", "synonyms": ["एल्बम"] } },
+            { "name": { "value": "artist", "synonyms": ["आर्टिस्ट", "कलाकार"] } },
+            { "name": { "value": "year", "synonyms": ["साल", "वर्ष"] } },
+            { "name": { "value": "genre", "synonyms": ["जॉनर", "शैली"] } },
+            { "name": { "value": "language", "synonyms": ["भाषा", "भाषे"] } },
+            { "name": { "value": "all", "synonyms": ["details", "पूरी जानकारी", "सब"] } }
+          ]
+        }
+      ],
+      "invocationName": "__ALEXA_INVOCATION_NAME__"
+    },
+    "dialog": {
+      "delegationStrategy": "ALWAYS",
+      "intents": [
+        {
+          "name": "DedicationIntent",
+          "confirmationRequired": false,
+          "prompts": {},
+          "slots": [
+            {
+              "name": "requestText",
+              "type": "AMAZON.SearchQuery",
+              "elicitationRequired": true,
+              "confirmationRequired": false,
+              "prompts": { "elicitation": "DedicationSongPrompt" }
+            },
+            {
+              "name": "dedicationTarget",
+              "type": "AMAZON.SearchQuery",
+              "elicitationRequired": true,
+              "confirmationRequired": false,
+              "prompts": { "elicitation": "DedicationTargetPrompt" }
+            }
+          ]
+        }
+      ]
+    },
+    "prompts": [
+      {
+        "id": "DedicationSongPrompt",
+        "variations": [
+          { "type": "PlainText", "value": "जिस गाने को dedicate करना है, उसका नाम बताइए।" }
+        ]
+      },
+      {
+        "id": "DedicationTargetPrompt",
+        "variations": [
+          { "type": "PlainText", "value": "यह dedication किसके लिए है?" }
+        ]
+      }
+    ]
+  }
+}

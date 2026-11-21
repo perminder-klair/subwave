@@ -53,6 +53,14 @@ test('cold hydration preserves defaults and independent primary/fallback fields'
   assert.equal(shortlist.llm.segmentRuntime, 'direct');
 });
 
+test('Alexa settings hydrate with safe defaults and preserve saved values', () => {
+  assert.deepEqual(settingsForm({}).alexa, { enabled: false, skillId: '' });
+  assert.deepEqual(settingsForm({ alexa: { enabled: true, skillId: 'amzn1.ask.skill.test' } }).alexa, {
+    enabled: true,
+    skillId: 'amzn1.ask.skill.test',
+  });
+});
+
 test('voice levelling hydrates OFF for older stations and preserves the explicit operator choice', () => {
   const baseline = settingsForm({});
   assert.equal(baseline.tts.voiceLevelling, false);

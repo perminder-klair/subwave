@@ -17,6 +17,21 @@ function limits() {
 }
 
 const HOUR_MS = 3_600_000;
+// Alexa admission can wait on receipt storage and player removal after its
+// checks. Keep its hourly slot visible to other callers until it settles.
+const reservedByIp = new Map<string, number>();
+let reservedGlobal = 0;
+
+export function reserveRequestBudget(ip: string): () => void {
+  reservedByIp.set(ip, (reservedByIp.get(ip) || 0) + 1);
+  reservedGlobal++;
+  return () => {
+    const left = reservedByIp.get(ip)! - 1;
+    if (left) reservedByIp.set(ip, left);
+    else reservedByIp.delete(ip);
+    reservedGlobal--;
+  };
+}
 // Per-key ceiling for every map below. Far above any honest station's distinct
 // clients per window; util/bounded-key-map.ts owns what happens past it.
 export const LIMITER_MAX_KEYS = 10_000;
@@ -65,17 +80,18 @@ export function clientIp(req) {
 // must only be spent on acceptance, or rejected retries close the request line
 // station-wide. So check() spends the cooldown and only PEEKS at the caps;
 // commit() spends them, once every later gate has passed.
-export function checkRateLimit(ip) {
+export function checkRateLimit(ip, { allowReplacement = false }: { allowReplacement?: boolean } = {}) {
   const now = Date.now();
   const oneHourAgo = now - HOUR_MS;
   const rec = requestHistory.get(ip) || { last: 0, hits: [] };
   rec.hits = rec.hits.filter(t => t > oneHourAgo);
   const { cooldownMs, perIpHourlyCap } = limits();
-  if (rec.last && now - rec.last < cooldownMs) {
+  // Replacing the listener's own waiting request may reuse its cooldown slot.
+  if (!allowReplacement && rec.last && now - rec.last < cooldownMs) {
     return { ok: false, retryAfter: Math.ceil((cooldownMs - (now - rec.last)) / 1000) };
   }
-  if (rec.hits.length >= perIpHourlyCap) {
-    const oldest = rec.hits[0];
+  if (rec.hits.length + (reservedByIp.get(ip) || 0) >= perIpHourlyCap) {
+    const oldest = rec.hits[0] ?? now;
     return { ok: false, retryAfter: Math.ceil((oldest + HOUR_MS - now) / 1000) };
   }
   rec.last = now;
@@ -102,8 +118,8 @@ export function checkGlobalRateLimit() {
   const cutoff = now - 3_600_000;
   while (globalHits.length && globalHits[0] <= cutoff) globalHits.shift();
   const { globalHourlyCap } = limits();
-  if (globalHits.length >= globalHourlyCap) {
-    return { ok: false, retryAfter: Math.ceil((globalHits[0] + 3_600_000 - now) / 1000) };
+  if (globalHits.length + reservedGlobal >= globalHourlyCap) {
+    return { ok: false, retryAfter: Math.ceil(((globalHits[0] ?? now) + HOUR_MS - now) / 1000) };
   }
   return { ok: true };
 }

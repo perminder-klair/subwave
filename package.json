@@ -20,6 +20,7 @@
     "rebuild": "docker compose -f docker-compose.dev.yml up -d --build",
     "logs": "docker compose -f docker-compose.dev.yml logs -f",
     "down": "docker compose -f docker-compose.dev.yml down",
+    "alexa:prepare": "node scripts/prepare-alexa-skill-package.mjs",
     "jingles": "bash scripts/generate-jingles.sh",
     "cli:typecheck": "npm --prefix cli run typecheck"
   },

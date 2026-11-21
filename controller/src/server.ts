@@ -35,7 +35,8 @@ import { createStartupGate } from './middleware/startup.js';
 import { assertAdminConfigured } from './middleware/auth.js';
 import { router as publicRoutes } from './routes/public.js';
 import { router as authRoutes } from './routes/auth.js';
-import { router as requestRoutes } from './routes/request.js';
+import { router as alexaRoutes } from './routes/alexa.js';
+import { reconcileRequestLedger, router as requestRoutes } from './routes/request.js';
 import { router as settingsRoutes } from './routes/settings.js';
 import { router as jingleRoutes } from './routes/jingles.js';
 import { router as sfxRoutes } from './routes/sfx.js';
@@ -118,6 +119,9 @@ configureHttp(app);
 // CORS preflight stays available while the controller initializes.
 const startup = createStartupGate();
 app.use(startup.middleware);
+
+// configureHttp leaves the webhook body for the ASK adapter to parse and verify.
+app.use(alexaRoutes);
 
 // Routes. `requireAdmin` is applied per-route inside the admin modules.
 app.use(publicRoutes);
@@ -342,6 +346,15 @@ app.listen(config.server.port, async (err?: Error) => {
   // Before the watcher starts, so tracks already handed to Liquidsoap stay
   // tracked across a restart.
   queue.recover();
+
+  // Resolve any interrupted Alexa replacement transaction against the restored
+  // queue before opening the startup gate or allowing new listener requests.
+  try {
+    await reconcileRequestLedger();
+  } catch (err) {
+    console.error('[request-ledger] startup recovery failed; controller remains unready:', err instanceof Error ? err.message : err);
+    return;
+  }
 
   // Terminate a tagger/analyzer child orphaned by a restart: it is detached and
   // keeps running, so a second Start would double-write the library DB.

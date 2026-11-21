@@ -1000,9 +1000,11 @@ class Queue {
   // `onStandInDropped` fires when the intro is a stand-in and the track will
   // play without it. The gate lives here, so this is how a caller that records
   // its own copy of the line learns it was never said.
-  async push({ track, requestedBy = null, operator = false, block = null, steer = null, introByOperator = false, intent = null, introScript = null, introLabelChecked = false, introKind = 'dj-speak', introPersona = null, introHostSpeech = null, aiPicked = false, allowDuplicate = false, linkPrev = null, linkClockAt = null, selectionShowAt = null, onStandInDropped }: {
+  async push({ track, requestId = null, requestedBy = null, dedication = null, operator = false, block = null, steer = null, introByOperator = false, intent = null, introScript = null, introLabelChecked = false, introKind = 'dj-speak', introPersona = null, introHostSpeech = null, aiPicked = false, allowDuplicate = false, linkPrev = null, linkClockAt = null, selectionShowAt = null, onStandInDropped }: {
     track: Track;
+    requestId?: string | null;
     requestedBy?: string | null;
+    dedication?: QueueItem['dedication'];
     operator?: boolean;
     block?: QueueItem['block'] | null;
     steer?: string | null;
@@ -1084,7 +1086,7 @@ class Queue {
       }
     }
     const item = {
-      track, requestedBy, operator, intent, introScript, introLabelChecked: true, introKind, introPersona, introHostSpeech,
+      track, requestId, requestedBy, dedication, operator, intent, introScript, introLabelChecked: true, introKind, introPersona, introHostSpeech,
       // Links are editorially scoped to the session that wrote them. Preserve
       // the key alongside the persona: persona alone cannot distinguish two
       // adjacent shows hosted by the same DJ.
@@ -3624,8 +3626,12 @@ class Queue {
         // A cross-session DJ link was vetoed above; request intros may still
         // carry a deliberately pinned persona.
         meta: item.introPersona
-          ? { personaId: item.introPersona.id, personaName: item.introPersona.name }
-          : {},
+          ? {
+            ...(item.dedication ? VERBATIM_META : {}),
+            personaId: item.introPersona.id,
+            personaName: item.introPersona.name,
+          }
+          : (item.dedication ? { ...VERBATIM_META } : {}),
       };
       const handoff = await this._airVoice(targetFile, item.introWav, item.introScript || '', voiceGainDb(kind, item.introPersona || undefined), {
         onQueued: q => this.onQueued(q, seg),
@@ -4728,6 +4734,15 @@ class Queue {
       + (kept ? `, ${kept} already with the mixer and will still air` : '')
       + (skipped ? ', skipped the leftover track' : ''));
     return { dropped, kept, skipped };
+  }
+
+  async removeUpcomingRequest(requestId: string): Promise<{ ok: true } | { ok: false; reason: 'not-queued' | 'already-playing' }> {
+    const item = this.upcoming.find(i => i.requestId === requestId);
+    if (!item) {
+      if (this.current?.requestId === requestId) return { ok: false, reason: 'already-playing' };
+      return { ok: false, reason: 'not-queued' };
+    }
+    return this.removeUpcomingItem(item, 'listener request cancellation');
   }
 
   // The cancel itself, addressed by ITEM rather than by track id.
