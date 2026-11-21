@@ -1,7 +1,6 @@
 'use client';
 
 import type { ReactNode } from 'react';
-import { fmtClock } from '../../../lib/format';
 import type { StationLocale } from '../../../lib/types';
 import { SkeletonText } from '@/components/ui/skeleton';
 import { Card, Pill } from '../ui';
@@ -9,6 +8,7 @@ import { ScrollArea } from '../../ui/scroll-area';
 import { cn } from '../../../lib/cn';
 import type { RequestEntry } from './types';
 import { oneLine } from './bits';
+import { fmtRequestWhen, fmtTook, requestHow } from './request-row';
 
 export function RequestsCard({
   requests,
@@ -64,10 +64,12 @@ function RequestRow({ r, tz, locale }: { r: RequestEntry; tz?: string; locale?: 
     r.genre && `genre ${r.genre}`,
     r.language && `lang ${r.language}`,
   ].filter(Boolean) as string[];
+  const how = requestHow(r.path, r.pickSource);
+  const took = fmtTook(r.ms);
 
   return (
     <details className="border border-separator-strong">
-      <summary className="grid cursor-pointer grid-cols-[auto_1fr_auto] items-center gap-2.5 px-2.5 py-2 sm:grid-cols-[auto_1fr_auto_auto]">
+      <summary className="grid cursor-pointer grid-cols-[auto_1fr_auto] items-center gap-2.5 px-2.5 py-2">
         <span className={cn('font-bold', ok ? 'text-vermilion' : 'text-[var(--danger)]')}>
           {ok ? '✓' : '✗'}
         </span>
@@ -75,18 +77,18 @@ function RequestRow({ r, tz, locale }: { r: RequestEntry; tz?: string; locale?: 
           <span className="font-bold">{r.requester || 'anon'}</span>
           <span className="text-muted"> · {oneLine(r.text)}</span>
         </span>
-        <span className="caption hidden text-[10px] sm:inline">
-          {r.ms != null ? `${r.ms}ms` : ''}
-        </span>
-        <span className="mono-num text-[10px] text-muted">
-          {fmtClock(r.t, tz, locale) || '—'}
+        <span className="mono-num text-[10px] whitespace-nowrap text-muted">
+          {fmtRequestWhen(r.t, tz, locale) || '—'}
         </span>
       </summary>
       <div className="grid gap-2 px-2.5 pt-1 pb-2.5 text-[12px]">
-        <div className="flex flex-wrap items-center gap-1.5">
-          {r.path && <Pill tone="accent">{r.path}</Pill>}
-          {r.pickSource && <Pill>{r.pickSource}</Pill>}
-        </div>
+        {(how.route || took) && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            {how.route && <Pill tone="accent">{how.route}</Pill>}
+            {how.detail && <Pill>{how.detail}</Pill>}
+            {took && <span className="caption text-[10px]">answered in {took}</span>}
+          </div>
+        )}
 
         {trace.length > 0 && (
           <div className="caption text-[10px]">{trace.join(' · ')}</div>
