@@ -3,6 +3,7 @@
 // version must degrade to null rather than throw a query.
 
 import type { ExplicitStatus, MoodPoolRecord, MoodPoolRow, EnergyPoolRecord, EnergyPoolRow, TrackKeyRange, TrackOutro, TrackPaceSpan, TrackRecord, TrackRow, TrackSection } from './types.js';
+import { parseBeatGridProvenance } from '../../schemas/beat-grid.js';
 import { parseOutroVocalJson, parseTailVocalRangesJson, parseVocalRangesJson } from '../lyric-vocal.js';
 import { parseLoudnessCurve } from '../loudness-curve.js';
 import { storedYearUntrusted } from '../era-suspect.js';
@@ -53,6 +54,7 @@ export function rowToTrack(row: TrackRow): TrackRecord {
     pace: row.pace_json ? parsePaceSpans(row.pace_json) : null,
     beats: row.beats_json ? parseMsArray(row.beats_json) : null,
     bars: row.bars_json ? parseMsArray(row.bars_json) : null,
+    gridProvenance: parseGridProvenanceJson(row.grid_provenance_json),
     keyRanges: row.key_ranges_json ? parseKeyRanges(row.key_ranges_json) : null,
     audioMoods: row.audio_moods ? safeParseArray(row.audio_moods) : [],
     audioDescriptors: row.audio_descriptors ? safeParseArray(row.audio_descriptors) : [],
@@ -96,6 +98,7 @@ export function parseOutroJson(s: string): TrackOutro | null {
     // The tail's loudness curve (tail v3): kept when valid, ABSENT when
     // missing or malformed (a bad point would shift every later one).
     const loudnessCurve = parseLoudnessCurve(v?.loudnessCurve);
+    const gridProvenance = parseBeatGridProvenance(v?.gridProvenance);
     return {
       startMs: Math.round(startMs),
       ending,
@@ -105,6 +108,7 @@ export function parseOutroJson(s: string): TrackOutro | null {
       bars: msList(v?.bars),
       vocalRanges,
       ...(loudnessCurve ? { loudnessCurve } : {}),
+      ...(gridProvenance ? { gridProvenance } : {}),
     };
   } catch {
     return null;
@@ -239,4 +243,9 @@ export function rowToEnergyPool(row: EnergyPoolRow): EnergyPoolRecord {
     ...parseTailVocalRangesJson(row.tail_vocal_ranges_json),
     pace: row.pace_json ? parsePaceSpans(row.pace_json) : null,
   };
+}
+
+function parseGridProvenanceJson(value: string | null | undefined) {
+  try { return value ? parseBeatGridProvenance(JSON.parse(value)) : null; }
+  catch { return null; }
 }

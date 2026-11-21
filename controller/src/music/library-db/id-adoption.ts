@@ -54,7 +54,7 @@ const GROUPS: Array<{ anchor: string; cols: string[] }> = [
   {
     anchor: 'analysis_version',
     cols: ['bpm', 'musical_key', 'intro_ms', 'analysis_confidence', 'analysis_version', 'loudness_lufs',
-      'peak_db', 'structure_json', 'pace_json', 'beats_json', 'bars_json', 'key_ranges_json',
+      'peak_db', 'structure_json', 'pace_json', 'beats_json', 'bars_json', 'grid_provenance_json', 'key_ranges_json',
       'lead_silence_ms', 'analyze_error', 'analyze_failed_at', 'analyze_fail_count',
       // loudness_lufs/peak_db mean whatever loudness_version says, so the
       // stamp and the whole-file figures measured with it travel together.

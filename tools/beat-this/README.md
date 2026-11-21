@@ -102,8 +102,8 @@ is the hash: `sha256sum -c` fails on any other bytes.
 
 ## Parity with upstream
 
-`parity.py` runs upstream's `File2Beats(dbn=False)` and the worker's
-`DownbeatTracker` on the same files and compares beat and downbeat times.
+`parity.py` runs upstream's `File2Beats(dbn=False)` and the shared
+`beat_this_grid.DownbeatTracker` on the same files and compares beat and downbeat times.
 
 On 34 files, 22050 Hz PCM so both sides read identical samples (30 GTZAN
 clips, three per genre; 12, 20 and 40 s cuts, covering one short chunk and two
@@ -259,3 +259,35 @@ said commercial use and redistribution are fine (upstream #21). The training
 data includes commercial recordings, and the question of what that means for
 the weights is still open upstream (#18). Read both before turning this on by
 default anywhere; nothing here is a licence clearance.
+
+
+## Shared inference and window provenance
+
+`controller/scripts/beat_this_grid.py` contains the torch-free inference engine:
+preprocessing, chunking, postprocessing and timestamp sanity checks. Its tracker
+accepts a mono window or a complete recording and raises on inference failure.
+The worker retains the opt-in flag, session lifetime and regular-grid fallback.
+The sidecar copies both sibling modules; AIO already copies the scripts directory.
+Offline installations must keep `beat_this_grid.py` beside `analyze_worker.py`.
+The numerical pipeline remains the same; no model re-export is needed.
+
+Both head and tail attempt a learned grid even when their Librosa tempo pass
+fails. BPM remains Librosa's, and all current stem qualification rules stay as
+they were. Local interval stability and Librosa beat agreement are recorded as
+evidence only. They do not reject grids, and agreement on beats does not establish
+bar phase. Full Sub/Beats passage fitting still needs its longer audio, onset,
+energy and phase checks; it is not implemented by this regular-window change.
+
+For learned grids only, `grid_provenance` (head) and `gridProvenance` (outro)
+record version 1, the actual ONNX SHA-256, preprocessing version, absolute window,
+and optional staged-source SHA-256/byte count/completeness. The controller persists
+these through both analysis protocols. Existing arrays keep their shape; existing
+rows without metadata remain unknown. Off and fallback responses carry no learned
+provenance. A later refresh clears stale head labels when replacing arrays, and
+reset/replaced-file paths clear them together. No automatic re-grid or extra stem
+cache is introduced. See `docs/internals/infrastructure.md` for the exact contract
+and the checks required before any future cross-feature grid reuse.
+
+When updating the shipped export, update `SMALL0_SHA256` in the shared module
+alongside both Dockerfile checksums. If numerical preprocessing/postprocessing
+changes, increment `PREPROCESSING_VERSION` so recorded grids remain distinguishable.
