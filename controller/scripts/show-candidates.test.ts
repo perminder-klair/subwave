@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import * as showCandidates from '../src/music/show-candidates.js';
+import { applyStrictLocks } from '../src/music/show-filter.js';
 
 const { buildShowCandidateDiagnostic } = showCandidates;
 
@@ -36,6 +37,15 @@ test('soft filters remain advisory while the filter-fit count stays visible', ()
   assert.equal(result.library.matchingFilters, 2);
   assert.equal(result.library.effective, 3);
   assert.equal(result.playlist?.effective, 2);
+});
+
+test('coverage remains zero even when runtime never-starve can retain an off-filter pool', () => {
+  const pool = [rows[2]]; // Rock only; the requested jazz pool has disappeared.
+  const result = buildShowCandidateDiagnostic({ show: { filtersStrict: true, genres: ['Jazz'] },
+    libraryRows: pool, playlistRows: null, excludedIds: null, locks });
+  assert.equal(result.library.effective, 0);
+  assert.deepEqual(applyStrictLocks(pool, locks, { starve: true }), []);
+  assert.deepEqual(applyStrictLocks(pool, locks, { starve: false }), pool);
 });
 
 test('candidate coverage includes audio-derived moods and preserves vocal tri-state', () => {

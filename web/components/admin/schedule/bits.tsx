@@ -10,6 +10,8 @@ import {
   DropdownMenuContent,
   DropdownMenuGroup,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '../../ui/dropdown-menu';
 import { DAYS } from './lib';
@@ -36,6 +38,7 @@ export interface SlotOption<T extends string | null = string> {
   key: T;
   label: ReactNode;
   chipColor?: string | null;
+  group?: string;
 }
 
 /** The sentence-editor "slot": an underlined value with a ▾ caret opening a menu. */
@@ -76,14 +79,20 @@ export function SlotMenu<T extends string | null = string>({
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="max-h-80 min-w-[9rem] overflow-y-auto">
-        <DropdownMenuGroup>
-          {options.map(o => (
-            <DropdownMenuItem key={o.key ?? '__default__'} onClick={() => onSelect(o.key)}>
-              {o.chipColor !== undefined && <ColorChip color={o.chipColor} />}
-              {o.label}
-            </DropdownMenuItem>
-          ))}
-        </DropdownMenuGroup>
+        {[...new Set(options.map(option => option.group))].map((group, index) => (
+          <DropdownMenuGroup key={group ?? '__ungrouped__'}>
+            {group && <>
+              {index > 0 && <DropdownMenuSeparator />}
+              <DropdownMenuLabel>{group}</DropdownMenuLabel>
+            </>}
+            {options.filter(option => option.group === group).map(o => (
+              <DropdownMenuItem key={o.key ?? '__default__'} onClick={() => onSelect(o.key)}>
+                {o.chipColor !== undefined && <ColorChip color={o.chipColor} />}
+                {o.label}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuGroup>
+        ))}
       </DropdownMenuContent>
     </DropdownMenu>
   );

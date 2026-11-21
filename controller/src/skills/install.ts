@@ -1,3 +1,5 @@
+import { notebookFileSchema } from './notebook-schema.js';
+import { writeFileAtomic } from '../util/atomic-file.js';
 // How a skill's CODE arrives from outside the station — a zip import or a
 // backup restore — and the one rule both follow: a `tool.mjs` someone else
 // wrote is never evaluated until the operator has read it and said so.
@@ -115,7 +117,7 @@ export async function discardPendingTool(slug: string): Promise<boolean> {
 // Backup restore
 // ---------------------------------------------------------------------------
 
-export type SkillMemberFile = 'SKILL.md' | typeof TOOL_FILE | typeof PENDING_TOOL_FILE;
+export type SkillMemberFile = 'SKILL.md' | 'notebook.json' | typeof TOOL_FILE | typeof PENDING_TOOL_FILE;
 
 /** One file a backup carries under `skills/<slug>/`. */
 export interface SkillMember { slug: string; file: SkillMemberFile; data: Buffer }
@@ -128,16 +130,16 @@ export interface SkillRestoreResult {
 
 /**
  * Split a backup member path into a skill member, or a reason it is not one.
- * Only `skills/<slug>/SKILL.md` and its tool file are skill content; anything
- * else a skill folder holds is left out, as the zip import does.
+ * SKILL.md, the tool and validated notebook memory are station backup content.
+ * Other skill-folder files are left out. Standalone skill exports omit memory.
  */
 export function skillMemberOf(entryName: string): { slug: string; file: SkillMemberFile } | { reason: string } {
   const parts = entryName.replace(/\\/g, '/').split('/');
   if (parts[0] !== 'skills' || parts.length !== 3) return { reason: 'not a skill file' };
   const [, slug, file] = parts;
   if (!SLUG_RE.test(slug)) return { reason: 'folder is not a skill name' };
-  if (file !== 'SKILL.md' && file !== TOOL_FILE && file !== PENDING_TOOL_FILE) {
-    return { reason: 'only SKILL.md and tool.mjs are restored' };
+  if (file !== 'SKILL.md' && file !== 'notebook.json' && file !== TOOL_FILE && file !== PENDING_TOOL_FILE) {
+    return { reason: 'only SKILL.md, tool.mjs and notebook.json are restored' };
   }
   return { slug, file };
 }
@@ -160,17 +162,18 @@ export async function restoreSkillMembers(members: SkillMember[]): Promise<Skill
   if (!SEEDED_KINDS.size) await discoverSeededKinds();
   const out: SkillRestoreResult = { restored: [], quarantined: [], skipped: [] };
 
-  const bySlug = new Map<string, { skillMd?: Buffer; tool?: Buffer }>();
+  const bySlug = new Map<string, { skillMd?: Buffer; tool?: Buffer; notebook?: Buffer }>();
   for (const m of members) {
     const slot = bySlug.get(m.slug) ?? {};
     if (m.file === 'SKILL.md') slot.skillMd = m.data;
+    else if (m.file === 'notebook.json') slot.notebook = m.data;
     // A backup taken while a review was pending carries `.pending`; it is code
     // from the same place either way, so both spellings take the same path.
     else if (!slot.tool || m.file === TOOL_FILE) slot.tool = m.data;
     bySlug.set(m.slug, slot);
   }
 
-  for (const [slug, { skillMd, tool }] of bySlug) {
+  for (const [slug, { skillMd, tool, notebook }] of bySlug) {
     const seeded = SEEDED_KINDS.has(slug);
     if (RESERVED_KINDS.has(slug) && !seeded) {
       out.skipped.push(`skills/${slug}: shadows a reserved capability`);
@@ -194,6 +197,16 @@ export async function restoreSkillMembers(members: SkillMember[]): Promise<Skill
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, 'SKILL.md'), text, 'utf8');
     out.restored.push(slug);
+    if (notebook) {
+      try {
+        if (notebook.length > 4 * 1024 * 1024) throw new Error('notebook is too large');
+        const restored = notebookFileSchema.parse(JSON.parse(notebook.toString('utf8')));
+        if (restored.skill !== slug) throw new Error('notebook skill does not match its folder');
+        // A station backup preserves committed memory, not old machine-local WAV deliveries.
+        for (const entry of Object.values(restored.airings)) entry.pending = null;
+        await writeFileAtomic(join(dir, 'notebook.json'), JSON.stringify(restored, null, 2) + '\n', { mode: 0o600 });
+      } catch (error) { out.skipped.push(`skills/${slug}/notebook.json: ${(error as Error).message}`); }
+    }
 
     if (!tool) continue;
     const live = await readOrNull(join(dir, TOOL_FILE));

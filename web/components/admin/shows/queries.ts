@@ -1,6 +1,6 @@
 'use client';
 
-import { preparationStatusSchema } from '@/lib/schemas.generated';
+import { preparationStatusSchema, type GeneratedShowPlan } from '@/lib/schemas.generated';
 import { z } from 'zod';
 import type { QueryClient } from '@tanstack/react-query';
 import { adminJson, type AdminFetch } from '@/lib/admin-query';
@@ -23,17 +23,8 @@ export interface ShowPlaylist {
   songCount: number | null;
 }
 
-export const showKeys = {
-  all: ['shows'] as const,
-  settings: () => settingsKeys.detail(),
-  skills: () => ['shows', 'skills'] as const,
-  genres: () => ['shows', 'genres'] as const,
-  playlists: () => ['shows', 'playlists'] as const,
-  community: () => ['shows', 'community'] as const,
-  preparation: () => ['shows', 'preparation'] as const,
-  blocklist: () => ['shows', 'blocklist'] as const,
-  playlistPosition: (showId: string) => ['shows', 'playlist-position', showId] as const,
-};
+import { showKeys } from './keys';
+export { showKeys } from './keys';
 
 export function patchShowSettings(
   client: QueryClient,
@@ -69,6 +60,91 @@ export function useShowSkillsQuery(adminFetch: AdminFetch, enabled: boolean) {
       return showSkillsOf(body.skills);
     },
     toastOnError: false,
+  });
+}
+
+export interface GeneratedEpisodeHistory {
+  occurrence: { id: string; showId: string; source: 'scheduled' | 'takeover'; startsAt: number; endsAt: number };
+  template: string;
+  hostPersonaId: string;
+  guestPersonaIds: string[];
+  status: 'ready' | 'failed';
+  savedShowId?: string | null;
+  canShuffle?: boolean;
+  plan?: GeneratedShowPlan;
+  generatedAt?: number;
+  reason?: string;
+  attempts?: number;
+}
+
+export function useGeneratedEpisodeHistoryQuery(adminFetch: AdminFetch, enabled: boolean) {
+  return useAdminQuery<GeneratedEpisodeHistory[]>({
+    key: showKeys.generated(),
+    adminFetch,
+    enabled,
+    refetchInterval: 30_000,
+    request: async (fetcher, signal) => {
+      const body = await adminJson<{ episodes?: GeneratedEpisodeHistory[] }>(
+        fetcher, '/shows/generated?limit=100', undefined, signal,
+      );
+      return Array.isArray(body.episodes) ? body.episodes : [];
+    },
+    toastOnError: false,
+  });
+}
+
+export function useRegenerateGeneratedEpisodeMutation(adminFetch: AdminFetch) {
+  return useAdminMutation<{ ok: boolean }, string | { occurrenceId: string; castSeed: string; cast: { hostPersonaId: string; guestPersonaIds: string[] } }>({
+    adminFetch,
+    toastOnError: false,
+    request: (input, fetcher) => adminJson<{ ok: boolean }>(fetcher, '/shows/generated/regenerate', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(typeof input === 'string' ? { occurrenceId: input } : input),
+    }),
+    onDone: async (_data, _id, client) => {
+      await client.cancelQueries({ queryKey: showKeys.generated(), exact: true });
+      await client.invalidateQueries({ queryKey: showKeys.generated(), exact: true });
+    },
+  });
+}
+
+export interface GeneratedShowDraft { show: Show; saved: boolean; generatedAt: number }
+export interface ShuffledEpisodeCast { castSeed: string; hostPersonaId: string; guestPersonaIds: string[] }
+
+export function useGeneratedShowDraftMutation(adminFetch: AdminFetch) {
+  return useAdminMutation<GeneratedShowDraft, string>({
+    adminFetch,
+    request: (occurrenceId, fetcher) => adminJson(fetcher, '/shows/generated/save-draft', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ occurrenceId }),
+    }),
+  });
+}
+
+export function useShuffleGeneratedEpisodeMutation(adminFetch: AdminFetch) {
+  return useAdminMutation<ShuffledEpisodeCast, string>({
+    adminFetch,
+    toastOnError: false,
+    request: (occurrenceId, fetcher) => adminJson(fetcher, '/shows/generated/shuffle', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ occurrenceId }),
+    }),
+  });
+}
+
+export function useSaveGeneratedShowMutation(adminFetch: AdminFetch) {
+  return useAdminMutation<{ show: Show; shows: Show[] }, { show: Show; occurrenceId: string; generatedAt: number; saved: boolean }>({
+    adminFetch,
+    request: (input, fetcher) => adminJson(fetcher, input.saved ? '/shows' : '/shows/generated/save', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...input, show: showPayload(input.show) }),
+    }),
+    onDone: async (data, _input, client) => {
+      patchShowSettings(client, { shows: data.shows });
+      await Promise.all([
+        client.invalidateQueries({ queryKey: showKeys.settings(), exact: true }),
+        client.invalidateQueries({ queryKey: showKeys.generated(), exact: true }),
+      ]);
+    },
   });
 }
 

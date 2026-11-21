@@ -42,15 +42,24 @@ test('the prompt names the exact cast, skill brief, language, and 2–5 sentence
   assert.match(system, /do not write speaker labels/i);
 });
 
-test('the schema accepts exactly one ordered contribution per real persona', () => {
+test('unplanned discussions allow flexible order and repeated turns, requiring every real persona', () => {
   const schema = cohostedSkillSchema(cast);
   assert.deepEqual(schema.parse(full), full);
   assert.equal(schema.safeParse({ ...full, lines: full.lines.slice(0, 2) }).success, false, 'missing speaker');
-  assert.equal(schema.safeParse({ ...full, lines: [full.lines[0], full.lines[0], full.lines[2]] }).success, false, 'duplicate speaker');
-  assert.equal(schema.safeParse({ ...full, lines: [full.lines[1], full.lines[0], full.lines[2]] }).success, false, 'wrong order');
+  assert.equal(schema.safeParse({ ...full, lines: [full.lines[0], full.lines[0], full.lines[2]] }).success, false, 'another participant is missing');
+  assert.equal(schema.safeParse({ ...full, lines: [full.lines[1], full.lines[0], full.lines[2]] }).success, true, 'order is flexible without a numbered plan');
+  assert.equal(schema.safeParse({ ...full, lines: [...full.lines, full.lines[0]] }).success, true, 'a participant may speak again');
+  assert.equal(schema.safeParse({ ...full, lines: Array.from({ length: 17 }, (_, index) => full.lines[index % cast.length]) }).success, false, 'bounded total turns');
   assert.equal(schema.safeParse({ ...full, lines: [...full.lines.slice(0, 2), { speaker: 'p_fake', text: 'Invented.' }] }).success, false, 'unknown speaker');
   assert.equal(schema.safeParse({ ...full, lines: [{ ...full.lines[0], text: '' }, ...full.lines.slice(1)] }).success, false, 'empty contribution');
   assert.equal(schema.safeParse({ reason: 'No source.', air: false, lines: [] }).success, true, 'stand-down is representable');
+});
+
+test('an explicit turn plan enforces its exact order and length', () => {
+  const schema = cohostedSkillSchema(cast, cast.map(persona => ({ speaker: persona.id, instruction: 'Offer a perspective.' })));
+  assert.equal(schema.safeParse(full).success, true);
+  assert.equal(schema.safeParse({ ...full, lines: [full.lines[1], full.lines[0], full.lines[2]] }).success, false);
+  assert.equal(schema.safeParse({ ...full, lines: [...full.lines, full.lines[0]] }).success, false);
 });
 
 test('a successful run maps immutable speaker ids back to the full persona objects', async () => {

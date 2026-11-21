@@ -30,17 +30,26 @@ import { ScrollArea, ScrollBar } from '../../ui/scroll-area';
 import { Seg } from '../ui';
 import { ColorChip, Mu } from './bits';
 import type {
-  Block, DragPlan, RunDragResult, RunPlacement, Schedule, ScheduleShow,
+  Block, DragPlan, GeneratedTemplateId, RunDragResult, RunPlacement, Schedule, ScheduleShow,
 } from './lib';
 import {
-  DAYS, HOURS, applyRunDrag, blockKeys, dayBlocks, hh, planRunDrag, resizedRun,
+  DAYS, GENERATED_SHOW_COLORS, GENERATED_SHOW_TEMPLATES, HOURS,
+  applyRunDrag, blockKeys, dayBlocks, generatedShowColor, generatedShowLabel, hh, planRunDrag, resizedRun,
 } from './lib';
 
 const DND_TYPE = 'text/x-subwave-show';
+const DND_TEMPLATE_TYPE = 'text/x-subwave-show-template';
 const RUN_DRAG_MODIFIERS = [restrictToVerticalAxis];
 
 function readDraggedShow(e: DragEvent): string {
   return e.dataTransfer.getData(DND_TYPE) || e.dataTransfer.getData('text/plain');
+}
+
+function readDraggedTemplate(e: DragEvent): GeneratedTemplateId | null {
+  const id = e.dataTransfer.getData(DND_TEMPLATE_TYPE);
+  return GENERATED_SHOW_TEMPLATES.some(template => template.id === id)
+    ? id as GeneratedTemplateId
+    : null;
 }
 
 function rankIn(order: string[], key: string): number {
@@ -72,6 +81,7 @@ function activationClientY(event: Event): number | null {
 export interface BoardProps {
   schedule: Schedule;
   shows: ScheduleShow[];
+  personas: { id: string; name?: string }[];
   folded: Record<number, boolean>;
   onToggleFold: (day: number) => void;
   todayKey: number;
@@ -84,10 +94,13 @@ export interface BoardProps {
   /** The run moves to [start, end); the hours it vacates fall silent. */
   onResize: (b: Block, start: number, end: number) => void;
   onDropShow: (b: Block, showId: string) => void;
+  onDropTemplate: (b: Block, templateId: GeneratedTemplateId) => void;
   onDragRun: (b: Block, plan: DragPlan) => RunDragResult | null;
   armedShowId: string | null;
+  armedTemplateId: GeneratedTemplateId | null;
   /** The same id twice disarms. */
   onArmShow: (id: string) => void;
+  onArmTemplate: (templateId: GeneratedTemplateId) => void;
   /** Only reachable with a show armed; both toggle off when the target already
    *  runs it. */
   onFillDay: (day: number) => void;
@@ -98,14 +111,19 @@ export interface BoardProps {
 }
 
 export default function Board({
-  schedule, shows, folded, onToggleFold, todayKey, nowMinute,
-  colorOf, hoursOf, onPick, onRemove, onResize, onDropShow, onDragRun,
-  armedShowId, onArmShow, onFillDay, onFillHour,
+  schedule, shows, personas, folded, onToggleFold, todayKey, nowMinute,
+  colorOf, hoursOf, onPick, onRemove, onResize, onDropShow, onDropTemplate, onDragRun,
+  armedShowId, armedTemplateId, onArmShow, onArmTemplate, onFillDay, onFillHour,
   density, hourPx, onDensity,
 }: BoardProps) {
   const gridRef = useRef<HTMLDivElement>(null);
   useDynamicStyle(gridRef, { '--hour-px': `${hourPx}px` });
-  const armedName = shows.find(s => s.id === armedShowId)?.name ?? null;
+  const armedShow = shows.find(s => s.id === armedShowId);
+  const armedName = (armedShow?.generation?.mode === 'generated'
+    ? generatedShowLabel(armedShow, personas)
+    : armedShow?.name)
+    ?? GENERATED_SHOW_TEMPLATES.find(template => template.id === armedTemplateId)?.label
+    ?? null;
 
   const [dragRun, setDragRun] = useState<DragRun | null>(null);
   const [plan, setPlan] = useState<DragPlan | null>(null);
@@ -302,16 +320,15 @@ export default function Board({
       <div className="mx-5 mb-3.5 border border-ink bg-[var(--page-bg)] sm:mx-[30px]">
         <div className="flex flex-wrap items-center gap-2 px-3 py-2.5">
           <span className="eyebrow mr-1 flex-none text-ink">The shelf</span>
-          {shows.length === 0 && (
+          {shows.filter(show => show.generation?.mode !== 'generated').length === 0 && (
             <Mu className="text-[9px] normal-case">
-              No shows yet —{' '}
+              No regular shows yet. Drag a template below or{' '}
               <Link href="/admin/shows" className="text-vermilion underline">
                 define one on the Shows page
-              </Link>{' '}
-              to start scheduling.
+              </Link>.
             </Mu>
           )}
-          {shows.map(s => {
+          {shows.filter(show => show.generation?.mode !== 'generated').map(s => {
             const armed = s.id === armedShowId;
             return (
               <button
@@ -342,6 +359,36 @@ export default function Board({
             );
           })}
         </div>
+        <div className="flex flex-wrap items-center gap-2 border-t border-separator-soft px-3 py-2">
+          <span className="eyebrow mr-1 flex-none text-ink">Sub/Shows</span>
+          {GENERATED_SHOW_TEMPLATES.map(template => {
+            const armed = armedTemplateId === template.id;
+            return (
+              <button
+                key={`new-${template.id}`}
+                type="button"
+                draggable
+                aria-pressed={armed}
+                onDragStart={e => {
+                  e.dataTransfer.setData(DND_TEMPLATE_TYPE, template.id);
+                  e.dataTransfer.effectAllowed = 'copy';
+                }}
+                onClick={() => onArmTemplate(template.id)}
+                title={`Choose ${template.label} options, then drag into the grid`}
+                className={cn(
+                  'flex min-h-9 flex-none cursor-grab items-center gap-1.5 border border-dashed px-2.5 py-1.5 active:cursor-grabbing sm:min-h-0',
+                  armed
+                    ? 'border-ink outline-2 -outline-offset-2 outline-[var(--accent)]'
+                    : 'border-separator-strong hover:border-ink',
+                  template.stripeClassName,
+                )}
+              >
+                <ColorChip color={GENERATED_SHOW_COLORS[template.id]} />
+                <span className="text-[11.5px] font-semibold whitespace-nowrap text-ink">+ {template.label}</span>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       <Mu className="mb-1.5 flex items-center gap-1.5 px-5 tracking-[0.08em] sm:hidden">
@@ -362,7 +409,9 @@ export default function Board({
                 aria-disabled={!armedShowId}
                 onClick={armedShowId ? () => onFillHour(h) : undefined}
                 title={armedName
-                  ? `Put “${armedName}” on ${hh(h)}:00 every day (again to clear it)`
+                  ? armedShowId
+                    ? `Put “${armedName}” on ${hh(h)}:00 every day (again to clear it)`
+                    : `Place “${armedName}” in one silent slot first`
                   : `${hh(h)}:00 — arm a show on the shelf to fill this hour all week`}
                 className={cn(
                   'flex h-[var(--hour-px)] w-full items-start justify-end border-0 bg-transparent pr-[7px] font-mono text-[9px] font-bold text-muted opacity-80',
@@ -395,9 +444,11 @@ export default function Board({
                 blocks={dayBlocks(preview && d.key === dragDay ? preview.week : schedule, d.key)}
                 colorOf={colorOf}
                 shows={shows}
+                personas={personas}
                 density={density}
                 hourPx={hourPx}
                 armedShowId={armedShowId}
+                armedTemplateId={armedTemplateId}
                 armedName={armedName}
                 onToggleFold={() => onToggleFold(d.key)}
                 onFillDay={() => onFillDay(d.key)}
@@ -405,6 +456,8 @@ export default function Board({
                 onRemove={onRemove}
                 onResize={onResize}
                 onDropShow={onDropShow}
+                onDropTemplate={onDropTemplate}
+                templates={GENERATED_SHOW_TEMPLATES}
                 dragRun={dragRun}
                 dragStart={d.key === dragDay ? (preview?.start ?? dragRun?.block.start ?? null) : null}
                 domOrder={d.key === dragDay ? dragOrder : null}
@@ -431,7 +484,9 @@ export default function Board({
 
 function DayColumn({
   label, name, today, nowMinute, blocks, colorOf, shows, density, hourPx, armedShowId, armedName,
-  onToggleFold, onFillDay, onPick, onRemove, onResize, onDropShow,
+  personas,
+  armedTemplateId, onToggleFold, onFillDay, onPick, onRemove, onResize, onDropShow, onDropTemplate,
+  templates,
   dragRun, dragStart, domOrder,
   runPlacements,
   onRunNudge,
@@ -443,9 +498,11 @@ function DayColumn({
   blocks: Block[];
   colorOf: (id: string | null | undefined) => string;
   shows: ScheduleShow[];
+  personas: { id: string; name?: string }[];
   density: BoardDensity;
   hourPx: number;
   armedShowId: string | null;
+  armedTemplateId: GeneratedTemplateId | null;
   armedName: string | null;
   onToggleFold: () => void;
   onFillDay: () => void;
@@ -453,6 +510,8 @@ function DayColumn({
   onRemove: (b: Block) => void;
   onResize: (b: Block, start: number, end: number) => void;
   onDropShow: (b: Block, showId: string) => void;
+  onDropTemplate: (b: Block, templateId: GeneratedTemplateId) => void;
+  templates: typeof GENERATED_SHOW_TEMPLATES;
   dragRun: DragRun | null;
   dragStart: number | null;
   domOrder: string[] | null;
@@ -483,11 +542,17 @@ function DayColumn({
       <div className="flex h-[38px] items-stretch border-b border-solid border-b-ink">
         <button
           type="button"
-          onClick={armedShowId ? onFillDay : onToggleFold}
-          title={armedName
+          aria-disabled={Boolean(armedTemplateId)}
+          onClick={armedTemplateId ? undefined : armedShowId ? onFillDay : onToggleFold}
+          title={armedTemplateId
+            ? `Place “${armedName}” in one silent slot first`
+            : armedName
             ? `Put “${armedName}” on all of ${name} (again to clear it)`
             : `Fold ${name} out of the way`}
-          className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 border-0 bg-transparent px-2.5 hover:bg-[var(--ink-soft)]"
+          className={cn(
+            'flex min-w-0 flex-1 items-center gap-2 border-0 bg-transparent px-2.5',
+            armedTemplateId ? 'cursor-default' : 'cursor-pointer hover:bg-[var(--ink-soft)]',
+          )}
         >
           <span
             aria-hidden="true"
@@ -521,8 +586,11 @@ function DayColumn({
                 key={key}
                 runKey={key}
                 block={b}
-                name={showById(b.showId)?.name ?? 'unknown show'}
+                name={showById(b.showId)?.generation?.mode === 'generated'
+                  ? generatedShowLabel(showById(b.showId)!, personas)
+                  : showById(b.showId)?.name ?? 'unknown show'}
                 color={colorOf(b.showId)}
+                striped={showById(b.showId)?.generation?.mode === 'generated'}
                 density={density}
                 hourPx={hourPx}
                 previewing={dragStart != null && b.start === dragStart}
@@ -534,6 +602,7 @@ function DayColumn({
                 onRemove={onRemove}
                 onResize={onResize}
                 onDropShow={onDropShow}
+                onDropTemplate={onDropTemplate}
                 onRunNudge={onRunNudge}
               />
             ) : (
@@ -541,11 +610,15 @@ function DayColumn({
                 key={key}
                 block={b}
                 shows={shows}
+                personas={personas}
                 colorOf={colorOf}
                 armedShowId={armedShowId}
+                armedTemplateId={armedTemplateId}
                 armedName={armedName}
                 runDragging={!!dragRun}
                 onDropShow={onDropShow}
+                onDropTemplate={onDropTemplate}
+                templates={templates}
               />
             ),
           )}
@@ -604,13 +677,15 @@ function FoldedRail({
 // per step would remount the handle holding the pointer capture and kill the
 // gesture.
 function BoardCard({
-  runKey, block, name, color, density, hourPx, previewing, dragOriginStart, runDragging,
+  runKey, block, name, color, striped, density, hourPx, previewing, dragOriginStart, runDragging,
   onPick, onRemove, onResize, onDropShow, onRunNudge,
+  onDropTemplate,
 }: {
   runKey: string;
   block: Block;
   name: string;
   color: string;
+  striped: boolean;
   density: BoardDensity;
   hourPx: number;
   previewing: boolean;
@@ -620,6 +695,7 @@ function BoardCard({
   onRemove: (b: Block) => void;
   onResize: (b: Block, start: number, end: number) => void;
   onDropShow: (b: Block, showId: string) => void;
+  onDropTemplate: (b: Block, templateId: GeneratedTemplateId) => void;
   onRunNudge: (b: Block, step: number) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -646,7 +722,9 @@ function BoardCard({
     // feedback loop where dnd-kit's layout compensation erases finger delta.
     top: `calc(var(--hour-px) * ${visualStart})`,
     height: `calc(var(--hour-px) * ${span} - 4px)`,
-    background: color,
+    background: striped
+      ? `repeating-linear-gradient(135deg, color-mix(in oklab, var(--bg) 24%, transparent) 0 5px, transparent 5px 10px), ${color}`
+      : color,
     transform: CSS.Translate.toString(transform),
   });
 
@@ -703,6 +781,11 @@ function BoardCard({
         if (runDragging) return;
         e.preventDefault();
         setOver(false);
+        const template = readDraggedTemplate(e);
+        if (template) {
+          onDropTemplate(block, template);
+          return;
+        }
         const id = readDraggedShow(e);
         if (id) onDropShow(block, id);
       }}
@@ -818,15 +901,20 @@ function ResizeHandle({
 // One silent run as a hatched slot. With a show armed the click books it; with
 // nothing armed it opens a picker. Same write either way, and the same a drop makes.
 function DropSlot({
-  block, shows, colorOf, armedShowId, armedName, runDragging, onDropShow,
+  block, shows, personas, colorOf, armedShowId, armedTemplateId, armedName, runDragging,
+  onDropShow, onDropTemplate, templates,
 }: {
   block: Block;
   shows: ScheduleShow[];
+  personas: { id: string; name?: string }[];
   colorOf: (id: string | null | undefined) => string;
   armedShowId: string | null;
+  armedTemplateId: GeneratedTemplateId | null;
   armedName: string | null;
   runDragging: boolean;
   onDropShow: (b: Block, showId: string) => void;
+  onDropTemplate: (b: Block, templateId: GeneratedTemplateId) => void;
+  templates: typeof GENERATED_SHOW_TEMPLATES;
 }) {
   const ref = useRef<HTMLButtonElement>(null);
   const [over, setOver] = useState(false);
@@ -840,7 +928,9 @@ function DropSlot({
     <button
       ref={ref}
       type="button"
-      onClick={armedShowId ? () => onDropShow(block, armedShowId) : undefined}
+      onClick={armedTemplateId
+        ? () => onDropTemplate(block, armedTemplateId)
+        : armedShowId ? () => onDropShow(block, armedShowId) : undefined}
       onDragOver={e => {
         if (runDragging) return;
         e.preventDefault();
@@ -852,6 +942,11 @@ function DropSlot({
         if (runDragging) return;
         e.preventDefault();
         setOver(false);
+        const template = readDraggedTemplate(e);
+        if (template) {
+          onDropTemplate(block, template);
+          return;
+        }
         const id = readDraggedShow(e);
         if (id) onDropShow(block, id);
       }}
@@ -871,19 +966,31 @@ function DropSlot({
   );
 
   // Armed, the slot writes on click — there is no menu to open.
-  if (armedShowId) return slot;
+  if (armedShowId || armedTemplateId) return slot;
 
   return (
     <DropdownMenu modal={false}>
-      <DropdownMenuTrigger asChild disabled={shows.length === 0}>
+      <DropdownMenuTrigger asChild disabled={shows.length === 0 && templates.length === 0}>
         {slot}
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="max-h-80 min-w-[10rem] overflow-y-auto">
         <DropdownMenuGroup>
-          {shows.map(s => (
+          {shows.filter(show => show.generation?.mode !== 'generated').map(s => (
             <DropdownMenuItem key={s.id} onClick={() => onDropShow(block, s.id)}>
               <ColorChip color={colorOf(s.id)} />
               {s.name}
+            </DropdownMenuItem>
+          ))}
+          {shows.filter(show => show.generation?.mode === 'generated').map(show => (
+            <DropdownMenuItem key={show.id} onClick={() => onDropShow(block, show.id)}>
+              <ColorChip color={generatedShowColor(show.generation!.template)} />
+              {generatedShowLabel(show, personas)}
+            </DropdownMenuItem>
+          ))}
+          {templates.map(template => (
+            <DropdownMenuItem key={`template-${template.id}`} onClick={() => onDropTemplate(block, template.id)}>
+              <ColorChip color={GENERATED_SHOW_COLORS[template.id]} />
+              New · {template.label}
             </DropdownMenuItem>
           ))}
         </DropdownMenuGroup>

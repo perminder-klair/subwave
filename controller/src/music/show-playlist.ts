@@ -56,7 +56,7 @@ async function memoFetch(key: string, fn: () => Promise<any[]>): Promise<any[]> 
 
 // null when the show pins none. A missing/deleted/empty id contributes nothing
 // rather than throwing, so a stale anchor degrades instead of stranding the stream.
-export async function resolveShowPlaylistPool(show: any): Promise<PlaylistPool | null> {
+export async function resolveShowPlaylistPool(show: any, { includeBlocked = false }: { includeBlocked?: boolean } = {}): Promise<PlaylistPool | null> {
   const ids = Array.isArray(show?.playlistIds) ? show.playlistIds.filter(Boolean) : [];
   if (!ids.length) return null;
 
@@ -70,7 +70,8 @@ export async function resolveShowPlaylistPool(show: any): Promise<PlaylistPool |
   const names: string[] = [];
   for (const id of ids) {
     try {
-      const songs = await memoFetch(`playlist:${id}`, () => subsonic.getPlaylist(id));
+      const key = includeBlocked ? `playlist-raw:${id}` : `playlist:${id}`;
+      const songs = await memoFetch(key, () => subsonic.getPlaylist(id, { includeBlocked }));
       lists.push(songs || []);
       const meta = index.find((p: any) => p.id === id);
       if (meta?.name) names.push(meta.name);
@@ -117,11 +118,11 @@ export async function resolvePlaylistMemberSets(ids: string[]): Promise<Map<stri
   return out;
 }
 
-// Track ids to suppress before the LLM sees the pool; null when none are excluded.
 // Two sources, one set, so every pick path that already honours an excluded
 // playlist (agent tools, pool picker, coast, journeys, episodes, playlist
 // order) also honours an excluded album KIND (Library → Era, e.g. 'dj-mix').
-export async function resolveExcludedPlaylistIds(show: any): Promise<Set<string> | null> {
+// Track ids to suppress before the LLM sees the pool; null when none are excluded.
+export async function resolveExcludedPlaylistIds(show: any, { includeBlocked = false }: { includeBlocked?: boolean } = {}): Promise<Set<string> | null> {
   const ids = Array.isArray(show?.excludedPlaylistIds) ? show.excludedPlaylistIds.filter(Boolean) : [];
   const kinds = Array.isArray(show?.excludedAlbumKinds) ? show.excludedAlbumKinds.filter(Boolean) : [];
   if (!ids.length && !kinds.length) return null;
@@ -129,7 +130,8 @@ export async function resolveExcludedPlaylistIds(show: any): Promise<Set<string>
   const blocked = kinds.length ? excludedKindIds(kinds) : new Set<string>();
   for (const id of ids) {
     try {
-      const songs = await memoFetch(`playlist:${id}`, () => subsonic.getPlaylist(id));
+      const key = includeBlocked ? `playlist-raw:${id}` : `playlist:${id}`;
+      const songs = await memoFetch(key, () => subsonic.getPlaylist(id, { includeBlocked }));
       for (const t of songs || []) {
         if (t?.id) blocked.add(t.id);
       }
