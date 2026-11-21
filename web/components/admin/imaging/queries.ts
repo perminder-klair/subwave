@@ -21,12 +21,15 @@ function useImagingResource<T>(
   path: string,
   adminFetch: AdminFetch,
   enabled: boolean,
+  poll = true,
 ): UseQueryResult<T> {
   return useAdminQuery<T>({
     key,
     adminFetch,
     enabled,
-    refetchInterval: 3_000,
+    // Polled so the Imaging panel sees a bed or jingle finish generating; a
+    // picker elsewhere passes poll=false and reads it once.
+    refetchInterval: poll ? 3_000 : false,
     request: (fetcher, signal) => adminJson<T>(fetcher, path, undefined, signal),
     toastOnError: false,
   });
@@ -36,7 +39,7 @@ export const useJinglesQuery = (adminFetch: AdminFetch, enabled: boolean) =>
   useImagingResource<JinglesData>(imagingKeys.jingles(), '/jingles', adminFetch, enabled);
 export const useSfxQuery = (adminFetch: AdminFetch, enabled: boolean) =>
   useImagingResource<SfxData>(imagingKeys.sfx(), '/sfx', adminFetch, enabled);
-export const useBedsQuery = (adminFetch: AdminFetch, enabled: boolean) =>
-  useImagingResource<BedsData>(imagingKeys.beds(), '/beds', adminFetch, enabled);
+export const useBedsQuery = (adminFetch: AdminFetch, enabled: boolean, poll = true) =>
+  useImagingResource<BedsData>(imagingKeys.beds(), '/beds', adminFetch, enabled, poll);
 export const useVoicesQuery = (adminFetch: AdminFetch, enabled: boolean) =>
   useImagingResource<VoiceData>(imagingKeys.voices(), '/voices', adminFetch, enabled);

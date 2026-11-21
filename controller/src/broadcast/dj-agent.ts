@@ -17,7 +17,7 @@ import { djObject, nearestId, modelTolerant } from '../llm/sdk.js';
 import * as budget from './dj-budget.js';
 import { withTrace, logEvent, timePhase } from '../observability/events.js';
 import { artistRootKey, recencyWindowsForLibrary, type CandidateLike } from '../music/recency.js';
-import { hardRecentFor, showNoRepeatGuard, strictShowLibraryPool } from '../music/show-recency.js';
+import { hardRecentFor, showNoRepeatGuard, strictShowLibraryPoolSliced } from '../music/show-recency.js';
 import { excludesExplicit } from '../music/explicit-policy.js';
 import { isInOrderShow } from '../music/playlist-order.js';
 import { commitInOrderPick, resolveInOrderNext } from '../music/playlist-order-next.js';
@@ -376,9 +376,9 @@ export async function livePickerScope(queue: any, { audioWaypoint = null, showAt
   // tools; 0 leaves the relaxable window in charge.
   // A strict-filter show's own catalogue, read once: it sizes the hard window
   // below and, when small, becomes the showPoolTracks source.
-  const showLibraryPool = timePhase('pick.showLibraryPool', () => strictShowLibraryPool(strict ? library.candidateFilterTracks() : null, {
+  const showLibraryPool = await timePhase('pick.showLibraryPool', () => strictShowLibraryPoolSliced(library.candidateFilterTrackBatches(), {
     show: activeShow, excludedIds, resolvedGenres: genreLock ?? [], minTrackSec, maxTrackSec,
-  }));
+  }, library.candidateFilterTracks));
   const noRepeat = timePhase('pick.noRepeatGuard', () => showNoRepeatGuard(
     settings.get().llm?.noRepeatWindow ?? 0,
     librarySize,

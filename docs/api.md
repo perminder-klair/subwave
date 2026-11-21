@@ -47,6 +47,14 @@ an admin credential:
 - `GET /lyrics/current` — lyrics for the track a listener is hearing, when the
   operator has the Lyrics panel on (see **Lyrics** below).
 
+**Show text for listeners.** A show carries two pieces of text. `description`
+(up to 300 characters, `''` when the operator has not set one) is written for
+listeners. `topic` is the DJ's brief: instructions written for the model, often
+long. Show `description` when it is non-empty and fall back to `topic` when it is
+empty, which is what the web player does. Both `/schedule`'s shows and
+`/now-playing`'s `context.activeShow` carry both fields; `description` is absent
+from an older controller, so treat a missing key as empty.
+
 **Persona souls are opt-in.** A persona's `soul` is its system prompt rather
 than a written bio, so the roster-wide reads above publish it only when the
 operator turns on **Settings → Station → Public API → publish persona souls**.

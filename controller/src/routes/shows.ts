@@ -78,6 +78,7 @@ router.post('/shows/community/:slug/install', requireAdmin, async (req, res) => 
   const show = {
     name: cs.name,
     topic: cs.topic,
+    description: cs.description,
     personaId,
     guestPersonaIds: [],
     banter: cs.banter,

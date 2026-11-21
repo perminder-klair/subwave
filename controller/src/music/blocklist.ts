@@ -79,7 +79,12 @@ const trackKey = (title: unknown, artist: unknown, album: unknown) => {
   return t && ar && al ? `${t}${KEY_SEP}${ar}${KEY_SEP}${al}` : null;
 };
 
+// Bumped on every index rebuild and playlist refresh, so a cache of what the
+// list blocks (library-overview.ts) knows when to recount.
+let indexRevision = 0;
+
 function rebuildIndex() {
+  indexRevision++;
   trackIds = new Map();
   albumIds = new Map();
   artistIds = new Map();
@@ -155,6 +160,7 @@ export async function refreshPlaylistMembers(): Promise<void> {
   if (generation === playlistMembersGeneration) {
     playlistMembers = members;
     playlistMembersAt = Date.now();
+    indexRevision++;
   }
 }
 
@@ -404,6 +410,14 @@ export function hitOf(song: any): BlockRef | null {
   if (entry) return refOf(entry);
   const rule = ruleMatchOf(song);
   return rule ? ruleRefOf(rule) : null;
+}
+
+/**
+ * Changes whenever what the list blocks can change: an entry or rule edit, a
+ * playlist refresh, or the active-rule set moving with the clock or the show.
+ */
+export function stateKey(): string {
+  return `${indexRevision}|${activeCompiledRules().map((cr) => cr.rule.id).join(',')}`;
 }
 
 export function isBlocked(song: any): boolean {

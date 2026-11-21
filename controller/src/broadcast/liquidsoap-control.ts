@@ -183,14 +183,33 @@ export async function reloadAutoPlaylist(): Promise<boolean> {
   return reloadPlaylist('auto');
 }
 
-// Re-read jingles.m3u, the mixer's own rotate (radio.liq `id="jingles"`). Its
-// reload_mode="watch" follows the file's inode on Liquidsoap 2.4.5, so it goes
-// deaf after the first atomic rewrite (#2008). 2.4.6 watches the directory, and
-// there the watch and this both reload, which only reshuffles the rotate. A
-// mixer without the rotate (jingleRatio 0, or the controller drawing jingles)
-// answers "unknown command": false, with nothing to reload.
+// Re-read jingles.m3u, the mixer's own rotate (radio.liq `jingles.reload`). A
+// file watch alone cannot be trusted with it (on Liquidsoap 2.4.5 it followed
+// the inode the first atomic rewrite replaced, #2008), so every write sends
+// this; radio.liq's own watch is only the backup. Between stingers the mixer
+// replaces its playlist, dropping the clip the old list had prepared, so the
+// on-air show's new list airs at the next stinger (#2367); during one it reloads
+// in place. A mixer without the rotate (jingleRatio 0, or the controller drawing
+// jingles) answers "unknown command": false, with nothing to reload.
 export async function reloadJinglesPlaylist(): Promise<boolean> {
   return reloadPlaylist('jingles');
+}
+
+// Whether the running mixer replaces its jingle playlist between stingers
+// (radio.liq `jingle_list_swap`, #2367). radio.liq registers the command whatever
+// the rotate, so a complete "unknown command" is a mixer older than the swap,
+// which applies a show's jingle list one stinger late: 'no'. 'unknown' is a
+// telnet failure, a timeout or any other reply, and says nothing either way.
+export type JingleListSwap = 'yes' | 'no' | 'unknown';
+
+export async function jingleListSwap(timeoutMs = 2000): Promise<JingleListSwap> {
+  try {
+    const reply = await sendCommand('jingle_list_swap', timeoutMs, { requireComplete: true });
+    if (reply === 'yes') return 'yes';
+    return /^ERROR: unknown command/i.test(reply) ? 'no' : 'unknown';
+  } catch {
+    return 'unknown';
+  }
 }
 
 // Whether the fallback has a track ready to air: after auto.reload the mixer's

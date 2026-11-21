@@ -1,3 +1,5 @@
+import type { JingleRotateOwner, JinglePlacement } from '@/lib/schemas.generated';
+import type { JingleEntry } from '../settings/shared';
 
 import {
   ALBUM_KINDS,
@@ -6,6 +8,7 @@ import {
   GUESTS_PER_SHOW,
   PLAYLISTS_PER_SHOW,
   SHOWS_LIMIT,
+  SHOW_DESCRIPTION_MAX,
   SHOW_ENERGY,
   SHOW_FILTER_VALUES_MAX,
   SHOW_NAME_MAX,
@@ -21,6 +24,7 @@ import {
 
 export const NAME_MAX = SHOW_NAME_MAX;
 export const TOPIC_MAX = SHOW_TOPIC_MAX;
+export const DESCRIPTION_MAX = SHOW_DESCRIPTION_MAX;
 export const SHOWS_MAX = SHOWS_LIMIT;
 export const GUESTS_MAX = GUESTS_PER_SHOW;
 export const PLAYLISTS_MAX = PLAYLISTS_PER_SHOW;
@@ -102,6 +106,15 @@ export interface Show {
   /** Operator organisation tags. They filter and group this list and nothing
    *  else -- picker, DJ agent and public routes are blind to them. */
   tags: string[];
+  /** Jingle filenames the automatic rotate and over-music ID may draw while
+   *  this show airs. Empty = every jingle. */
+  allowedJingles: string[];
+  /** Bed names a link or request bed may use while this show airs. Empty =
+   *  every bed. */
+  allowedBeds: string[];
+  /** What listeners read on the schedule and On Now card (#2358). '' = unset:
+   *  they see the brief (`topic`) instead. Never reaches the DJ. */
+  description: string;
 }
 
 /** Mirrors the controller's EraWindow. Multiple windows let a show span
@@ -113,6 +126,8 @@ export interface CommunityShow {
   slug: string;
   name: string;
   topic: string;
+  /** Listener blurb (#2358); absent from an older controller. */
+  description?: string;
   moods: string[];
   genres: string[];
   eras: EraWindow[];
@@ -257,6 +272,12 @@ export interface SettingsResponse {
     /** Station-wide picking windows; `minTrackLengthSeconds` is the default a
      *  show inherits when its own field is null. */
     picker?: { albumHours?: number; minTrackLengthSeconds?: number };
+    /** Who counts the between-songs jingle rotate. Only the controller can
+     *  honour a show's jingle list. */
+    jingleRotate?: JingleRotateOwner;
+    jinglePlacement?: JinglePlacement;
   };
   tts?: { moods?: string[] };
+  /** The station's jingle library (files that exist), for the Imaging lists. */
+  jingles?: JingleEntry[];
 }
