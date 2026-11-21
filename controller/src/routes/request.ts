@@ -412,7 +412,7 @@ async function resolveRequest(entry) {
   // 0. "more like this" is a meta-instruction about the current track, not a
   // query, so it never goes through the generic search path.
   const isMoreLikeThis = /^more\s+like\s+this[.!?]?$/i.test(text);
-  if (isMoreLikeThis) {
+  if (isMoreLikeThis && !entry.verifiedCandidate) {
     entry.path = 'more-like-this';
     entry.pickSource = 'more-like-this';
     const reference = queue.current || queue.history[0];
@@ -512,7 +512,15 @@ async function resolveRequest(entry) {
   // Conversational DJ agent. On any failure fall through to the stateless
   // cascade below, so a request is never dropped.
   try {
-    const agentRes = await djAgent.runRequest(queue, { requester, text });
+    const agentRes = await djAgent.runRequest(queue, {
+      requester, text,
+      alexa: entry.source === 'alexa' ? {
+        requestId: entry.id,
+        dedication: entry.dedication,
+        verifiedCandidate: entry.verifiedCandidate,
+        isCancelled: () => entry.status === 'cancelled',
+      } : undefined,
+    });
     if (entry.status === 'cancelled') return;
     if (agentRes) {
       // Thread the agent's own echo-guard verdict into the durable log; the
@@ -549,6 +557,7 @@ async function resolveRequest(entry) {
       });
     }
   } catch (err) {
+    if (entry.status === 'cancelled') return;
     queue.log('error', `DJ agent request failed: ${err.message} — falling back`);
   }
 
