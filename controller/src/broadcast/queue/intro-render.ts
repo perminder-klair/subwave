@@ -5,19 +5,26 @@
 // airIntro can reuse it instead of starting the same expensive job again.
 
 export type IntroRenderResult =
-  | { status: 'rendered'; wav: string }
-  | { status: 'failed'; error: unknown };
+  { status: 'rendered'; wav: string } | { status: 'failed'; error: unknown };
 
 export type IntroRenderWaitResult = IntroRenderResult | { status: 'timed-out' };
 
 export class IntroRenderTracker<Item extends object> {
   private active = new WeakMap<Item, Promise<IntroRenderResult>>();
+  // A detached render still consumes TTS until its promise settles.
+  private pending = new Set<Promise<IntroRenderResult>>();
 
   private track(item: Item, pending: Promise<IntroRenderResult>): void {
     this.active.set(item, pending);
     void pending.then(() => {
-      if (this.active.get(item) === pending) this.active.delete(item);
+      if (this.active.get(item) === pending) {
+        this.active.delete(item);
+      }
     });
+  }
+
+  busy(): boolean {
+    return this.pending.size > 0;
   }
 
   start(item: Item, render: () => Promise<string>): Promise<IntroRenderResult> {
@@ -30,6 +37,8 @@ export class IntroRenderTracker<Item extends object> {
         wav => ({ status: 'rendered' as const, wav }),
         error => ({ status: 'failed' as const, error }),
       );
+    this.pending.add(pending);
+    void pending.then(() => this.pending.delete(pending));
     this.track(item, pending);
     return pending;
   }

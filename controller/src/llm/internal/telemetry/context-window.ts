@@ -12,6 +12,7 @@ export const CONTEXT_WINDOW_STEP = 1024;
 export const CONTEXT_WINDOW_MIN = 8192;
 export const CONTEXT_WINDOW_HEADROOM = 0.25;
 export const CONTEXT_WINDOW_RESPONSE_RESERVE = 1024;
+const MIN_PICKER_CONTEXT_SAMPLES = 5;
 
 function wholePositive(value: unknown): number | null {
   const n = Number(value);
@@ -36,6 +37,17 @@ function sampledInput(call: ContextCall | null | undefined): number | null {
   if (measuredPeak != null) return measuredPeak;
   if (typeof call?.via === 'string' && call.via.startsWith('ai-sdk:agent')) return null;
   return wholePositive(call.usage?.input);
+}
+
+/** Mean prompt size for the track picker currently selected in Settings. */
+export function activePickerAverageInputTokens(calls: any[], trackSelection: 'shortlist' | 'agentic'): number | null {
+  const kinds = trackSelection === 'shortlist' ? SHORTLIST_PICK_KINDS : AGENTIC_PICK_KINDS;
+  const samples = (Array.isArray(calls) ? calls : [])
+    .filter(call => typeof call?.kind === 'string' && kinds.has(call.kind))
+    .map(sampledInput)
+    .filter((tokens): tokens is number => tokens != null);
+  if (samples.length < MIN_PICKER_CONTEXT_SAMPLES) return null;
+  return Math.round(samples.reduce((sum, tokens) => sum + tokens, 0) / samples.length);
 }
 
 type ContextGroup = {

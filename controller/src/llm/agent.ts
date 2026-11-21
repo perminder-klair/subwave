@@ -3,3 +3,6 @@
 // `llm/agent.js` unchanged.
 
 export { defineAgent } from './internal/agent-factory.js';
+export type { AgentDefinition, AgentRunResult, DjAgentInstance } from './internal/agent-factory.js';
+export { agentWorkActive, interactiveAgentWorkActive } from './agent-activity.js';
+export type { AgentActivityPriority } from './agent-activity.js';

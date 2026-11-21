@@ -92,4 +92,15 @@ test('a recovery reply that fails to parse does not fail over, and keeps its tex
   assert.doesNotMatch(String(err.message), /Forbidden/);
   assert.equal(err.text, '{"name": Forbidden Colours}', 'raw output still rides along for /debug');
   assert.equal(err.cause?.name, 'SyntaxError');
+  assert.equal(err.message, 'object recovery reply was not valid JSON');
+
+  reply.content[0].text = '{"name":"Forbidden Colours"}';
+  const validationError = await djObject({ system: 's', prompt: 'p',
+    schema: z.object({ name: z.literal('expected') }), kind: 'validation-test' })
+    .then(() => null, (e: Error & {text?:string;cause?:Error}) => e);
+  assert.ok(validationError);
+  assert.equal(validationError.message, 'object recovery reply was valid JSON but did not match the required schema');
+  assert.equal(validationError.cause?.name, 'ZodError');
+  assert.deepEqual(JSON.parse(validationError.text!), {name:'Forbidden Colours'});
+  assert.equal(backupCalls, 0, 'a schema mismatch is not a provider failure either');
 });

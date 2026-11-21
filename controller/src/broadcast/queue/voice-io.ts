@@ -130,6 +130,10 @@ export function airInEstimate(
   return { waitMs, estimatedAirInMs: waitMs + HANDOFF_TO_AIR_MS };
 }
 
+export class SpeechPublicationCancelled extends Error {
+  constructor() { super('Speech cancelled before broadcast publication'); }
+}
+
 interface AirVoiceOptions {
   // Fired SYNCHRONOUSLY, before this clip joins the voice chain — the early
   // half of the lifecycle a consumer needs in order to prepare for speech

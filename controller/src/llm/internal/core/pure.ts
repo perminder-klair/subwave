@@ -167,19 +167,23 @@ export function usageOf(
 export interface UsageMeter {
   readonly onLanguageModelCallEnd: (event: { usage?: TokenUsage }) => void;
   usage(): { input: number; output: number; total: number };
+  contextPeakInput(): number;
   attachTo(err: unknown): void;
 }
 
 export function createUsageMeter(): UsageMeter {
   const sum = { input: 0, output: 0, total: 0 };
+  let contextPeakInput = 0;
   return {
     onLanguageModelCallEnd: (event) => {
       const u = usageOf({ usage: event?.usage });
       sum.input += u.input;
       sum.output += u.output;
       sum.total += u.total;
+      contextPeakInput = Math.max(contextPeakInput, u.input);
     },
     usage: () => ({ ...sum }),
+    contextPeakInput: () => contextPeakInput,
     attachTo(err) {
       // A metered zero says nothing, so it never overwrites usage an error
       // already carried; otherwise the meter saw every call the error did.

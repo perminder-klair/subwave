@@ -213,7 +213,7 @@ test('the isolated writer prompt never carries an announce placeholder', () => {
     context: null,
   });
   assert.doesNotMatch(prompt, /<artist>/);
-  assert.match(prompt, /Task: Give a brief spoken introduction/);
+  assert.match(prompt, /Task: Write a natural, brief DJ introduction/);
 });
 
 test('natural link prompt exposes only the bounded verified-facts packet', () => {

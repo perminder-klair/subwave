@@ -1,0 +1,47 @@
+name: Sleeve Notes shared boundaries
+
+on:
+  pull_request:
+    paths:
+      - 'controller/**'
+      - 'web/**'
+      - '.github/workflows/sleeve-notes-boundaries.yml'
+  push:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sleeve-notes-boundaries-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  boundaries:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            controller/package-lock.json
+            web/package-lock.json
+      - run: npm ci --no-audit --no-fund
+        working-directory: controller
+      - run: npm ci --no-audit --no-fund
+        working-directory: web
+      - name: Test broadcast, identity and recovery boundaries
+        working-directory: controller
+        run: |
+          set -e
+          for suite in intro-render sleeve-notes-link-isolation sleeve-notes-segment sleeve-notes-handover sleeve-notes-lifecycle sleeve-notes-backup sleeve-notes-cached-browsing sleeve-notes-artist-identity sleeve-notes-research-policy sleeve-notes-diagnostics; do
+            npm test -- "$suite"
+          done
+      - name: Test progress messages and Station Brain
+        working-directory: web
+        run: |
+          npm test -- notes-research-health
+          npm test -- connections

@@ -21,6 +21,12 @@ export function picksAllowed(): boolean {
   return currentMode() !== 'hard';
 }
 
+// Background research shares the station's hard allowance. Re-check at every
+// generation because a multi-step research job can cross the cap mid-run.
+export function researchAllowed(): boolean {
+  return currentMode() !== 'hard';
+}
+
 // Soft/hard: prefer the cheap stateless pool picker over the agent tool-loop.
 export function preferCheapPicker(): boolean {
   return currentMode() !== 'normal';

@@ -380,10 +380,18 @@ export interface DjBehaviourForm {
    *  letting it lift between speakers. */
   holdDuckBetweenSpeakers: boolean;
   extendedSleeveNotes: boolean;
+  sleeveNotesCollectionPaused: boolean;
+  sleeveNotesMaintenanceWhenEmpty: boolean;
   releaseYearMentions: 'regular' | 'occasional' | 'rare';
   recapLimit: string;
   recapMinutes: string;
   recapChars: string;
+}
+
+export interface SleeveNotesForm {
+  providers: {
+    genius: { enabled: boolean };
+  };
 }
 
 /** The controller returns persisted numeric values; the editor keeps them as
@@ -394,6 +402,8 @@ export interface DjBehaviourValues {
   sameHostAcknowledgement?: boolean;
   holdDuckBetweenSpeakers?: boolean;
   extendedSleeveNotes?: boolean;
+  sleeveNotesCollectionPaused?: boolean;
+  sleeveNotesMaintenanceWhenEmpty?: boolean;
   releaseYearMentions?: 'regular' | 'occasional' | 'rare';
   recapLimit?: number;
   recapMinutes?: number;
@@ -424,6 +434,7 @@ export interface FormState {
   /** Station-wide minimum length before a show may use pause-and-talk. */
   pauseTalkMinSeconds: string;
   djBehaviour: DjBehaviourForm;
+  sleeveNotes: SleeveNotesForm;
   weather: WeatherCfg;
   tts: TtsForm;
   llm: LlmForm;
@@ -448,6 +459,7 @@ export interface JingleEntry {
 
 export interface SettingsData {
   values?: {
+    personas?: Array<{id:string;name:string}>;
     jingleRatio?: number;
     jinglePlacement?: JinglePlacement;
     /** Who counts the tracks between jingles (#1619). Absent on an older
@@ -517,6 +529,11 @@ export interface SettingsData {
     djTalkOnlyBetweenTracks?: boolean;
     pauseTalkMinSeconds?: number;
     djBehaviour?: DjBehaviourValues;
+    sleeveNotes?: {
+      segment?: import('../../../lib/schemas.generated').SleeveNotesSegmentConfig;
+      wikipedia?: { extractPrompt?: string; artistClaimLimit?: number; albumClaimLimit?: number };
+      providers?: { genius?: { enabled?: boolean; accessToken?: string } };
+    };
     /** Absent on a settings.json predating the key — the controller's own
      *  coercion reads it as the 5-minute default. */
     handover?: { offsetMinutes?: number };

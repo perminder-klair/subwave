@@ -34,6 +34,7 @@ export interface CardProps {
   className?: string;
   bodyClass?: string;
   headClass?: string;
+  headingLevel?: 2 | 3;
   // Drops the box border/background and side padding, for sections inside
   // EditorDialog (.card.is-flat in globals.css).
   flat?: boolean;
@@ -44,15 +45,16 @@ export interface CardProps {
   anchor?: string;
 }
 
-export function Card({ title, sub, right, children, className, bodyClass, headClass, flat, anchor }: CardProps) {
+export function Card({ title, sub, right, children, className, bodyClass, headClass, flat, anchor, headingLevel }: CardProps) {
   // Only a plain-string title is slugged; an interpolated one would give a slug
   // that moves with the data.
+  const Heading = headingLevel === 2 ? 'h2' : headingLevel === 3 ? 'h3' : 'span';
   const slug = anchor ?? (typeof title === 'string' ? cardAnchor(title) : undefined);
   return (
     <section data-card={slug} className={cn('card', flat && 'is-flat', className)}>
       {(title || right) && (
         <div className={cn('card-head', headClass)}>
-          {title && <span className="title">{title}</span>}
+          {title && <Heading className="title">{title}</Heading>}
           {sub && <span className="sub">{sub}</span>}
           {right && <span className="right">{right}</span>}
         </div>
@@ -215,6 +217,7 @@ export interface SegOption {
 }
 
 export interface SegProps extends AriaAttributes {
+  disabled?: boolean;
   value: string;
   options: SegOption[];
   accent?: boolean;
@@ -223,10 +226,11 @@ export interface SegProps extends AriaAttributes {
 
 /* Segmented control over shadcn ToggleGroup. Clicking the active item is a
    no-op: the group always keeps a value. */
-export function Seg({ value, options, accent, onChange, ...aria }: SegProps) {
+export function Seg({ value, options, accent, onChange, disabled, ...aria }: SegProps) {
   return (
     <ToggleGroup
       {...aria}
+      disabled={disabled}
       type="single"
       value={value}
       onValueChange={(v: string) => { if (v && onChange) onChange(v); }}

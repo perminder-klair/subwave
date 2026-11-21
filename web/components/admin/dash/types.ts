@@ -92,7 +92,10 @@ export interface HealthStats {
 
 export interface ActResponse {
   ok?: boolean;
-  spoken?: string;
+  spoken?: string | null;
+  queued?: boolean;
+  deferred?: boolean;
+  reason?: string | null;
   error?: string;
 }
 

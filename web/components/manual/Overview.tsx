@@ -39,6 +39,11 @@ const GUIDE = [
     blurb: 'For the operator — signing in, tuning the DJ, scheduling shows, and managing jingles.',
   },
   {
+    href: '/manual/observatory',
+    label: 'Library Observatory',
+    blurb: 'Explore your library through its moods, genres and musical similarities.',
+  },
+  {
     href: '/manual/themes',
     label: 'Skins & Themes',
     blurb: 'Swap the player face between eight built-in skins, pick the station-wide palette, or fork the reference player entirely.',
@@ -54,9 +59,29 @@ const GUIDE = [
     blurb: 'Tune the station for a small local model or a large hosted one — trading richness against token cost.',
   },
   {
+    href: '/manual/voices',
+    label: 'Voices & TTS',
+    blurb: 'Choose local or cloud voices and understand how the station turns scripts into speech.',
+  },
+  {
+    href: '/manual/analysis',
+    label: 'Acoustic Analysis',
+    blurb: 'Understand the audio measurements behind musical discovery and mix timing.',
+  },
+  {
     href: '/manual/mcp',
     label: 'Agent Access',
     blurb: 'Let an AI agent read the station, request tracks, and drive the DJ over the MCP server.',
+  },
+  {
+    href: '/manual/concepts',
+    label: 'Concepts',
+    blurb: 'Understand the controls and ideas behind personas, music selection and station behaviour.',
+  },
+  {
+    href: '/manual/sleeve-notes',
+    label: 'Extended Sleeve Notes',
+    blurb: 'Build music knowledge, explore Station Brain, and give the DJ sourced stories and connections.',
   },
   {
     href: '/manual/faq',
@@ -68,6 +93,7 @@ const GUIDE = [
 const NUMBER_WORDS = [
   'No', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight',
   'Nine', 'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen',
+  'Sixteen', 'Seventeen', 'Eighteen',
 ];
 const guideCount = NUMBER_WORDS[GUIDE.length] ?? String(GUIDE.length);
 

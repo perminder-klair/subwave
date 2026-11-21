@@ -17,6 +17,7 @@ export interface ByKindRow {
   kind: string;
   count: number;
   ok: number;
+  deferred?: number;
   avgMs?: number;
   tokens?: number;
 }
@@ -41,6 +42,7 @@ export interface ContextWindow {
 }
 
 export interface LlmStats {
+  deferred?: number;
   window: number;
   count: number;
   ok: number;
@@ -73,7 +75,14 @@ export interface LlmStats {
   };
 }
 
+export interface TtsPace {
+  window: number; samples: number; audioSamples: number;
+  generationWordsPerSecond: number | null; spokenWordsPerSecond: number | null;
+}
+
 export interface TtsStats {
+  recentPace?: TtsPace;
+  paceByVoice?: (TtsPace & {engine: string; persona: string | null})[];
   window: number;
   count: number;
   ok: number;
@@ -100,7 +109,7 @@ export interface RequestsStats {
   successRate?: number | null;
   latency: LatencyStats;
   artistMiss: { count: number; rate?: number | null };
-  byPath: { path: string; count: number; ok: number }[];
+  byPath: { path: string; count: number; ok: number; deferred?: number }[];
   byPickSource: { source: string; count: number }[];
   topRequesters: { requester: string; count: number }[];
 }

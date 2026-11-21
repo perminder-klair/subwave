@@ -155,6 +155,10 @@ export function getRedacted() {
   if (clone.scrobble?.listenbrainz) {
     clone.scrobble.listenbrainz.userToken = s.scrobble?.listenbrainz?.userToken ? 'set' : '';
   }
+  if (clone.sleeveNotes?.providers?.genius) {
+    clone.sleeveNotes.providers.genius.accessToken =
+      s.sleeveNotes?.providers?.genius?.accessToken ? 'set' : '';
+  }
   if (clone.privacy) {
     clone.privacy.password = s.privacy?.password ? 'set' : '';
   }

@@ -21,13 +21,14 @@ export const MIN_SAMPLE_FOR_BAD = 10;
 
 const failing = (count: number): Health => (count >= MIN_SAMPLE_FOR_BAD ? 'bad' : 'warn');
 
-export function llmHealth(l: { count: number; failed: number; successRate?: number }): HealthSignal {
-  if (!l.count) return { health: 'idle', note: 'no model calls yet' };
-  const rate = l.successRate ?? 1 - share(l.failed, l.count);
+export function llmHealth(l: { count: number; failed: number; deferred?: number; successRate?: number }): HealthSignal {
+  const count = Math.max(0, l.count - (l.deferred ?? 0));
+  if (!count) return { health: 'idle', note: l.deferred ? 'model calls deferred for broadcast work' : 'no model calls yet' };
+  const rate = l.successRate ?? 1 - share(l.failed, count);
   const note = l.failed
-    ? `${l.failed} of ${l.count} model calls failed`
-    : `${l.count} model calls, none failed`;
-  if (rate < 0.9) return { health: failing(l.count), note };
+    ? `${l.failed} of ${count} model calls failed`
+    : `${count} model calls, none failed`;
+  if (rate < 0.9) return { health: failing(count), note };
   if (rate < 0.95) return { health: 'warn', note };
   return { health: 'ok', note };
 }

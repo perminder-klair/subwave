@@ -8,6 +8,7 @@
 
 import { createHash } from 'node:crypto';
 import { wrapLanguageModel } from 'ai';
+import { researchDeferral } from './deferred.js';
 import * as settings from '../../../settings.js';
 import { ollamaBaseUrl, loccaBaseUrl } from '../provider/registry.js';
 import { guardGenerationModel, throwIfCancelled } from './generation.js';
@@ -97,7 +98,11 @@ function recordSuccess({ kind, started, via, model, sampling, usage, contextPeak
   });
 }
 
-function recordFailure({ kind, started, via, model, error, extra = {} }: any) {
+function recordFailure({ kind, started, via, model, error, cause, signal, extra = {} }: {
+  kind: string; started: number; via: string; model: string; error?: string;
+  cause: unknown; signal?: AbortSignal; extra?: Record<string, unknown>;
+}) {
+  const deferredReason = researchDeferral(cause, signal);
   record({
     kind,
     ok: false,
@@ -107,6 +112,7 @@ function recordFailure({ kind, started, via, model, error, extra = {} }: any) {
     error,
     t: new Date().toISOString(),
     ...extra,
+    ...(deferredReason ? { outcome: 'deferred', deferredReason } : {}),
   });
 }
 
@@ -385,7 +391,7 @@ export async function withFailover<T>(
       return r.value;
     } catch (err: any) {
       logFailurePreview(kind, err);
-      recordFailure({ kind, started, via: `${err?.__via || 'ai-sdk'}:pinned`, model: leg.label, error: err?.message, extra: failExtra(err) });
+      recordFailure({ kind, started, via: `${err?.__via || 'ai-sdk'}:pinned`, model: leg.label, error: err?.message, cause: err, signal, extra: failExtra(err) });
       throw err;
     }
   }
@@ -409,7 +415,7 @@ export async function withFailover<T>(
       } catch (err2: any) {
         if (isBackupFailure(err2, signal)) noteBackupResult(routing, false);
         logFailurePreview(kind, err2);
-        recordFailure({ kind, started, via: err2?.__via || 'ai-sdk', model: backup.label, error: err2?.message, extra: failExtra(err2) });
+        recordFailure({ kind, started, via: err2?.__via || 'ai-sdk', model: backup.label, error: err2?.message, cause: err2, signal, extra: failExtra(err2) });
         // Both legs failing: routing to the backup no longer saves anything,
         // and a primary that recovered would sit unused until expiry while
         // every call fails. Clear the window so the next call tries the
@@ -445,7 +451,7 @@ export async function withFailover<T>(
       : null;
     if (!backup) {
       logFailurePreview(kind, err);
-      recordFailure({ kind, started: primaryStarted, via: primaryVia, model: primary.label, error: err?.message, extra: failExtra(err) });
+      recordFailure({ kind, started: primaryStarted, via: primaryVia, model: primary.label, error: err?.message, cause: err, signal, extra: failExtra(err) });
       throwIfCancelled(signal);
       throw err;
     }
@@ -459,7 +465,7 @@ export async function withFailover<T>(
       : 'unreachable';
     const detail = err?.statusCode || err?.cause?.statusCode || err?.code || err?.cause?.code || err?.name || 'unknown';
     console.log(`[${kind}] primary LLM (${primary.label}) ${reason} (${detail}) — failing over to ${backup.label}`);
-    recordFailure({ kind, started: primaryStarted, via: `${primaryVia}:failover→${backup.label}`, model: primary.label, error: err?.message, extra: failExtra(err) });
+    recordFailure({ kind, started: primaryStarted, via: `${primaryVia}:failover→${backup.label}`, model: primary.label, error: err?.message, cause: err, signal, extra: failExtra(err) });
     // Only a host-down verdict starts the sticky window. A retired model or a
     // spent quota keeps the host healthy and its errors are immediate — there
     // is no detection cost worth remembering, and marking a healthy box down
@@ -486,7 +492,7 @@ export async function withFailover<T>(
         if (down && sticky === down) clearSticky();
       }
       logFailurePreview(kind, err2);
-      recordFailure({ kind, started: backupStarted, via: err2?.__via || 'ai-sdk', model: backup.label, error: err2?.message, extra: failExtra(err2) });
+      recordFailure({ kind, started: backupStarted, via: err2?.__via || 'ai-sdk', model: backup.label, error: err2?.message, cause: err2, signal, extra: failExtra(err2) });
       throw err2;
     }
   }

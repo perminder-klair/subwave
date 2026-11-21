@@ -37,3 +37,8 @@ instead. The advisory is [GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHS
 
 Run `npm run lint`, `npm test`, and `npm run build` after dependency changes.
 For Zod changes, run the controller's checks and regenerate the schema mirror too.
+
+The Station Brain uses `react-force-graph-2d` 1.29.2 (MIT), loaded only in
+the browser. The former optional 3D renderer and its dedicated dependencies
+have been removed. The Library Observatory retains its existing Three.js
+dependency. Unrelated locked versions and platform metadata are preserved.

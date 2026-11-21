@@ -61,6 +61,8 @@ export function record(call: any) {
   logEvent('llm', {
     kind: call.kind,
     ok: call.ok,
+    outcome: call.outcome,
+    deferredReason: call.deferredReason,
     ms: call.ms,
     model: call.model,
     via: call.via,

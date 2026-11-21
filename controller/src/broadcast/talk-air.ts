@@ -42,7 +42,8 @@ export function suppressScheduledSpeechDuringHandoff(
   kind: string,
   handoffInProgress: boolean,
 ): boolean {
-  return handoffInProgress && kind !== 'handoff' && inTalkAirScope();
+  // A manually requested researched conversation still belongs to its outgoing show.
+  return handoffInProgress && kind !== 'handoff' && (inTalkAirScope() || kind === 'sleeve-notes');
 }
 
 // Snapshot for the admin /debug surface.

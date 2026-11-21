@@ -51,6 +51,8 @@ function Mix({ title, note, rows, total }: { title: string; note: string; rows: 
   );
 }
 
+const rate = (value: number | null | undefined) => value == null ? '—' : `${value.toFixed(2)} words/s`;
+
 const sec = (ms: number | undefined) => (ms == null ? null : ms / 1000);
 
 // A step that divides the scale into at most a dozen whole divisions.
@@ -88,7 +90,7 @@ function LlmPanel({ llm }: { llm: LlmStats }) {
       ) : (
         <>
           <CellGrid min={170} className="border-b border-ink">
-            <MetricCell label="Calls" value={fmtInt(llm.count)} sub={`${fmtInt(llm.ok)} ok · ${fmtInt(llm.failed)} failed`} />
+            <MetricCell label="Calls" value={fmtInt(llm.count)} sub={`${fmtInt(llm.ok)} ok · ${fmtInt(llm.failed)} failed${llm.deferred ? ` · ${fmtInt(llm.deferred)} deferred` : ''}`} />
             <MetricCell
               label="Success"
               value={fmtPct(llm.successRate)}
@@ -164,11 +166,12 @@ function LlmPanel({ llm }: { llm: LlmStats }) {
                 >
                   <span className="flex min-w-0 items-baseline gap-1.5" title={k.kind}>
                     <span className="truncate">{kindName(k.kind)}</span>
-                    {k.ok < k.count && (
+                    {k.ok < k.count - (k.deferred ?? 0) && (
                       <span className="shrink-0 font-mono text-[10px] font-bold whitespace-nowrap text-vermilion">
-                        {fmtInt(k.count - k.ok)} failed
+                        {fmtInt(k.count - k.ok - (k.deferred ?? 0))} failed
                       </span>
                     )}
+                    {!!k.deferred && <span className="shrink-0 text-[10px] text-muted">{fmtInt(k.deferred)} deferred</span>}
                   </span>
                   <span className="text-right font-mono tabular-nums">{fmtInt(k.count)}</span>
                   <span className="text-right font-mono text-muted tabular-nums">{fmtSec(k.avgMs)}</span>
@@ -224,6 +227,24 @@ function TtsPanel({ tts }: { tts: TtsStats }) {
               sub={tts.slowest?.kind ? `a ${tts.slowest.kind} segment` : undefined}
             />
           </CellGrid>
+          <CellGrid min={170} className="border-b border-ink">
+            <MetricCell label="Generation speed" value={rate(tts.recentPace?.generationWordsPerSecond)} sub={`${tts.recentPace?.samples ?? 0} recent successful renders`} />
+            <MetricCell label="Speaking pace" value={rate(tts.recentPace?.spokenWordsPerSecond)} sub={`${tts.recentPace?.audioSamples ?? 0} measured audio clips`} />
+          </CellGrid>
+          <p className="border-b border-ink px-[18px] py-3 text-xs text-muted">Rates use the latest {tts.recentPace?.window ?? 20} successful renders in the retained history. Generation includes processing and fallback delays; speaking pace uses measured audio length without broadcast padding. Words are counted from the full text sent to TTS, excluding control tags. Measurements reset on controller restart.</p>
+          {!!tts.paceByVoice?.length && <div className="overflow-x-auto border-b border-ink px-[18px] py-3">
+            <table className="w-full text-left text-[12px]">
+              <caption className={cn(LABEL, 'mb-2 text-left')}>Recent pace by engine and presenter</caption>
+              <thead className="border-b border-separator-strong text-muted"><tr>
+                <th scope="col" className="py-2 pr-3">Engine</th><th scope="col" className="py-2 pr-3">Presenter</th>
+                <th scope="col" className="py-2 pr-3 text-right">Renders</th><th scope="col" className="py-2 pr-3 text-right">Generation speed</th><th scope="col" className="py-2 text-right">Speaking pace</th>
+              </tr></thead>
+              <tbody>{tts.paceByVoice.map(voice => <tr key={JSON.stringify([voice.engine,voice.persona])} className="border-b border-separator-soft last:border-0">
+                <th scope="row" className="py-2 pr-3 font-normal">{voice.engine}</th><td className="py-2 pr-3">{voice.persona || 'Station voice'}</td>
+                <td className="py-2 pr-3 text-right tabular-nums">{fmtInt(voice.samples)}</td><td className="py-2 pr-3 text-right whitespace-nowrap tabular-nums">{rate(voice.generationWordsPerSecond)}</td><td className="py-2 text-right whitespace-nowrap tabular-nums">{rate(voice.spokenWordsPerSecond)}</td>
+              </tr>)}</tbody>
+            </table>
+          </div>}
           <Mix
             title="Voice mix"
             note="which engine spoke · a backup engine means the main voice failed"

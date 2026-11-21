@@ -1,0 +1,319 @@
+import type { LiveNotesItem } from './live-summary.js';
+import { dashboardReadInDatabase, type DashboardRead } from './dashboard-reads.js';
+import { searchResearchStoriesInDatabase } from './research-repository.js';
+import {externalDiscoveriesInDatabase} from './external-discoveries.js';
+import { fork, type ChildProcess } from 'node:child_process';
+import type { Socket } from 'node:net';
+import { fileURLToPath } from 'node:url';
+import type Database from 'better-sqlite3';
+import { open } from './db.js';
+import { buildConnectionLibraryPatch, connectionRevision, publishConnectionLibraryPatch,
+  type ConnectionLibraryPatch } from './library-connections.js';
+import { researchConnectionsOverviewInDatabase } from './connections-overview.js';
+import type { ConnectionEdgeType } from './research-repository.js';
+import { eligibleSleeveNotesForSegmentInDatabase, inspectExtendedSleeveNoteInDatabase, type ExtendedSleeveNoteInspection,
+  type SleeveNoteSelectionCandidate } from './link-selection.js';
+import * as settings from '../settings.js';
+
+let sequence = 0;
+function createComputeWorker() {
+  return {child: null as ChildProcess | null, idleTimer: null as ReturnType<typeof setTimeout> | null,
+    pending: new Map<number, {resolve: (value: unknown) => void; reject: (error: Error) => void;
+      timer: ReturnType<typeof setTimeout>}>()};
+}
+const interactiveWorker = createComputeWorker();
+const dashboardWorker = createComputeWorker();
+const readoutWorker = createComputeWorker();
+const reconciliationWorker = createComputeWorker();
+type ComputeWorker = ReturnType<typeof createComputeWorker>;
+let selectionChild: ChildProcess | null = null;
+let selectionSequence = 0;
+let selectionIdleTimer: ReturnType<typeof setTimeout> | null = null;
+type SleeveSelectionResult = ExtendedSleeveNoteInspection | SleeveNoteSelectionCandidate[];
+const selectionPending = new Map<number, { resolve: (value: SleeveSelectionResult) => void;
+  reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+const cache = new Map<string, { revision: number; json: string }>();
+const dashboardCache = new Map<string, { until: number; json: string }>();
+const dashboardFlights = new Map<string, Promise<string>>();
+let dashboardEpoch = 0;
+const inFlight = new Map<string, Promise<string>>();
+
+function clearIdleTimer(worker: ComputeWorker) { if (worker.idleTimer) clearTimeout(worker.idleTimer); worker.idleTimer = null; }
+function releaseWhenIdle(worker: ComputeWorker) {
+  clearIdleTimer(worker);
+  if (!worker.pending.size) {
+    worker.child?.channel?.unref();
+    worker.idleTimer = setTimeout(() => stopComputeWorker(worker), 60_000).unref();
+  }
+}
+function stopComputeWorker(worker: ComputeWorker): void {
+  clearIdleTimer(worker);
+  const previous = worker.child;
+  worker.child = null;
+  previous?.kill();
+  for (const call of worker.pending.values()) { clearTimeout(call.timer); call.reject(new Error('Connection worker stopped')); }
+  worker.pending.clear();
+}
+export function stopConnectionCompute(): void {
+  stopComputeWorker(interactiveWorker);
+  stopComputeWorker(dashboardWorker);
+  stopComputeWorker(readoutWorker);
+  stopComputeWorker(reconciliationWorker);
+  stopSleeveSelectionCompute();
+}
+
+/** Restored revisions may equal old values while their actual facts differ. */
+export function clearConnectionComputeCache():void {
+  stopConnectionCompute();cache.clear();inFlight.clear();
+  dashboardEpoch++;dashboardCache.clear();dashboardFlights.clear();
+}
+
+type SleeveNoteSelectionInput = {
+  kind: 'link' | 'segment';
+  current: { id?: unknown; artist?: unknown } | null | undefined;
+  nowMs: number;
+  enabled: boolean;
+  geniusEnabled: boolean;
+  manual: boolean;
+};
+
+function clearSelectionIdleTimer(): void {
+  if (selectionIdleTimer) clearTimeout(selectionIdleTimer);
+  selectionIdleTimer = null;
+}
+
+function stopSleeveSelectionCompute(): void {
+  clearSelectionIdleTimer();
+  const previous = selectionChild;
+  selectionChild = null;
+  previous?.kill();
+  for (const call of selectionPending.values()) {
+    clearTimeout(call.timer);
+    call.reject(new Error('Sleeve Notes selection worker stopped'));
+  }
+  selectionPending.clear();
+}
+
+function selectInChild(path: string, selection: SleeveNoteSelectionInput): Promise<SleeveSelectionResult> {
+  clearSelectionIdleTimer();
+  if (!selectionChild) {
+    const proc = fork(fileURLToPath(new URL('./sleeve-selection-worker.ts', import.meta.url)), [], {
+      execArgv: ['--import', import.meta.resolve('tsx')],
+      serialization: 'advanced', stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+    });
+    selectionChild = proc;
+    proc.stderr?.on('data', (chunk: Buffer) => console.warn('[sleeve-notes] Selection worker:', chunk.toString().trim()));
+    (proc.stderr as Socket | null)?.unref();
+    const failed = (error: Error) => {
+      if (selectionChild === proc) {
+        stopSleeveSelectionCompute();
+        console.warn('[sleeve-notes]', error.message);
+      }
+    };
+    proc.on('error', failed);
+    proc.on('exit', (code) => failed(new Error(`Selection worker exited (${code})`)));
+    proc.on('message', (message: { id: number; result?: SleeveSelectionResult; error?: string }) => {
+      const call = selectionPending.get(message.id);
+      if (!call) return;
+      clearTimeout(call.timer);
+      selectionPending.delete(message.id);
+      if (message.error) call.reject(new Error(message.error));
+      else call.resolve(message.result!);
+      if (!selectionPending.size) {
+        proc.channel?.unref();
+        selectionIdleTimer = setTimeout(stopSleeveSelectionCompute, 60_000).unref();
+      }
+    });
+    proc.unref();
+    proc.channel?.unref();
+  }
+  const proc = selectionChild;
+  proc.channel?.ref();
+  return new Promise((resolve, reject) => {
+    const id = ++selectionSequence;
+    const timer = setTimeout(() => {
+      console.warn(`[sleeve-notes] ${selection.kind === 'link' ? 'Link' : 'segment'} candidate selection exceeded 1500ms; skipping Sleeve Notes for this opportunity`);
+      stopSleeveSelectionCompute();
+      reject(new Error('Sleeve Notes selection timed out'));
+    }, 1_500).unref();
+    selectionPending.set(id, { resolve, reject, timer });
+    proc.send({ id, path, selection }, (error) => {
+      if (error) {
+        clearTimeout(timer);
+        selectionPending.delete(id);
+        reject(error);
+        if (!selectionPending.size) {
+          proc.channel?.unref();
+          selectionIdleTimer = setTimeout(stopSleeveSelectionCompute, 60_000).unref();
+        }
+      }
+    });
+  });
+}
+
+function compute<T>(path: string, kind: 'overview' | 'matches' | 'discoveries' | 'library-stories' | 'dashboard', edges?: readonly ConnectionEdgeType[], input?: Parameters<typeof searchResearchStoriesInDatabase>[1], dashboard?: DashboardRead): Promise<T> {
+  const worker = kind === 'matches' ? reconciliationWorker
+    : kind === 'dashboard' ? dashboard?.kind === 'readout' ? readoutWorker : dashboardWorker : interactiveWorker;
+  clearIdleTimer(worker);
+  if (!worker.child) {
+    const proc = fork(fileURLToPath(new URL('./connection-compute-worker.ts', import.meta.url)), [], {
+      execArgv: ['--import', import.meta.resolve('tsx')],
+      serialization: 'advanced', stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+    });
+    worker.child = proc;
+    proc.stderr?.on('data', (chunk: Buffer) => console.warn('[sleeve-notes] Connection worker:', chunk.toString().trim()));
+    (proc.stderr as Socket | null)?.unref();
+    const failed = (error: Error) => { if (worker.child === proc) { stopComputeWorker(worker); console.warn('[sleeve-notes]', error.message); } };
+    proc.on('error', failed);
+    proc.on('exit', (code) => failed(new Error(`Connection worker exited (${code})`)));
+    proc.on('message', (message: { id: number; result?: unknown; error?: string }) => {
+      const call = worker.pending.get(message.id);
+      if (!call) return;
+      clearTimeout(call.timer); worker.pending.delete(message.id);
+      if (message.error) call.reject(new Error(message.error)); else call.resolve(message.result);
+      releaseWhenIdle(worker);
+    });
+    proc.unref(); proc.channel?.unref();
+  }
+  const proc = worker.child;
+  proc.channel?.ref();
+  return new Promise<T>((resolve, reject) => {
+    const id = ++sequence;
+    const timer = setTimeout(() => {
+      stopComputeWorker(worker);
+      reject(new Error('Connection calculation timed out'));
+    }, 60_000).unref();
+    worker.pending.set(id, { resolve: (result) => resolve(result as T), reject, timer });
+    proc.send({ id, path, kind, edges, input, dashboard }, (error) => {
+      if (error) {
+        clearTimeout(timer); worker.pending.delete(id); reject(error); releaseWhenIdle(worker);
+      }
+    });
+  });
+}
+
+export async function selectExtendedSleeveNoteInBackground(
+  current: SleeveNoteSelectionInput['current'], nowMs = Date.now(), db?: Database.Database,
+): Promise<ExtendedSleeveNoteInspection> {
+  const enabled = settings.get().djBehaviour.extendedSleeveNotes === true;
+  if (!enabled) return { status: 'disabled', note: null, candidateCount: 0 };
+  const database = db ?? open();
+  const selection: SleeveNoteSelectionInput = {
+    kind: 'link',
+    current: current ? { id: current.id, artist: current.artist } : current,
+    nowMs,
+    enabled,
+    geniusEnabled: settings.get().sleeveNotes.providers.genius.enabled === true,
+    manual: false,
+  };
+  const result = database.memory
+    ? inspectExtendedSleeveNoteInDatabase(database, selection.current, nowMs, false, selection.enabled, selection.geniusEnabled)
+    : await selectInChild(database.name, selection).then(value => Array.isArray(value)
+      ? { status: 'unavailable' as const, note: null, candidateCount: 0 } : value)
+      .catch(() => ({ status: 'unavailable' as const, note: null, candidateCount: 0 }));
+  if (settings.get().djBehaviour.extendedSleeveNotes !== true) {
+    return { status: 'disabled', note: null, candidateCount: 0 };
+  }
+  if (settings.get().sleeveNotes.providers.genius.enabled !== selection.geniusEnabled) {
+    return { status: 'unavailable', note: null, candidateCount: 0 };
+  }
+  return result;
+}
+
+export async function eligibleSleeveNotesForSegmentInBackground(
+  current: SleeveNoteSelectionInput['current'], nowMs = Date.now(), manual = false, db?: Database.Database,
+): Promise<SleeveNoteSelectionCandidate[]> {
+  if (settings.get().djBehaviour.extendedSleeveNotes !== true) return [];
+  const database = db ?? open();
+  const selection: SleeveNoteSelectionInput = {
+    kind: 'segment',
+    current: current ? { id: current.id, artist: current.artist } : current,
+    nowMs,
+    enabled: true,
+    geniusEnabled: settings.get().sleeveNotes.providers.genius.enabled === true,
+    manual,
+  };
+  const result = database.memory
+    ? eligibleSleeveNotesForSegmentInDatabase(database, String(selection.current?.id ?? ''), selection.current?.artist,
+      nowMs, manual, selection.geniusEnabled)
+    : await selectInChild(database.name, selection).then(value => Array.isArray(value) ? value : [])
+      .catch(() => [] as SleeveNoteSelectionCandidate[]);
+  if (settings.get().djBehaviour.extendedSleeveNotes !== true
+    || settings.get().sleeveNotes.providers.genius.enabled !== selection.geniusEnabled) return [];
+  return result;
+}
+
+export async function reconcileConnectionsInBackground(db: Database.Database): Promise<number | null> {
+  const patch = db.memory ? buildConnectionLibraryPatch(db)
+    : await compute<ConnectionLibraryPatch>(db.name, 'matches');
+  return publishConnectionLibraryPatch(db, patch) ? patch.factsRevision : null;
+}
+
+/** O(1) invalidation, shared in-flight reads, bounded cache, pre-serialized JSON. */
+export function cachedConnectionsOverview(edges: readonly ConnectionEdgeType[], kind: 'overview'|'discoveries'='overview', refresh=false, db=open()): Promise<string> {
+  const revision = connectionRevision(db, 'overview');
+  const key = JSON.stringify([db.name, kind, [...edges].sort()]);
+  const saved = cache.get(key);
+  if (!refresh && saved?.revision === revision) return Promise.resolve(saved.json);
+  const flightKey = `${key}:${revision}`;
+  const running = inFlight.get(flightKey);
+  if (running) return running;
+  const task = (async () => {
+    const result = db.memory ? { revision, json: JSON.stringify(kind==='discoveries'?externalDiscoveriesInDatabase(db):{ active: true, ...researchConnectionsOverviewInDatabase(db, edges) }) }
+      : await compute<{ revision: number; json: string }>(db.name, kind, edges);
+    // A computed snapshot stays internally consistent even if fresh facts
+    // arrive during the calculation; the next read will see the new revision.
+    const current = cache.get(key);
+    if (!current || current.revision <= result.revision) {
+      cache.delete(key); cache.set(key, result);
+      while (cache.size > 4) cache.delete(cache.keys().next().value!);
+    }
+    return result.json;
+  })().finally(() => { inFlight.delete(flightKey); });
+  inFlight.set(flightKey, task);
+  return task;
+}
+
+
+/** Keep relationship grouping and page selection off the broadcast event loop. */
+export async function libraryConnectionStoriesInBackground(db: Database.Database, input: Parameters<typeof searchResearchStoriesInDatabase>[1]) {
+  return db.memory ? searchResearchStoriesInDatabase(db, input)
+    : compute<ReturnType<typeof searchResearchStoriesInDatabase>>(db.name, 'library-stories', undefined, input);
+}
+
+/** Bounded, short-lived display cache. Never used for broadcast selection.
+ * Ordinary readouts invalidate on own writes; external writes expire in 3s.
+ * Library coverage expires in five minutes or on explicit verification.
+ * Serialize in the worker so large readouts do not get cloned/stringified here.
+ */
+export function cachedDashboardRead(input: DashboardRead, db = open(), refresh = false): Promise<string> {
+  if (input.kind === 'live-summary') {
+    // Queue items carry unrelated persona/transition data. Send only display inputs.
+    const track = (t: LiveNotesItem['track'] | null) => t ? {
+      id: t.id, subsonic_id: t.subsonic_id, title: t.title, artist: t.artist,
+      album: t.album, artistId: t.artistId, albumId: t.albumId,
+    } : null;
+    const item = (i: LiveNotesItem | null): LiveNotesItem | null => i ? {
+      track: track(i.track)!, sleeveClaimUseId: i.sleeveClaimUseId, introScript: i.introScript,
+    } : null;
+    input = {kind: 'live-summary', args: [track(input.args[0]), item(input.args[1]), item(input.args[2])]};
+  }
+  if (db.memory) return Promise.resolve(JSON.stringify(dashboardReadInDatabase(db, input)));
+  const changes = (db.prepare('SELECT total_changes() AS n').get() as {n: number}).n;
+  const key = JSON.stringify([db.name, input.kind === 'research-gaps' ? 0 : changes, input]);
+  const saved = dashboardCache.get(key);
+  if (!refresh && saved && saved.until > Date.now()) return Promise.resolve(saved.json);
+  const running = dashboardFlights.get(key);
+  if (running) return running;
+  const epoch = dashboardEpoch;
+  const task = compute<string>(db.name, 'dashboard', undefined, undefined, input).then(json => {
+    if (epoch === dashboardEpoch) {
+      dashboardCache.delete(key);
+      dashboardCache.set(key, {until: Date.now() + (input.kind === 'research-gaps' ? 5 * 60_000 : 3_000), json});
+      while (dashboardCache.size > 4) dashboardCache.delete(dashboardCache.keys().next().value!);
+    }
+    return json;
+  }).finally(() => { if (dashboardFlights.get(key) === task) dashboardFlights.delete(key); });
+  dashboardFlights.set(key, task);
+  return task;
+}

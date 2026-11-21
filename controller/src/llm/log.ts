@@ -47,3 +47,4 @@ export { generationHealthSnapshot } from './internal/core/generation.js';
 // (any failover, sticky or one-off), for /debug's "routed to backup" line.
 // Read-only; null = normal routing.
 export { failoverRoutingSnapshot } from './internal/core/failover.js';
+export { ResearchDeferredError } from './internal/core/deferred.js';
