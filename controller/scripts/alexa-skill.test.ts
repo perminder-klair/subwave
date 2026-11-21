@@ -290,7 +290,13 @@ test('Alexa asks for confirmation only when a named request has several catalogu
     previewRequest: async () => candidates,
     submitRequest: async ({ text, verifiedCandidate }) => {
       submitted.push({ text, candidate: verifiedCandidate });
-      return { accepted: true, statusCode: 202, requestId: 'request-confirmed', status: 'pending' };
+      return {
+        accepted: true,
+        statusCode: 202,
+        requestId: 'request-confirmed',
+        status: 'pending',
+        completion: Promise.resolve({ status: 'resolved', success: true, phase: 'queued' }),
+      };
     },
   });
   const questionResult = await skill.invoke(intent('RequestSongIntent', {
@@ -471,7 +477,13 @@ test('Alexa listener features submit a verified candidate through the shared req
     }),
     submitRequest: async input => {
       submitted.push({ text: input.text, candidate: input.verifiedCandidate });
-      return { accepted: true as const, statusCode: 202 as const, requestId: 'feature-request', status: 'pending' as const };
+      return {
+        accepted: true as const,
+        statusCode: 202 as const,
+        requestId: 'feature-request',
+        status: 'pending' as const,
+        completion: Promise.resolve({ status: 'resolved' as const, success: true, phase: 'queued' as const }),
+      };
     },
   };
 

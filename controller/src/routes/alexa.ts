@@ -76,6 +76,7 @@ export type AlexaSubmitResult = {
   statusCode: 202;
   requestId: string;
   status: 'pending';
+  completion?: Promise<ListenerRequestStatus>;
 } | {
   accepted: false;
   statusCode: number;
@@ -211,7 +212,13 @@ function defaultRuntime(): AlexaRuntime {
         verifiedCandidate,
         dedication,
       }).then(result => result.accepted
-        ? { accepted: true, statusCode: 202 as const, requestId: result.requestId, status: 'pending' as const }
+        ? {
+          accepted: true,
+          statusCode: 202 as const,
+          requestId: result.requestId,
+          status: 'pending' as const,
+          completion: result.completion,
+        }
         : result);
     },
     latestRequestStatus: async identity => getLatestAlexaRequestStatus(identity),
@@ -688,6 +695,20 @@ function dynamicSpeech(value: string | null | undefined, fallback: string): stri
   return value ? escapeXmlCharacters(value) : fallback;
 }
 
+async function completedQueueSubmission(result: AlexaSubmitResult): Promise<ListenerRequestStatus | null> {
+  if (!result.accepted || !result.completion) return null;
+  try {
+    return await result.completion;
+  } catch {
+    return null;
+  }
+}
+
+function reachedQueue(status: ListenerRequestStatus | null): boolean {
+  return status?.success === true
+    && (status.phase === 'queued' || status.phase === 'playing' || status.phase === 'finished');
+}
+
 type AlexaReminderPending = {
   requestId: string;
   identity: string;
@@ -939,6 +960,10 @@ async function listenerFeatureRequestResponse(
   }
   if (!submitted.accepted) {
     return requestSpeech(input, dynamicSpeech(submitted.message || submitted.error, copy.featureFailed));
+  }
+  const finalStatus = await completedQueueSubmission(submitted);
+  if (!reachedQueue(finalStatus)) {
+    return requestSpeech(input, dynamicSpeech(finalStatus?.message, copy.featureFailed));
   }
   return requestSpeech(
     input,
@@ -1357,7 +1382,14 @@ async function confirmationResponse(input: any, runtime: AlexaRuntime, confirmed
   const result = runtime.submitRequest
     ? await runtime.submitRequest!({ text, userId, personId, verifiedCandidate })
     : await defaultRuntime().submitRequest!({ text, userId, personId, verifiedCandidate });
-  return requestSpeech(input, result.accepted ? copy.requestAccepted : dynamicSpeech(result.message || result.error, copy.requestFailed));
+  if (!result.accepted) {
+    return requestSpeech(input, dynamicSpeech(result.message || result.error, copy.requestFailed));
+  }
+  const finalStatus = await completedQueueSubmission(result);
+  if (!reachedQueue(finalStatus)) {
+    return requestSpeech(input, dynamicSpeech(finalStatus?.message, copy.requestFailed));
+  }
+  return requestSpeech(input, copy.requestAccepted);
 }
 
 function statusSpeech(status: ListenerRequestStatus | null, locale?: string | null): string {

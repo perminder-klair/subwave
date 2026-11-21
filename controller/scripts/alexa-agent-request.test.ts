@@ -16,14 +16,74 @@ const ledger = await import('../src/broadcast/request-ledger.js');
 const requestLog = await import('../src/broadcast/request-log.js');
 const { windowMessages } = await import('../src/broadcast/session.js');
 const { submitListenerRequest, cancelLatestAlexaRequest, getLatestAlexaRequestStatus } = await import('../src/routes/request.js');
+const { createAlexaSkill } = await import('../src/routes/alexa.js');
+const { AlexaListenerFeatureService } = await import('../src/alexa/listener-features.js');
 
 const confirmed = { id: 'confirmed', title: 'Crystal Sea', artist: 'River Band', duration: 180 };
 const other = { id: 'other', title: 'Granite Sky', artist: 'Mountain Band', duration: 165 };
+let runtimeSubmissionSequence = 0;
 const dedication = { target: 'the night crew', locale: 'en-IN' as const };
 const answer = (pick: typeof confirmed) => ({
   object: { kind: 'track', id: pick.id, ack: 'Found it.', intro: 'Here comes the next track.' },
   steps: 1, toolCalls: [], extras: { seen: new Map([confirmed, other].map(track => [track.id, track])) },
 });
+
+function alexaIntent(name: string, attributes: Record<string, unknown> = {}, slots: Record<string, unknown> = {}) {
+  const applicationId = 'amzn1.ask.skill.11111111-1111-4111-8111-111111111111';
+  return {
+    version: '1.0',
+    session: {
+      new: true,
+      sessionId: `SessionId.${name}`,
+      application: { applicationId },
+      user: { userId: 'amzn1.ask.account.runtime-test' },
+      attributes,
+    },
+    context: {
+      System: {
+        application: { applicationId },
+        user: { userId: 'amzn1.ask.account.runtime-test' },
+        device: { deviceId: 'amzn1.ask.device.runtime-test', supportedInterfaces: { AudioPlayer: {} } },
+        apiEndpoint: 'https://api.amazonalexa.com',
+      },
+    },
+    request: {
+      type: 'IntentRequest',
+      requestId: `EdwRequestId.${name}`,
+      timestamp: '2026-11-21T12:00:00Z',
+      locale: 'en-IN',
+      intent: { name, confirmationStatus: 'NONE', slots },
+    },
+  } as any;
+}
+
+function realAlexaRuntime(extra: Record<string, unknown> = {}) {
+  const identity = `alexa-runtime-integration-${++runtimeSubmissionSequence}`;
+  return {
+    getSettings: () => ({
+      enabled: true,
+      skillId: 'amzn1.ask.skill.11111111-1111-4111-8111-111111111111',
+      station: 'TEST STATION',
+      streamMount: '/stream.mp3',
+      streamUrl: 'https://radio.example/stream.mp3',
+    }),
+    isStreamOnline: () => true,
+    submitRequest: async (input: any) => {
+      const result = await submitListenerRequest({
+        text: input.text,
+        name: '',
+        ip: `alexa:${identity}`,
+        source: 'alexa',
+        alexaIdentity: identity,
+        verifiedCandidate: input.verifiedCandidate,
+      });
+      return result.accepted
+        ? { accepted: true as const, statusCode: 202 as const, requestId: result.requestId, status: 'pending' as const, completion: result.completion }
+        : result;
+    },
+    ...extra,
+  };
+}
 
 beforeEach(async () => {
   await settings.load();
@@ -65,6 +125,82 @@ test('a conflicting model pick cannot replace an observed, confirmed Alexa candi
   const result = await receipt.completion;
   assert.equal(model.mock.callCount(), 1);
   assert.equal(result.track?.id, confirmed.id);
+  assert.deepEqual(queue.upcoming.map(item => item.track.id), [confirmed.id]);
+});
+
+test('MoreLikeThis waits for the real request resolver before saying the track is on the way', async t => {
+  const started = deferred();
+  const release = deferred();
+  t.mock.method(requestAgent, 'run', async () => {
+    started.resolve();
+    await release.promise;
+    return answer(confirmed);
+  });
+  const skill = createAlexaSkill(realAlexaRuntime({
+    listenerFeatures: new AlexaListenerFeatureService({
+      nowPlaying: () => ({ id: 'current', title: 'Current Song', artist: 'Current Artist', album: null }),
+      recentTracks: () => [],
+      similarCandidates: () => [{ id: confirmed.id, title: confirmed.title, artist: confirmed.artist, similarity: 0.95 }],
+    }),
+  }) as any);
+  let settled = false;
+  const responsePromise = skill.invoke(alexaIntent('MoreLikeThisIntent')).then(response => {
+    settled = true;
+    return response;
+  });
+  await started.promise;
+  await new Promise<void>(resolve => setImmediate(resolve));
+  try {
+    assert.equal(settled, false);
+    assert.equal(queue.upcoming.length, 0);
+  } finally {
+    release.resolve();
+  }
+  const response = await responsePromise;
+  assert.equal((response.response as any).outputSpeech.ssml, '<speak>More like Crystal Sea by River Band is on the way.</speak>');
+  assert.deepEqual(queue.upcoming.map(item => item.track.id), [confirmed.id]);
+});
+
+test('a confirmed candidate that fails after admission gets failure speech, not success speech', async t => {
+  const run = answer(other);
+  run.extras.seen.delete(confirmed.id);
+  t.mock.method(requestAgent, 'run', async () => run);
+  t.mock.method(globalThis, 'fetch', async (input: Parameters<typeof fetch>[0]) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.pathname.endsWith('/search3')) {
+      return Response.json({ 'subsonic-response': { status: 'ok', searchResult3: { song: [] } } });
+    }
+    return new Response(null, { status: 400 });
+  });
+  const skill = createAlexaSkill(realAlexaRuntime({
+    previewRequest: async () => [confirmed, { ...confirmed, id: 'confirmed-alt', album: 'Second album' }],
+  }) as any);
+  const question = await skill.invoke(alexaIntent('RequestSongIntent', {}, {
+    requestText: { name: 'requestText', value: 'Crystal Sea by River Band', confirmationStatus: 'NONE' },
+  }));
+  assert.match((question.response as any).outputSpeech.ssml, /I found Crystal Sea by River Band/i);
+  assert.equal(question.sessionAttributes?.alexaRequestCandidates?.[0]?.id, confirmed.id);
+  const confirmation = await skill.invoke({
+    ...alexaIntent('AMAZON.YesIntent', question.sessionAttributes || {}),
+  } as any);
+  const speech = (confirmation.response as any).outputSpeech.ssml;
+  assert.match(speech, /nothing in the crates matched/i);
+  assert.doesNotMatch(speech, /request was sent|on the way|coming up/i);
+  assert.deepEqual(queue.upcoming, []);
+});
+
+test('a confirmed candidate reports success only after the actual request is queued', async t => {
+  t.mock.method(requestAgent, 'run', async () => answer(confirmed));
+  const skill = createAlexaSkill(realAlexaRuntime({
+    previewRequest: async () => [confirmed, { ...confirmed, id: 'confirmed-alt', album: 'Second album' }],
+  }) as any);
+  const question = await skill.invoke(alexaIntent('RequestSongIntent', {}, {
+    requestText: { name: 'requestText', value: 'Crystal Sea by River Band', confirmationStatus: 'NONE' },
+  }));
+  assert.match((question.response as any).outputSpeech.ssml, /I found Crystal Sea by River Band/i);
+  const yesEnvelope = alexaIntent('AMAZON.YesIntent', question.sessionAttributes || {});
+  const confirmation = await skill.invoke(yesEnvelope);
+  assert.match((confirmation.response as any).outputSpeech.ssml, /Your request was sent to the booth/i);
   assert.deepEqual(queue.upcoming.map(item => item.track.id), [confirmed.id]);
 });
 
