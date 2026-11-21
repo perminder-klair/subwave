@@ -483,6 +483,56 @@ def t_source_fingerprint_survives_owned_cleanup():
 
         with_state(run, "beat-this", tracker=object())
 
+def t_flat_route_hashes_only_a_learned_grid():
+    """analyze() takes the source fingerprint only once a learned grid exists
+    (analyze_facets' rule): a librosa grid, a failed inference or a CLAP-only
+    backfill reads none of the file, and an owned download is removed on every
+    way out (no grid, embedding-only return, a raised error)."""
+    y = np.ones(5000)
+    librosa = types.SimpleNamespace(get_duration=lambda **_kw: 10, to_mono=lambda data: data)
+    plain_tail = {"startMs": 4000, "ending": "cold"}
+
+    def call(path, fingerprint, **kw):
+        boom = kw.pop("boom", False)
+
+        def head(*_a):
+            if boom:
+                raise RuntimeError("head failed")
+            return {"bpm": 120.0}
+
+        with patch.multiple(aw,
+                fetch_audio=lambda _url: (path, True),
+                ensure_fast_decode=lambda src, **_kw: (src, None),
+                get_embedder=lambda **_kw: None, get_vocal_detector=lambda **_kw: None,
+                load_audio=lambda *_a, **_kw: (y, 1000),
+                analyze_outro=lambda *_a: dict(plain_tail),
+                facet_head=head, facet_loudness=lambda *_a: {},
+                source_fingerprint=fingerprint):
+            return aw.analyze(librosa, url="https://example.invalid/audio", embed=False, vocal=False, **kw)
+
+    def run(_logs):
+        for kw in ({}, {"embedding_only": True}, {"boom": True}):
+            with tempfile.TemporaryDirectory() as directory:
+                path = os.path.join(directory, "source.audio")
+                with open(path, "wb") as audio:
+                    audio.write(b"encoded")
+                calls = []
+                try:
+                    result = call(path, lambda *a: calls.append(a), **kw)
+                except RuntimeError:
+                    assert kw.get("boom"), kw
+                    result = None
+                assert calls == [], (kw, calls)
+                assert not os.path.exists(path), ("owned input must be cleaned up", kw)
+                if result is not None and not kw:
+                    assert "grid_provenance" not in result, result
+                    assert "gridProvenance" not in result["outro"], result
+
+    # The tracker loaded but every window fell back: still nothing to hash.
+    with_state(run, "beat-this", tracker=object())
+    with_state(run, None)
+
+
 test("flag values: unset/empty/off are off, beat-this is on, silently", t_flag_values)
 test("an unknown ANALYZE_DOWNBEATS value is off and says so", t_unknown_value_is_off_and_says_so)
 test("flag off: today's grid exactly, no tracker constructed", t_off_is_todays_grid_and_loads_nothing)
@@ -499,6 +549,7 @@ test("hybrid evidence never vetoes; legacy/fallback grids have no learned label"
 test("invalid timestamp output is rejected; absent evidence stays unknown", t_invalid_output_and_missing_evidence)
 test("facet windows share one source fingerprint and preserve unknown/capped identity", t_facet_provenance_binds_source_once)
 test("source fingerprint is captured before an owned download is deleted", t_source_fingerprint_survives_owned_cleanup)
+test("the flat route hashes the source only for a learned grid, and still cleans up", t_flat_route_hashes_only_a_learned_grid)
 test("real model: bars land on a synthetic band's downbeats", t_real_model_finds_band_downbeats)
 
 if failures:
