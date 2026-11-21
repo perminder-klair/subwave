@@ -56,7 +56,7 @@ interface StoredLedger {
   salt: string;
   records: RequestLedgerRecord[];
   latestAlexa: Record<string, string>;
-  replacementRecovery: { previousId: string; replacementId: string; identity: string } | null;
+  replacementRecoveries: Record<string, { previousId: string; replacementId: string; identity: string }>;
 }
 
 const LEDGER_PATH = `${STATE_DIR}/request-ledger.json`;
@@ -69,16 +69,34 @@ function blankStore(): StoredLedger {
     salt: randomBytes(24).toString('hex'),
     records: [],
     latestAlexa: {},
-    replacementRecovery: null,
+    replacementRecoveries: {},
   };
 }
 
 function loadStore(): StoredLedger {
   if (!existsSync(LEDGER_PATH)) return blankStore();
   try {
-    const parsed = JSON.parse(readFileSync(LEDGER_PATH, 'utf8')) as Partial<StoredLedger>;
+    const parsed = JSON.parse(readFileSync(LEDGER_PATH, 'utf8')) as Partial<StoredLedger> & {
+      replacementRecovery?: { previousId: string; replacementId: string; identity: string } | null;
+    };
     const storedVersion = (parsed as { version?: number }).version;
     if ((storedVersion !== 1 && storedVersion !== 2) || typeof parsed.salt !== 'string') return blankStore();
+    const replacementRecoveries = Object.fromEntries(
+      Object.entries(parsed.replacementRecoveries || {}).filter(([id, recovery]) =>
+        recovery
+        && typeof recovery.previousId === 'string'
+        && typeof recovery.replacementId === 'string'
+        && recovery.replacementId === id
+        && typeof recovery.identity === 'string',
+      ),
+    ) as StoredLedger['replacementRecoveries'];
+    const previousFormat = parsed.replacementRecovery;
+    if (previousFormat
+      && typeof previousFormat.previousId === 'string'
+      && typeof previousFormat.replacementId === 'string'
+      && typeof previousFormat.identity === 'string') {
+      replacementRecoveries[previousFormat.replacementId] = previousFormat;
+    }
     return {
       version: 2,
       salt: parsed.salt,
@@ -86,12 +104,7 @@ function loadStore(): StoredLedger {
       latestAlexa: parsed.latestAlexa && typeof parsed.latestAlexa === 'object'
         ? { ...parsed.latestAlexa } as Record<string, string>
         : {},
-      replacementRecovery: parsed.replacementRecovery
-        && typeof parsed.replacementRecovery.previousId === 'string'
-        && typeof parsed.replacementRecovery.replacementId === 'string'
-        && typeof parsed.replacementRecovery.identity === 'string'
-        ? { ...parsed.replacementRecovery }
-        : null,
+      replacementRecoveries,
     };
   } catch {
     return blankStore();
@@ -195,25 +208,25 @@ export async function beginReplacementRecovery(previousId: string, replacementId
   if (!previous || !next || next.status !== 'pending' || next.alexaIdentity) {
     throw new Error('Missing receipt for replacement recovery');
   }
-  if (store.replacementRecovery) throw new Error('Another replacement recovery is already in progress');
+  if (store.replacementRecoveries[replacementId]) throw new Error('Replacement recovery is already in progress');
   const transaction = { previousId, replacementId, identity };
-  store.replacementRecovery = transaction;
+  store.replacementRecoveries[replacementId] = transaction;
   try {
     await persist();
   } catch (error) {
-    store.replacementRecovery = null;
+    delete store.replacementRecoveries[replacementId];
     throw error;
   }
 }
 
 export async function abortReplacementRecovery(previousId: string, replacementId: string) {
-  const current = store.replacementRecovery;
+  const current = store.replacementRecoveries[replacementId];
   if (!current || current.previousId !== previousId || current.replacementId !== replacementId) return;
-  store.replacementRecovery = null;
+  delete store.replacementRecoveries[replacementId];
   try {
     await persist();
   } catch (error) {
-    store.replacementRecovery = current;
+    store.replacementRecoveries[replacementId] = current;
     throw error;
   }
 }
@@ -233,13 +246,13 @@ export async function recordCancellation(id: string, replacement?: { id: string;
   const previousRecord = { ...previous };
   const nextRecord = { ...next };
   const previousLatestId = store.latestAlexa[replacement.identity];
-  const recovery = store.replacementRecovery;
+  const recovery = store.replacementRecoveries[replacement.id];
   if (recovery && (recovery.previousId !== id || recovery.replacementId !== replacement.id || recovery.identity !== replacement.identity)) {
     throw new Error('Replacement recovery does not match the receipt swap');
   }
   next.alexaIdentity = replacement.identity;
   store.latestAlexa[replacement.identity] = next.id;
-  store.replacementRecovery = null;
+  delete store.replacementRecoveries[replacement.id];
   try {
     return await update(id, { status: 'cancelled', outcome: 'cancelled', message: 'Cancelled by listener.', reminder: null });
   } catch (error) {
@@ -247,7 +260,7 @@ export async function recordCancellation(id: string, replacement?: { id: string;
     Object.assign(next, nextRecord);
     if (previousLatestId) store.latestAlexa[replacement.identity] = previousLatestId;
     else delete store.latestAlexa[replacement.identity];
-    store.replacementRecovery = recovery;
+    if (recovery) store.replacementRecoveries[replacement.id] = recovery;
     throw error;
   }
 }
@@ -323,10 +336,9 @@ export async function interruptUnresolved(knownRequestIds: Set<string>) {
   const recordsBefore = store.records.slice();
   const snapshots = new Map(recordsBefore.map(row => [row, { ...row }]));
   const latestBefore = { ...store.latestAlexa };
-  const recoveryBefore = store.replacementRecovery;
+  const recoveriesBefore = { ...store.replacementRecoveries };
   let changed = false;
-  const recovery = store.replacementRecovery;
-  if (recovery) {
+  for (const recovery of Object.values(store.replacementRecoveries)) {
     const previous = get(recovery.previousId);
     const next = get(recovery.replacementId);
     if (knownRequestIds.has(recovery.previousId)) {
@@ -357,7 +369,7 @@ export async function interruptUnresolved(knownRequestIds: Set<string>) {
         next.updatedAt = Date.now();
       }
     }
-    store.replacementRecovery = null;
+    delete store.replacementRecoveries[recovery.replacementId];
     changed = true;
   }
   for (const row of store.records) {
@@ -375,7 +387,7 @@ export async function interruptUnresolved(knownRequestIds: Set<string>) {
       store.records = recordsBefore;
       for (const [row, snapshot] of snapshots) Object.assign(row, snapshot);
       store.latestAlexa = latestBefore;
-      store.replacementRecovery = recoveryBefore;
+      store.replacementRecoveries = recoveriesBefore;
       throw error;
     }
   }

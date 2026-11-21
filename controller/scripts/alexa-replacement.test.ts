@@ -172,7 +172,7 @@ test('ledger persistence failure after player removal fails closed and startup r
   assert.ok(staged, 'staged replacement remains represented until recovery can settle it');
   assert.ok(previous?.alexaIdentity);
   assert.equal(durableBeforeRecovery.latestAlexa[previous.alexaIdentity], oldId);
-  assert.deepEqual(durableBeforeRecovery.replacementRecovery, {
+  assert.deepEqual(durableBeforeRecovery.replacementRecoveries[staged.id], {
     previousId: oldId,
     replacementId: staged.id,
     identity: previous.alexaIdentity,
@@ -184,6 +184,54 @@ test('ledger persistence failure after player removal fails closed and startup r
   assert.equal(ledger.latestForAlexa(identity)?.id, oldId);
   assert.equal(getLatestAlexaRequestStatus(identity)?.phase, 'interrupted');
   assert.deepEqual(queue.upcoming, []);
+});
+
+test('distinct Alexa identities can recover replacements concurrently', async t => {
+  let trackNumber = 0;
+  t.mock.method(requestAgent, 'run', async () => modelPick('parallel-song-' + ++trackNumber));
+  const oldIds: string[] = [];
+  for (const identity of ['parallel-a', 'parallel-b']) {
+    const original = await submit(identity);
+    assert.ok(original.accepted);
+    assert.equal((await original.completion).phase, 'queued');
+    oldIds.push(original.requestId);
+  }
+
+  const started = deferred();
+  const release = deferred();
+  let removalsStarted = 0;
+  const remove = queue.removeUpcomingRequest.bind(queue);
+  t.mock.method(queue, 'removeUpcomingRequest', async (requestId: string) => {
+    removalsStarted++;
+    if (removalsStarted === 2) started.resolve();
+    await release.promise;
+    return remove(requestId);
+  });
+
+  const first = replaceLatestAlexaRequest('parallel-a', 'First replacement');
+  const second = replaceLatestAlexaRequest('parallel-b', 'Second replacement');
+  await started.promise;
+  try {
+    const durable = JSON.parse(await readFile(ledger.ledgerPath, 'utf8'));
+    const recoveries = Object.values(durable.replacementRecoveries) as Array<{ previousId: string; identity: string }>;
+    assert.equal(recoveries.length, 2);
+    assert.deepEqual(recoveries.map(item => item.previousId).sort(), [...oldIds].sort());
+    assert.notEqual(recoveries[0].identity, recoveries[1].identity);
+  } finally {
+    release.resolve();
+  }
+
+  const results = await Promise.all([first, second]);
+  assert.ok(results[0].accepted && results[1].accepted);
+  for (const result of results) {
+    if (result.accepted) assert.equal((await result.completion).phase, 'queued');
+  }
+  assert.deepEqual(oldIds.map(id => ledger.get(id)?.status), ['cancelled', 'cancelled']);
+  assert.equal(ledger.latestForAlexa('parallel-a')?.id, results[0].requestId);
+  assert.equal(ledger.latestForAlexa('parallel-b')?.id, results[1].requestId);
+  assert.deepEqual(queue.upcoming.map(item => item.requestId).sort(), results.map(result => result.accepted ? result.requestId : '').sort());
+  const durable = JSON.parse(await readFile(ledger.ledgerPath, 'utf8'));
+  assert.deepEqual(durable.replacementRecoveries, {});
 });
 
 test('a refused replacement keeps its pending predecessor resolving', async t => {
