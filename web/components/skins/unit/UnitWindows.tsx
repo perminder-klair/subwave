@@ -130,7 +130,9 @@ function fmtHour(h: number, locale: StationLocale): string {
 
 export function TimelineWindow({ onClose }: { onClose: () => void }) {
   const client = useStationClient();
-  const { activeShow, timezone, locale } = usePlayerFeed();
+  // Station zone, never the listener's clock choice: the grid's cells are
+  // station hours (lib/clockZone.ts).
+  const { activeShow, stationTimezone, locale } = usePlayerFeed();
   const [data, setData] = useState<SchedulePayload | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [sel, setSel] = useState<number | null>(null);
@@ -152,7 +154,7 @@ export function TimelineWindow({ onClose }: { onClose: () => void }) {
     };
   }, [client]);
 
-  const tz = data?.timezone ?? timezone;
+  const tz = data?.timezone ?? stationTimezone;
   const stationLocale = normalizeStationLocale(data?.locale ?? locale);
   const { dow: today, hour: nowHour } = zonedDayHour(now, tz ?? null);
 
