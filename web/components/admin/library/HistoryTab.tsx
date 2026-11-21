@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment } from 'react';
+import { Fragment, useState } from 'react';
 import { RefreshCw, ListPlus } from 'lucide-react';
 import { Card, Btn } from '../ui';
 import { cn } from '../../../lib/cn';
@@ -9,7 +9,7 @@ import { SkeletonRows } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
 import { PAGE_SIZE } from './types';
 import type { BlockType, LikeIndex, PlayEntry, Track } from './types';
-import { Thumb } from './bits';
+import { PreviewBar, PreviewButton, usePreviewControls } from './PreviewControls';
 import { BlockMenu, HeartButton, likeStateFor } from './row-actions';
 import { historySeamLine } from '../../../lib/transitionStats';
 
@@ -67,6 +67,10 @@ export function HistoryTab({
   onBlock: (t: Track, type: BlockType) => void;
 }) {
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const { snap, player, linkFor } = usePreviewControls();
+  // A track can list several times here: the bar goes under the play the
+  // operator pressed, not under every play of that track.
+  const [previewPlay, setPreviewPlay] = useState<PlayEntry['id'] | null>(null);
   return (
     <>
       <Card
@@ -107,7 +111,16 @@ export function HistoryTab({
                     <span className="mono-num w-11 shrink-0 text-[11px] text-muted" title={new Date(p.playedAt).toLocaleString('en-GB')}>
                       {time}
                     </span>
-                    <Thumb track={track} />
+                    <PreviewButton
+                      track={track}
+                      snap={snap}
+                      active={snap.id === track.id && previewPlay === p.id}
+                      onPress={() => {
+                        if (!(snap.id === track.id && previewPlay === p.id)) player?.stop();
+                        setPreviewPlay(p.id);
+                        void player?.toggle(track.id, linkFor(track.id));
+                      }}
+                    />
                     <div className="min-w-0 flex-1">
                       <div className="lib-title">{p.title || 'unknown'}</div>
                       <div className="lib-artist">{p.artist || ''}{p.album ? ` · ${p.album}` : ''}</div>
@@ -159,6 +172,9 @@ export function HistoryTab({
                       </span>
                     )}
                   </div>
+                  {snap.id === track.id && previewPlay === p.id && player && (
+                    <PreviewBar track={track} snap={snap} player={player} />
+                  )}
                 </Fragment>
               );
             })}
