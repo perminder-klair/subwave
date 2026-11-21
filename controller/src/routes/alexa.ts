@@ -70,6 +70,9 @@ import { logEvent } from '../observability/events.js';
 
 const router = express.Router();
 const ALEXA_SKILL_ID_RE = /^amzn1\.ask\.skill\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// Alexa expects the full skill response within about eight seconds. Keep room
+// for the adapter, response serialization, and network time after this wait.
+const ALEXA_QUEUE_ACK_WAIT_MS = 5_000;
 
 export type AlexaSubmitResult = {
   accepted: true;
@@ -695,12 +698,27 @@ function dynamicSpeech(value: string | null | undefined, fallback: string): stri
   return value ? escapeXmlCharacters(value) : fallback;
 }
 
-async function completedQueueSubmission(result: AlexaSubmitResult): Promise<ListenerRequestStatus | null> {
-  if (!result.accepted || !result.completion) return null;
+type QueueSubmissionWait =
+  | { kind: 'terminal'; status: ListenerRequestStatus }
+  | { kind: 'pending' }
+  | { kind: 'error' };
+
+async function completedQueueSubmission(result: AlexaSubmitResult): Promise<QueueSubmissionWait> {
+  if (!result.accepted) return { kind: 'error' };
+  if (!result.completion) return { kind: 'pending' };
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<QueueSubmissionWait>(resolve => {
+    timer = setTimeout(() => resolve({ kind: 'pending' }), ALEXA_QUEUE_ACK_WAIT_MS);
+  });
+  const completion: Promise<QueueSubmissionWait> = result.completion.then(
+    status => ({ kind: 'terminal', status } as const),
+    () => ({ kind: 'error' } as const),
+  );
   try {
-    return await result.completion;
-  } catch {
-    return null;
+    return await Promise.race([completion, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -961,9 +979,11 @@ async function listenerFeatureRequestResponse(
   if (!submitted.accepted) {
     return requestSpeech(input, dynamicSpeech(submitted.message || submitted.error, copy.featureFailed));
   }
-  const finalStatus = await completedQueueSubmission(submitted);
-  if (!reachedQueue(finalStatus)) {
-    return requestSpeech(input, dynamicSpeech(finalStatus?.message, copy.featureFailed));
+  const finalResult = await completedQueueSubmission(submitted);
+  if (finalResult.kind === 'pending') return requestSpeech(input, copy.submissionPending);
+  if (finalResult.kind === 'error') return requestSpeech(input, copy.featureFailed);
+  if (!reachedQueue(finalResult.status)) {
+    return requestSpeech(input, dynamicSpeech(finalResult.status.message, copy.featureFailed));
   }
   return requestSpeech(
     input,
@@ -1385,9 +1405,11 @@ async function confirmationResponse(input: any, runtime: AlexaRuntime, confirmed
   if (!result.accepted) {
     return requestSpeech(input, dynamicSpeech(result.message || result.error, copy.requestFailed));
   }
-  const finalStatus = await completedQueueSubmission(result);
-  if (!reachedQueue(finalStatus)) {
-    return requestSpeech(input, dynamicSpeech(finalStatus?.message, copy.requestFailed));
+  const finalResult = await completedQueueSubmission(result);
+  if (finalResult.kind === 'pending') return requestSpeech(input, copy.submissionPending);
+  if (finalResult.kind === 'error') return requestSpeech(input, copy.requestFailed);
+  if (!reachedQueue(finalResult.status)) {
+    return requestSpeech(input, dynamicSpeech(finalResult.status.message, copy.requestFailed));
   }
   return requestSpeech(input, copy.requestAccepted);
 }

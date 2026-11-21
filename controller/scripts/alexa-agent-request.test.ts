@@ -57,7 +57,10 @@ function alexaIntent(name: string, attributes: Record<string, unknown> = {}, slo
   } as any;
 }
 
-function realAlexaRuntime(extra: Record<string, unknown> = {}) {
+function realAlexaRuntime(
+  extra: Record<string, unknown> = {},
+  captureSubmission?: (identity: string, completion: Promise<any>) => void,
+) {
   const identity = `alexa-runtime-integration-${++runtimeSubmissionSequence}`;
   return {
     getSettings: () => ({
@@ -77,9 +80,9 @@ function realAlexaRuntime(extra: Record<string, unknown> = {}) {
         alexaIdentity: identity,
         verifiedCandidate: input.verifiedCandidate,
       });
-      return result.accepted
-        ? { accepted: true as const, statusCode: 202 as const, requestId: result.requestId, status: 'pending' as const, completion: result.completion }
-        : result;
+      if (!result.accepted) return result;
+      captureSubmission?.(identity, result.completion);
+      return { accepted: true as const, statusCode: 202 as const, requestId: result.requestId, status: 'pending' as const, completion: result.completion };
     },
     ...extra,
   };
@@ -128,10 +131,12 @@ test('a conflicting model pick cannot replace an observed, confirmed Alexa candi
   assert.deepEqual(queue.upcoming.map(item => item.track.id), [confirmed.id]);
 });
 
-test('MoreLikeThis waits for the real request resolver before saying the track is on the way', async t => {
+test('an unresolved MoreLikeThis request returns after a bounded wait and continues without retry or cancellation', async t => {
   const started = deferred();
   const release = deferred();
-  t.mock.method(requestAgent, 'run', async () => {
+  let identity: string | undefined;
+  let completion: Promise<any> | undefined;
+  const agent = t.mock.method(requestAgent, 'run', async () => {
     started.resolve();
     await release.promise;
     return answer(confirmed);
@@ -142,22 +147,34 @@ test('MoreLikeThis waits for the real request resolver before saying the track i
       recentTracks: () => [],
       similarCandidates: () => [{ id: confirmed.id, title: confirmed.title, artist: confirmed.artist, similarity: 0.95 }],
     }),
-  }) as any);
+  }, (requestIdentity, promise) => { identity = requestIdentity; completion = promise; }) as any);
   let settled = false;
   const responsePromise = skill.invoke(alexaIntent('MoreLikeThisIntent')).then(response => {
     settled = true;
     return response;
   });
   await started.promise;
-  await new Promise<void>(resolve => setImmediate(resolve));
+  const responseOrTimeout = await Promise.race([
+    responsePromise,
+    new Promise<null>(resolve => setTimeout(() => resolve(null), 5_500)),
+  ]);
   try {
-    assert.equal(settled, false);
+    assert.ok(responseOrTimeout, 'Alexa must return before its response deadline');
+    assert.equal(settled, true);
+    const response = responseOrTimeout;
+    assert.match((response.response as any).outputSpeech.ssml, /still checking this request/i);
+    assert.doesNotMatch((response.response as any).outputSpeech.ssml, /on the way|queued/i);
     assert.equal(queue.upcoming.length, 0);
+    assert.ok(identity);
+    assert.equal(getLatestAlexaRequestStatus(identity)?.phase, 'pending');
+    assert.equal(agent.mock.callCount(), 1);
+    assert.ok(completion, 'the accepted shared-pipeline request exposes its live completion');
   } finally {
     release.resolve();
   }
-  const response = await responsePromise;
-  assert.equal((response.response as any).outputSpeech.ssml, '<speak>More like Crystal Sea by River Band is on the way.</speak>');
+  assert.ok(completion);
+  assert.equal((await completion).phase, 'queued');
+  assert.equal(agent.mock.callCount(), 1);
   assert.deepEqual(queue.upcoming.map(item => item.track.id), [confirmed.id]);
 });
 
@@ -202,6 +219,38 @@ test('a confirmed candidate reports success only after the actual request is que
   const confirmation = await skill.invoke(yesEnvelope);
   assert.match((confirmation.response as any).outputSpeech.ssml, /Your request was sent to the booth/i);
   assert.deepEqual(queue.upcoming.map(item => item.track.id), [confirmed.id]);
+});
+
+test('a confirmed candidate cancelled while resolving receives failure speech', async t => {
+  const started = deferred();
+  const release = deferred();
+  let identity: string | undefined;
+  let completion: Promise<any> | undefined;
+  t.mock.method(requestAgent, 'run', async () => {
+    started.resolve();
+    await release.promise;
+    return answer(confirmed);
+  });
+  const skill = createAlexaSkill(realAlexaRuntime({
+    previewRequest: async () => [confirmed, { ...confirmed, id: 'confirmed-alt', album: 'Second album' }],
+  }, (requestIdentity, promise) => { identity = requestIdentity; completion = promise; }) as any);
+  const question = await skill.invoke(alexaIntent('RequestSongIntent', {}, {
+    requestText: { name: 'requestText', value: 'Crystal Sea by River Band', confirmationStatus: 'NONE' },
+  }));
+  const confirmationPromise = skill.invoke(alexaIntent('AMAZON.YesIntent', question.sessionAttributes || {}));
+  await started.promise;
+  try {
+    assert.ok(identity);
+    assert.equal((await cancelLatestAlexaRequest(identity))?.phase, 'cancelled');
+  } finally {
+    release.resolve();
+  }
+  const confirmation = await confirmationPromise;
+  assert.match((confirmation.response as any).outputSpeech.ssml, /cancelled by listener/i);
+  assert.doesNotMatch((confirmation.response as any).outputSpeech.ssml, /request was sent|on the way/i);
+  assert.ok(completion);
+  assert.equal((await completion).phase, 'cancelled');
+  assert.equal(queue.upcoming.length, 0);
 });
 
 test('a submission fails when the agent misses the confirmed ID and direct search finds another recording', async t => {

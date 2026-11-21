@@ -31,6 +31,7 @@ const MESSAGES: Record<AlexaLocale, {
   requestAccepted: string;
   requestFailed: string;
   requestPending: string;
+  submissionPending: string;
   requestQueued: (title: string, position: number | null, eta: string | null) => string;
   requestPlaying: (title: string) => string;
   requestFinished: (title: string) => string;
@@ -94,6 +95,7 @@ const MESSAGES: Record<AlexaLocale, {
     requestAccepted: 'Your request was sent to the booth. It will play when available.',
     requestFailed: 'I could not submit that request right now.',
     requestPending: 'Your latest request is still being matched. Ask again shortly for an update.',
+    submissionPending: 'I am still checking this request. It is not confirmed in the queue yet, so please do not submit it again.',
     requestQueued: (title, position, eta) => `Your latest request for ${title} is queued${position ? ` at position ${position}` : ''}${eta ? ` and should play ${eta}` : ''}.`,
     requestPlaying: title => `Your latest request for ${title} is playing now.`,
     requestFinished: title => `Your latest request for ${title} has already played.`,
@@ -157,6 +159,7 @@ const MESSAGES: Record<AlexaLocale, {
     requestAccepted: 'Your request was sent to the booth. It will play when available.',
     requestFailed: 'I could not submit that request right now.',
     requestPending: 'Your latest request is still being matched. Ask again shortly for an update.',
+    submissionPending: 'I am still checking this request. It is not confirmed in the queue yet, so please do not submit it again.',
     requestQueued: (title, position, eta) => `Your latest request for ${title} is queued${position ? ` at position ${position}` : ''}${eta ? ` and should play ${eta}` : ''}.`,
     requestPlaying: title => `Your latest request for ${title} is playing now.`,
     requestFinished: title => `Your latest request for ${title} has already played.`,
@@ -220,6 +223,7 @@ const MESSAGES: Record<AlexaLocale, {
     requestAccepted: 'आपकी request booth को भेज दी गई है। उपलब्ध होने पर यह बजेगी।',
     requestFailed: 'अभी यह request भेजी नहीं जा सकी।',
     requestPending: 'आपकी latest request अभी match हो रही है। थोड़ी देर बाद status पूछिए।',
+    submissionPending: 'मैं अभी इस request को check कर रहा हूँ। यह अभी queue में confirm नहीं हुई है, इसलिए इसे दोबारा submit न करें।',
     requestQueued: (title, position, eta) => `${title} की request queue में है${position ? `, position ${position}` : ''}${eta ? ` और ${eta} बजने की उम्मीद है` : ''}।`,
     requestPlaying: title => `आपकी ${title} की request अभी बज रही है।`,
     requestFinished: title => `आपकी ${title} की request बज चुकी है।`,
