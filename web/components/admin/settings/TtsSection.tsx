@@ -954,19 +954,6 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
           </div>
           </>)}
 
-          <div className="field">
-            <Label {...levellingAria.labelledByProps}>Voice levelling</Label>
-            <Seg
-              {...levellingAria.groupProps}
-              value={form.tts.voiceLevelling ? 'on' : 'off'}
-              options={[{ id: 'off', label: 'Off' }, { id: 'on', label: 'On' }]}
-              onChange={v => setForm(f => ({ ...f, tts: { ...f.tts, voiceLevelling: v === 'on' } }))}
-            />
-            <p {...levellingAria.descriptionProps} className="field-hint">
-              Lifts quiet takes and cuts loud ones toward -18 LUFS.
-            </p>
-          </div>
-
         {!hosted && form.tts.defaultEngine === 'piper' && (
           <>
             <div className="field mt-4">
@@ -1652,8 +1639,22 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
         </div>
       </Card>
 
+      <Advanced note={hosted ? 'voice levelling' : 'voice levelling and the rescue voice for a persona whose own engine fails'}>
+      <Card title="Voice levelling" sub="evens out loud and quiet takes">
+        <div className="field">
+          <Label {...levellingAria.labelledByProps}>Voice levelling</Label>
+          <Seg
+            {...levellingAria.groupProps}
+            value={form.tts.voiceLevelling ? 'on' : 'off'}
+            options={[{ id: 'off', label: 'Off' }, { id: 'on', label: 'On' }]}
+            onChange={v => setForm(f => ({ ...f, tts: { ...f.tts, voiceLevelling: v === 'on' } }))}
+          />
+          <p {...levellingAria.descriptionProps} className="field-hint">
+            Lifts quiet takes and cuts loud ones toward -18 LUFS.
+          </p>
+        </div>
+      </Card>
       {!hosted && (
-      <Advanced note="the rescue voice for a persona whose own engine fails">
       <Card
         title="Fallback voice"
         sub="what speaks when a persona's engine fails"
@@ -1716,8 +1717,8 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
           </div>
         )}
       </Card>
-      </Advanced>
       )}
+      </Advanced>
 
       <SaveBar
         note={ttsDirty

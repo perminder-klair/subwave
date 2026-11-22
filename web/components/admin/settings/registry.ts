@@ -204,7 +204,7 @@ export const ADVANCED_CARDS: Partial<Record<SectionId, readonly string[]>> = {
   selection: ['agent-deadline', 'repeat-variety', 'minimum-track-length', 'guest-musical-leanings'],
   behaviour: ['pause-and-talk', 'prompt-memory', 'banter', 'extended-sleeve-notes'],
   llm: ['fallback', 'reasoning', 'idle-behaviour', 'daily-token-budget'],
-  tts: ['fallback-voice'],
+  tts: ['voice-levelling', 'fallback-voice'],
   library: ['seed-phase', 'propagation', 'enrichment'],
   listeners: ['ai-dj-influence'],
   broadcast: [
@@ -299,6 +299,7 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   { label: 'Model', section: 'tts', card: 'Voice engine', keywords: 'cloud speech model gpt-4o-mini-tts' },
   { label: 'Latency mode', section: 'tts', card: 'Voice engine', keywords: 'fish audio low normal balanced' },
   { label: 'Server URL', section: 'tts', card: 'Voice engine', keywords: 'remote http endpoint' },
+  { label: 'Voice levelling', section: 'tts', card: 'Voice levelling', keywords: 'lufs loudness normalise quiet loud takes' },
   { label: 'Fallback engine', section: 'tts', card: 'Fallback voice', keywords: 'rescue voice slot backup' },
 
   // ── dj behaviour ───────────────────────────────────────────────────────────
