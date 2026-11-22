@@ -3,7 +3,7 @@
 
 import {
   Radio, Palette, Cpu, Mic, Library, Search, ListMusic,
-  Archive, Save, RadioTower, Heart, Music2, BrainCircuit,
+  Archive, Save, RadioTower, Heart, Music2,
   MessageCircle,
   Layers,
 } from 'lucide-react';
@@ -99,22 +99,17 @@ export const SECTIONS = [
     formKeys: ['djTalkOnlyBetweenTracks', 'pauseTalkMinSeconds', 'djBehaviour', 'llm.segmentRuntime'],
   },
   {
-    // One-field setup for the hosted DJ Brain: writes both `llm` and
-    // `tts.cloud` in a single save, but owns neither slice — the LLM provider
-    // and TTS voice sections keep the dirty tracking for those keys, and this
-    // one holds local state only, so it lists no formKeys.
-    id: 'brain', group: 'the dj', label: 'DJ Brain',
-    hint: 'one key · hosted brain', icon: BrainCircuit,
-    formKeys: [],
-  },
-  {
+    // The hosted DJ Brain is a source on this page and a note on TTS voice,
+    // not a tab of its own: it is a preset over these two, and a third tab
+    // writing their keys read as a third thing to set up (?section=brain
+    // still lands here, SettingsPanel RENAMED).
     id: 'llm', group: 'the dj', label: 'LLM provider',
-    hint: 'model routing', icon: Cpu,
+    hint: 'dj brain · your own model', icon: Cpu,
     formKeys: LLM_PROVIDER_FORM_KEYS,
   },
   {
     id: 'tts', group: 'the dj', label: 'TTS voice',
-    hint: 'default engine', icon: Mic,
+    hint: 'engine · station voice', icon: Mic,
     formKeys: ['tts', 'kokoroLang'],
   },
   {
@@ -267,6 +262,8 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   { label: 'Show the Booth Sprite', section: 'theme', card: 'Booth Buddy', keywords: 'mascot sprite request box' },
 
   // ── llm provider ───────────────────────────────────────────────────────────
+  { label: 'Source', section: 'llm', card: 'Provider', keywords: 'dj brain hosted own provider one key' },
+  { label: 'DJ Brain key', section: 'llm', card: 'Provider', keywords: 'dj brain studio hosted access token subwave getsubwave plan' },
   { label: 'Provider', section: 'llm', card: 'Provider', keywords: LLM_PROVIDER_IDS.join(' ') },
   { label: 'Ollama server URL', section: 'llm', card: 'Provider', keywords: 'host docker internal 11434 local' },
   { label: 'API key', section: 'llm', card: 'Provider', keywords: 'token secret credential sk-' },
@@ -293,6 +290,7 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
 
   // ── tts voice ──────────────────────────────────────────────────────────────
   { label: 'DJ speech', section: 'tts', card: 'Station voice', keywords: 'on air music only mute silent' },
+  { label: 'DJ Brain studio voice', section: 'tts', card: 'Voice engine', keywords: 'dj brain studio hosted voice plan personas station default' },
   { label: 'Engine', section: 'tts', card: 'Voice engine', keywords: 'piper kokoro chatterbox pocket-tts cloud remote' },
   { label: 'Voice', section: 'tts', card: 'Voice engine', keywords: 'speaker accent alba amy' },
   { label: 'Voice level (dB)', section: 'tts', card: 'Voice engine', keywords: 'gain trim loudness decibel' },

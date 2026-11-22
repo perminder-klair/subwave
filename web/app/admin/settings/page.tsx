@@ -17,10 +17,7 @@ export default function AdminSettingsPage() {
   const info = hostedFromEnv(process.env);
   return (
     <HostedProvider value={info}>
-      <SettingsPanel
-        djBrainEnabled={!info.hosted}
-        hosted={info.hosted}
-      />
+      <SettingsPanel hosted={info.hosted} />
     </HostedProvider>
   );
 }

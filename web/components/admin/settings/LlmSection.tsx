@@ -3,7 +3,7 @@
 import { LLM_PROVIDER_FORM_KEYS } from './registry';
 
 import type { ChangeEvent } from 'react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { notify, errorMessage } from '../../../lib/notify';
 import { adminResponse } from '../../../lib/admin-query';
 import { fieldAria } from '../../../lib/form';
@@ -20,6 +20,11 @@ import { ModelCombobox } from '../llm/ModelCombobox';
 import { LLM_ENV_VARS, groupProviders, llmProviderLabel } from '../llm/providerMeta';
 import { Advanced } from './section-chrome';
 import { ContextSizing } from './ContextSizing';
+import { DjBrainFields, brainVoiceKeyOnFile, savedBrainState } from './DjBrainFields';
+import {
+  DJ_BRAIN_BASE_URL, DJ_BRAIN_CHAT_MODEL, brainVoiceWirable, djBrainSettingsPatch,
+  isBrainRoute, isBrainVoice, isDjBrainUrl, sameBaseUrl, type DjBrainCheckResult,
+} from '../../../lib/djBrain';
 import { COMPAT_MODE_OPTIONS, compatDetectedNote, effectiveCompatMode, type CompatMode } from './compat-mode';
 import { pinnedFieldNames, type SwapEmbeddingPreview } from './llm-swap-copy';
 import {
@@ -33,7 +38,7 @@ import {
 import {
   SectionHeader, SaveBar, KeyStatus, KeyTestResult, KEY_HINTS, NowBanner,
   headerMap,
-  type SectionProps, type LlmHeaderRow,
+  type SectionProps, type LlmHeaderRow, type FormState,
 } from './shared';
 import {
   LLM_HEADER_NAME_RE,
@@ -407,6 +412,101 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
     if (pin && meta) setEmbedPinNotice({ model: meta.model, dim: meta.dim, newProvider: v });
   };
 
+  // ── DJ Brain as the source ────────────────────────────────────────────────
+  // The hosted brain is a preset over openai-compatible (lib/djBrain.ts), so
+  // "DJ Brain" here is a view of the same form fields, not a provider. The
+  // choice is local state so typing a URL in the full form never flips the
+  // page mid-edit; it follows the SAVED route whenever that changes.
+  const brainSaved = savedBrainState(data.values);
+  const formCompatUrl = form.llm.providerBaseUrls['openai-compatible'] ?? '';
+  const [source, setSource] = useState<'brain' | 'own'>(
+    isBrainRoute({ provider: form.llm.provider, baseUrl: formCompatUrl, model: form.llm.model }) ? 'brain' : 'own',
+  );
+  const [syncedRouted, setSyncedRouted] = useState(brainSaved.routed);
+  if (syncedRouted !== brainSaved.routed) {
+    setSyncedRouted(brainSaved.routed);
+    setSource(brainSaved.routed ? 'brain' : 'own');
+  }
+  const brainMode = source === 'brain';
+  const [brainTesting, setBrainTesting] = useState(false);
+  const [brainCheck, setBrainCheck] = useState<DjBrainCheckResult | null>(null);
+  // The route the operator had before trying DJ Brain, put back if they return
+  // to their own provider without saving.
+  const ownRoute = useRef<{
+    llm: Pick<FormState['llm'], 'provider' | 'model' | 'providerBaseUrls' | 'headers' | 'bodyParams' | 'toolCallBodyParams'>;
+    embedding: FormState['embedding'];
+  } | null>(null);
+  const llmKeysOnFile = (data.values?.llm as { keys?: Record<string, unknown> } | undefined)?.keys || {};
+  const brainKeyOnFile = llmKeysOnFile['openai-compatible'] === 'set';
+
+  const selectSource = (next: string) => {
+    if (next === source) return;
+    if (next === 'brain') {
+      const { provider, model, providerBaseUrls, headers, bodyParams, toolCallBodyParams } = form.llm;
+      ownRoute.current = {
+        llm: { provider, model, providerBaseUrls, headers, bodyParams, toolCallBodyParams },
+        embedding: form.embedding,
+      };
+      changeLlmProvider('openai-compatible');
+      setForm(f => {
+        const cur = f.llm.providerBaseUrls['openai-compatible'] ?? '';
+        // Already a brain route (typed by hand in the full form): keep it whole.
+        if (provider === 'openai-compatible' && isBrainRoute({ provider, baseUrl: cur, model: f.llm.model })) return f;
+        return {
+          ...f,
+          llm: {
+            ...f.llm,
+            model: DJ_BRAIN_CHAT_MODEL,
+            providerBaseUrls: { ...f.llm.providerBaseUrls, 'openai-compatible': isDjBrainUrl(cur) ? cur : DJ_BRAIN_BASE_URL },
+            // Another server's gateway headers and body fields mean nothing to the brain.
+            headers: [], bodyParams: [], toolCallBodyParams: [],
+          },
+        };
+      });
+      // A preset's "clear the saved token" would wipe the key the brain needs.
+      setResetCompatKey(false);
+    } else {
+      const prev = ownRoute.current;
+      if (prev) setForm(f => ({ ...f, llm: { ...f.llm, ...prev.llm }, embedding: prev.embedding }));
+      ownRoute.current = null;
+    }
+    // A key typed for one source is never the other's: the brain would refuse
+    // another server's key, and a brain key must not reach another server. The
+    // provider-change effect misses this when both sides are openai-compatible.
+    setCompatKeyInput('');
+    setBrainCheck(null);
+    setSource(next === 'brain' ? 'brain' : 'own');
+  };
+
+  // Ask the brain what this key includes (POST /settings/dj-brain/check). A
+  // blank key reads the openai-compatible key on file.
+  const checkBrain = async (): Promise<DjBrainCheckResult> => {
+    if (!formCompatUrl.trim()) return { ok: false, voice: false, message: 'Enter a Base URL first', latencyMs: 0 };
+    try {
+      const r = await adminResponse(adminFetch, '/settings/dj-brain/check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: compatKeyInput.trim(), baseUrl: formCompatUrl.trim() }),
+      });
+      return await r.json() as DjBrainCheckResult;
+    } catch (e) {
+      return { ok: false, voice: false, message: errorMessage(e), latencyMs: 0 };
+    }
+  };
+  const testBrain = async () => {
+    setBrainTesting(true);
+    setBrainCheck(null);
+    setBrainCheck(await checkBrain());
+    setBrainTesting(false);
+  };
+  // Read from the SAVED voice, not the form: an unsaved edit on TTS voice is
+  // not what the station speaks with.
+  const brainVoiceWiredToUrl = isBrainVoice(brainSaved.cloud, formCompatUrl);
+  const brainVoiceInputs = {
+    token: compatKeyInput,
+    brainVoiceKeyOnFile: brainVoiceKeyOnFile(data.values, formCompatUrl),
+  };
+
   const primaryKeyVar = LLM_ENV_VARS[form.llm.provider];
   const primaryKeySet = !!(primaryKeyVar && data.env?.[primaryKeyVar]);
 
@@ -545,7 +645,33 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
   const save = async () => {
     const activeProvider = form.llm.provider;
     const activeFallbackProvider = form.llm.fallback.provider;
+    // A DJ Brain save that changes the route or the key asks the brain which
+    // plan the key is on, and wires (or unwires) the studio voice to match.
+    // Any other save on this page (a budget, the backup) leaves the voice
+    // alone, so a voice the operator chose since is never taken back.
+    let brainTts: ReturnType<typeof djBrainSettingsPatch>['tts'];
+    if (brainMode && (
+      !!compatKeyInput.trim() || !brainSaved.routed || !sameBaseUrl(brainSaved.brainUrl, formCompatUrl)
+    )) {
+      const check = await checkBrain();
+      setBrainCheck(check);
+      // The plan decides whether the voice is wired, so a save the brain can't
+      // vouch for stops here rather than guessing.
+      if (!check.ok) { notify.err(check.message); return; }
+      brainTts = djBrainSettingsPatch({
+        baseUrl: formCompatUrl,
+        token: compatKeyInput,
+        // A voice already on the brain keeps the model and voice chosen for it.
+        ...(brainVoiceWiredToUrl
+          ? { voiceModel: form.tts.cloud.model, voiceName: form.tts.cloud.voice }
+          : {}),
+        voice: brainVoiceWirable({ planHasVoice: check.voice, ...brainVoiceInputs }),
+        stationEngine: brainSaved.stationEngine,
+        voiceWiredToBrain: brainVoiceWiredToUrl,
+      }).tts;
+    }
     await saveSettings({
+      ...(brainTts ? { tts: brainTts } : {}),
       llm: {
         provider: activeProvider,
         model: form.llm.model,
@@ -625,19 +751,55 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
       <SectionHeader
         eyebrow="llm provider"
         title="The model that writes scripts and picks tracks."
-        sub="Ollama runs on the homelab box and needs no key; the cloud providers are opt-in. Switching here reroutes every LLM call, no redeploy."
+        sub="Use the hosted DJ Brain on one key, or your own provider: Ollama runs on the homelab box and needs no key, and the cloud providers are opt-in. Switching here reroutes every LLM call, no redeploy."
         metrics={[{ n: String((data.llm?.providers || []).length), l: 'providers' }]}
         manualHref="/manual/llm"
       />
 
       <Card title="Provider" sub="active routing">
         <div className="grid gap-[18px]">
-          <NowBanner label={<>Routing now · {llmProviderLabel(activeProvider)}</>}>
+          <NowBanner label={<>Routing now · {brainSaved.routed ? 'DJ Brain' : llmProviderLabel(activeProvider)}</>}>
             {activeModel
               ? <>Model <code>{activeModel}</code>, every LLM call goes here. {llmDirty ? 'Your edits below aren’t live until you Save.' : 'This is the saved, running config.'}</>
               : <>No model is set for this provider yet.</>}
           </NowBanner>
 
+          <div className="field">
+            <Label>Source</Label>
+            <Seg
+              accent
+              value={source}
+              options={[
+                { id: 'brain', label: 'DJ Brain', title: 'The hosted brain: one key, nothing to run' },
+                { id: 'own', label: 'Your own provider', title: 'Ollama, a cloud provider or your own server' },
+              ]}
+              onChange={selectSource}
+            />
+            <div className="field-hint">
+              {brainMode
+                ? 'SUB/WAVE DJ Brain is the hosted model for your station. One key, no GPU and no provider account.'
+                : 'Run the model yourself or bring a provider account. DJ Brain is the hosted alternative on one key.'}
+            </div>
+          </div>
+
+          {brainMode && (
+            <DjBrainFields
+              data={data}
+              baseUrl={formCompatUrl}
+              model={form.llm.model}
+              onBaseUrl={v => setForm(f => ({ ...f, llm: { ...f.llm, providerBaseUrls: { ...f.llm.providerBaseUrls, 'openai-compatible': v } } }))}
+              onModel={v => setForm(f => ({ ...f, llm: { ...f.llm, model: v } }))}
+              token={compatKeyInput}
+              onToken={setCompatKeyInput}
+              keyOnFile={brainKeyOnFile}
+              check={brainCheck}
+              testing={brainTesting}
+              onTest={testBrain}
+              voiceNeedsKey={!!brainCheck?.voice && !brainVoiceWirable({ planHasVoice: true, ...brainVoiceInputs })}
+            />
+          )}
+
+          {!brainMode && (<>
           <div className="field">
             <div className="flex items-center gap-2">
               <Label>Provider</Label>
@@ -1007,6 +1169,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
               </div>
             </div>
           )}
+          </>)}
         </div>
       </Card>
 

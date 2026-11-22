@@ -3,8 +3,8 @@
 // cloud voice. The brain is not a provider of its own; everything downstream is
 // the ordinary compat path.
 //
-// Both setup surfaces (the onboarding wizard's LLM step and Settings → DJ
-// Brain) build their save from `djBrainSettingsPatch`, so they wire the same
+// Both setup surfaces (the onboarding wizard's LLM step and Settings → LLM
+// provider) build their save from `djBrainSettingsPatch`, so they wire the same
 // fields. Whether the key includes the voice is the brain's answer, read by the
 // controller's POST /settings/dj-brain/check (controller/src/llm/dj-brain.ts).
 
@@ -29,6 +29,42 @@ export function sameBaseUrl(a: string, b: string): boolean {
 /** A base URL that is the hosted brain, with or without a trailing slash. */
 export function isDjBrainUrl(url: string): boolean {
   return sameBaseUrl(url, DJ_BRAIN_BASE_URL);
+}
+
+/**
+ * The LLM route is the DJ Brain: openai-compatible at the hosted brain, or at
+ * another URL serving the brain's own model id (a brain run elsewhere). Read
+ * from what is routed, never from a key being on file, so the admin pages can't
+ * call the brain wired after the provider moved on.
+ */
+export function isBrainRoute(llm: { provider?: string; baseUrl?: string; model?: string }): boolean {
+  if (llm.provider !== 'openai-compatible') return false;
+  const url = (llm.baseUrl ?? '').trim();
+  if (!url) return false;
+  return isDjBrainUrl(url) || (llm.model ?? '').trim() === DJ_BRAIN_CHAT_MODEL;
+}
+
+/** The cloud voice is the brain's: openai-compatible at the brain's base URL. */
+export function isBrainVoice(cloud: { provider?: string; baseUrl?: string }, brainUrl: string): boolean {
+  return cloud.provider === 'openai-compatible' && sameBaseUrl(cloud.baseUrl ?? '', brainUrl);
+}
+
+/**
+ * Whether a Save may wire the studio voice. The plan must include it, and the
+ * voice needs a key in its own slot (`tts.cloud.compatApiKey`): typed this
+ * run, or already saved for a voice that points at this brain. A key on file
+ * for another voice server does not count, since the brain would refuse it.
+ * A blank key on a plan that gained the voice later wires nothing, rather
+ * than a cloud voice with no key.
+ */
+export function brainVoiceWirable(input: {
+  planHasVoice: boolean;
+  token: string;
+  /** The cloud voice points at this brain and its compat key slot holds a key. */
+  brainVoiceKeyOnFile: boolean;
+}): boolean {
+  if (!input.planHasVoice) return false;
+  return !!input.token.trim() || input.brainVoiceKeyOnFile;
 }
 
 export interface DjBrainPatchInput {
@@ -95,7 +131,10 @@ export function djBrainSettingsPatch(input: DjBrainPatchInput) {
         // The brain's voice honours native `speed`, so skip the local atempo
         // stretch (#942).
         sendSpeed: true,
-        ...key,
+        // The compat voice reads its own slot first (cloud-speech.ts
+        // sharedCloudApiKeyForRequest), so the legacy `apiKey` slot would lose
+        // to a key left there by an earlier compatible voice server.
+        ...(token ? { compatApiKey: token } : {}),
       },
     },
   };

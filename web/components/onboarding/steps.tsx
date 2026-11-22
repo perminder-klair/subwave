@@ -487,7 +487,7 @@ export function TtsStep({ w }: { w: WizardController }) {
           <p className="text-sm text-muted">
             When the month&apos;s studio hours are spent, the DJ drops to a plainer voice until
             the month resets, unless you turn on extra voice hours at my.getsubwave.com/brain.
-            Fine-tune it later under Admin → Settings → DJ Brain.
+            Fine-tune it later under Admin → Settings → TTS voice.
           </p>
           <div className="mt-2 flex flex-wrap justify-end gap-2">
             <Button variant="outline" type="button" onClick={() => w.patch({ djBrainVoice: false })}>

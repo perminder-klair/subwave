@@ -21,6 +21,7 @@ import {
 import { Card, Btn, Pill, Seg } from '../ui';
 import { Advanced } from './section-chrome';
 import { EngineSelector } from '../tts/EngineSelector';
+import { DjBrainVoiceNote } from './DjBrainFields';
 import { CloudProviderSelector } from '../tts/CloudProviderSelector';
 import { cloudProviderLabel, resolveKeyPresence } from '../tts/cloudProviderMeta';
 import { EngineVoiceFields, ENGINE_UNAVAILABLE } from '../tts/EngineVoiceFields';
@@ -924,6 +925,8 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
             )}
           </NowBanner>
 
+          <DjBrainVoiceNote data={data} busy={busy} saveSettings={saveSettings} refresh={refresh} />
+
           <div className="field">
             <div className="flex items-center gap-2">
               <Label>Engine</Label>
@@ -1386,8 +1389,9 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
                     className="max-w-[360px]"
                   />
                   <div className="field-hint">
-                    Optional, only if your server requires one (e.g. SUB/WAVE DJ
-                    Brain); most self-hosted servers accept any non-empty key.
+                    Optional, only if your server requires one; most self-hosted
+                    servers accept any non-empty key. The DJ Brain studio voice
+                    gets its key when you save it under LLM provider.
                     Blank keeps the existing key. Saved with these settings, takes
                     effect immediately.
                   </div>
