@@ -123,6 +123,9 @@ services:
         - SUBWAVE_BUILD_VERSION=${SUBWAVE_BUILD_VERSION:-}
     container_name: sub-wave-controller
     restart: unless-stopped
+    # tini as PID 1: reaps orphans (a health-check curl killed on timeout, a
+    # `docker exec … tsx` helper) that Node would leave as zombies.
+    init: true
     logging: *default-logging
     depends_on:
       broadcast:
@@ -135,8 +138,9 @@ services:
       # Enables the production-only admin gate (refuses to boot without
       # ADMIN_USER + ADMIN_PASS).
       - NODE_ENV=production
-      # Schedule slots are day-of-week + hour via date.getHours(); without TZ
-      # the container runs UTC and fires shows an hour early during BST.
+      # Schedule slots follow the station timezone (Settings, `timezone`);
+      # left on Auto they follow this TZ, and without it the container runs
+      # UTC and fires shows an hour early during BST.
       - TZ=${TZ:-Europe/London}
       - STATE_DIR=/var/sub-wave
       - SOUNDS_DIR=/sounds
@@ -262,6 +266,8 @@ services:
         - SUBWAVE_BUILD_VERSION=${SUBWAVE_BUILD_VERSION:-}
     container_name: sub-wave-web
     restart: unless-stopped
+    # tini as PID 1, as on the controller: reaps orphaned children.
+    init: true
     logging: *default-logging
     depends_on:
       # The homepage renders per-request against the controller — starting web
@@ -272,7 +278,6 @@ services:
       - NODE_ENV=production
       - SUBWAVE_HOMEPAGE=${SUBWAVE_HOMEPAGE:-player}
       - SUBWAVE_DISCOVERY_BENCH=${SUBWAVE_DISCOVERY_BENCH:-}
-      - SUBWAVE_DJ_BRAIN_ENABLED=${SUBWAVE_DJ_BRAIN_ENABLED:-false}
       # RUNTIME source of truth for absolute URLs (canonicals, og:url,
       # robots.txt, sitemap.xml) — the generic image serves any domain.
       - SITE_URL=${SITE_URL:-}
@@ -419,6 +424,9 @@ services:
       - DEMUCS_OVERLAP=${DEMUCS_OVERLAP:-}
       - ANALYZE_SECONDS=${ANALYZE_SECONDS:-}
       - ANALYZE_CONCURRENCY=${ANALYZE_CONCURRENCY:-}
+      # Whole-file facets (loudness v2, edges): their own lane width on this host.
+      - ANALYZE_WHOLE_FILE_CONCURRENCY=${ANALYZE_WHOLE_FILE_CONCURRENCY:-}
+      - ANALYZE_WHOLE_FILE_TIMEOUT_S=${ANALYZE_WHOLE_FILE_TIMEOUT_S:-}
       - ANALYZE_CLAP_WINDOWS=${ANALYZE_CLAP_WINDOWS:-}
       - ANALYZE_OUTRO_SECONDS=${ANALYZE_OUTRO_SECONDS:-}
       # CLAP isn't gated, but anonymous HF downloads are rate-limited. Same var

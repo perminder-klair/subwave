@@ -2,7 +2,7 @@
 import type { ShowFacet, ShowRow } from './ShowsTable';
 import { SHOW_COLORS } from '../schedule/lib';
 import { eraLabelOf } from './types';
-import type { Persona, Schedule, Show } from './types';
+import type { Persona, PlaylistIndexStatus, Schedule, Show } from './types';
 import {
   migrateLegacyShowFields,
   type ShowSchemaContext,
@@ -44,10 +44,15 @@ export function hydrateShow(s: Partial<Show>): Show {
     playlistExhaust: m.playlistExhaust ?? false,
     playlistInOrder: m.playlistInOrder ?? false,
     excludedPlaylistIds: Array.isArray(m.excludedPlaylistIds) ? m.excludedPlaylistIds : [],
+    excludeExplicit: m.excludeExplicit ?? false,
+    excludedAlbumKinds: Array.isArray(m.excludedAlbumKinds) ? m.excludedAlbumKinds : [],
     programme: m.programme ?? false,
     segmentSkill: m.segmentSkill ?? '',
     preparationSkill: m.preparationSkill ?? '',
     tags: Array.isArray(m.tags) ? m.tags.map(t => String(t).trim().toLowerCase()).filter(Boolean) : [],
+    allowedJingles: Array.isArray(m.allowedJingles) ? m.allowedJingles : [],
+    allowedBeds: Array.isArray(m.allowedBeds) ? m.allowedBeds : [],
+    description: typeof m.description === 'string' ? m.description : '',
   };
 }
 
@@ -122,13 +127,34 @@ export function showPayload(s: Show) {
     // show's whole universe.
     playlistInOrder: (s.playlistIds?.length ?? 0) > 0 && s.playlistStrict && s.playlistInOrder,
     excludedPlaylistIds: s.excludedPlaylistIds || [],
+    // No conditional: unlike Strict it needs no other filter to act on.
+    excludeExplicit: s.excludeExplicit === true,
+    excludedAlbumKinds: s.excludedAlbumKinds || [],
     programme: s.programme ?? false,
     // A skill pin only means something in programme mode.
     segmentSkill: s.programme ? (s.segmentSkill || '') : '',
     preparationSkill: s.preparationSkill || '',
     // No conditional: a tag is filing, so it survives every other field clearing.
     tags: s.tags || [],
+    allowedJingles: s.allowedJingles || [],
+    allowedBeds: s.allowedBeds || [],
+    description: (s.description || '').trim(),
   };
+}
+
+// Why a show's draws are skipped: a non-empty list none of whose entries exist
+// in the library. Says nothing until the library has loaded, so a pending or
+// failed fetch never reads as "deleted".
+export function allowlistSkipNotice(
+  kind: 'jingle' | 'bed',
+  listed: readonly string[],
+  libraryIds: readonly string[],
+  status: PlaylistIndexStatus,
+): string | null {
+  if (status !== 'ready' || !listed.length || listed.some(id => libraryIds.includes(id))) return null;
+  return kind === 'jingle'
+    ? "This show's automatic jingle slots are skipped: none of its listed jingles exist in the library any more."
+    : "This show's links air without a bed: none of its listed beds exist in the library any more.";
 }
 
 
@@ -156,6 +182,9 @@ export function showFacets(s: Show): ShowFacet[] {
   if (nPl) facets.push({ key: 'playlists', label: `${nPl} playlist${nPl > 1 ? 's' : ''}${s.playlistStrict ? ' · strict' : ''}${playlistOrderFacet(s)}` });
   const nEx = s.excludedPlaylistIds?.length ?? 0;
   if (nEx) facets.push({ key: 'excluded', label: `${nEx} excluded` });
+  if (s.excludeExplicit) facets.push({ key: 'clean', label: 'clean', accent: true });
+  const nKinds = s.excludedAlbumKinds?.length ?? 0;
+  if (nKinds) facets.push({ key: 'excluded-kinds', label: nKinds === 1 && s.excludedAlbumKinds[0] === 'dj-mix' ? 'no DJ mixes' : `${nKinds} album kind${nKinds > 1 ? 's' : ''} left out` });
   if (s.maxTrackSeconds != null) {
     facets.push({ key: 'length', label: s.maxTrackSeconds === 0 ? 'any length' : `≤${s.maxTrackSeconds}s` });
   }

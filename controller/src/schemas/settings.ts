@@ -68,6 +68,9 @@ export const BEDS_TAIL_SEC_BOUNDS: SettingsNumericBound = { min: 0, max: 15 };
 // the other side: past 30s an operator is describing a different problem
 // (a corrupt rip) than the one a cue point solves.
 export const SILENCE_TRIM_MIN_GAP_MS_BOUNDS: SettingsNumericBound = { min: 250, max: 30000 };
+// transitions.fadeAudibleEndDb: how far under the track's own loudness a fade
+// ending stops being audible (music/silence-trim.ts).
+export const FADE_AUDIBLE_END_DB_BOUNDS: SettingsNumericBound = { min: 15, max: 35 };
 
 /**
  * `parseInt(raw, 10)` + a bounds check, exactly as the hand-rolled branch did.
@@ -264,6 +267,21 @@ export function settingsTrimmedString(max: number, message: string) {
 }
 
 /**
+ * A control character (C0 or DEL) in a saved secret. No real key holds one, and
+ * fetch refuses a header value with a NUL, CR or LF in it, quoting the whole
+ * value in its error. Every save path strips them, as the admin form's inputs
+ * already do for line breaks, so a key pasted across a wrap through the API or
+ * a restored backup is joined rather than refused; the key probes refuse one
+ * instead (setup/secrets.ts secretValueIssue). The load path leaves a stored
+ * value alone. Defined here because a mirrored module may import only zod.
+ */
+export const SECRET_CONTROL_CHAR_RE = /[\x00-\x1F\x7F]/;
+
+export function stripSecretControlChars(value: string): string {
+  return value.replace(new RegExp(SECRET_CONTROL_CHAR_RE.source, 'g'), '');
+}
+
+/**
  * `String(raw)` with NO trim and NO nullish default — search.apiKey's posture.
  *
  * `null` becomes the four-character string 'null' and is STORED. That is not a
@@ -313,6 +331,32 @@ export const LLM_HEADER_VALUE_RE = /^[\x20-\x7E]+$/;
 /** At most this many custom headers per leg, and this long a value. */
 export const LLM_HEADERS_MAX = 10;
 export const LLM_HEADER_VALUE_MAX = 500;
+
+/**
+ * Free-form request-body rows, `{ key, value }`: the openai-compatible cloud
+ * TTS provider's `tts.cloud.compatParams` (#1317) and the chat legs'
+ * `llm.bodyParams` / `llm.toolCallBodyParams` (#2296). One row grammar for
+ * both, here so the admin form can pre-flight a row with the same rule the
+ * save path (`settings/compat-params.ts` `validateCompatParams`) enforces.
+ * A value that parses as a JSON literal is sent as one, anything else as a
+ * string.
+ */
+export const BODY_PARAM_KEY_RE = /^[A-Za-z_][A-Za-z0-9_.-]*$/;
+export const BODY_PARAM_MAX_ENTRIES = 20;
+export const BODY_PARAM_KEY_MAX = 60;
+export const BODY_PARAM_VALUE_MAX = 400;
+
+/**
+ * Chat body fields the station sets on every request, refused in both LLM
+ * lists at save time and skipped at send time: overriding any of them could
+ * break a forced tool call, the output cap or the hosted #1693 pairing.
+ * `max_completion_tokens` is the output cap's other spelling: the SDK sends it
+ * only for OpenAI reasoning ids, and vLLM reads it ahead of `max_tokens`.
+ */
+export const LLM_BODY_PARAM_RESERVED_KEYS = [
+  'model', 'messages', 'tools', 'tool_choice', 'stream',
+  'max_tokens', 'max_completion_tokens', 'response_format', 'stream_options',
+];
 
 // Native Google safety flags are independent per LLM leg. Only a literal true
 // enables blocking; absent or malformed flags preserve the permissive default.
@@ -453,9 +497,40 @@ export const SEARCH_PROVIDER_CATALOG = [
     keyName: 'Keenable', keyPlaceholder: 'keen_…', keyUrl: 'https://keenable.ai/console', keyPrefix: 'keen_',
     hint: 'Keenable web search: real web results with no signup or API key, rate limited per IP. An optional Keenable key raises the limit. SUB/WAVE caches every search for 30 minutes.',
   },
+  {
+    id: 'parallel', group: 'keyless', label: 'Parallel (no key needed)', key: 'none',
+    hint: 'Parallel web search via its anonymous MCP endpoint. No signup or key needed; free-tier rate limits apply. SUB/WAVE caches every search for 30 minutes.',
+  },
+  {
+    id: 'firecrawl', group: 'keyed', label: 'Firecrawl (API key)', key: 'required',
+    keyName: 'Firecrawl', keyPlaceholder: 'fc-…', keyUrl: 'https://www.firecrawl.dev/app/api-keys',
+    hint: 'Firecrawl web search: real web results for artist queries. Needs an API key. SUB/WAVE caches every search for 30 minutes.',
+  },
+  {
+    id: 'outcrawl', group: 'keyed', label: 'Outcrawl (API key, free monthly credits)', key: 'required',
+    keyName: 'Outcrawl', keyPlaceholder: 'ock_…', keyUrl: 'https://outcrawl.ai/console',
+    hint: 'Outcrawl web search: real web results for artist queries. Needs an API key; the free tier includes 1,000 credits a month. SUB/WAVE caches every search for 30 minutes.',
+  },
+  {
+    id: 'specstream', group: 'keyed', label: 'SpecStream (API key)', key: 'required',
+    keyName: 'SpecStream', keyPlaceholder: 'ss_live_…', keyUrl: 'https://specstream.ai/signup',
+    hint: 'SpecStream web search: real web results for artist queries. Needs an API key; a paid API at $1 per 1,000 searches. SUB/WAVE caches every search for 30 minutes.',
+  },
 ] as const satisfies readonly SearchProviderEntry[];
 
 export const SETTINGS_SEARCH_PROVIDERS = SEARCH_PROVIDER_CATALOG.map((p) => p.id);
+
+// One catalogue row by id, or undefined for an id the catalogue doesn't list.
+export function searchProviderEntry(id: string | undefined): SearchProviderEntry | undefined {
+  return SEARCH_PROVIDER_CATALOG.find((p) => p.id === id);
+}
+
+// A key name with its indefinite article: "a Tavily", "an Outcrawl". Every
+// sentence that names a provider's key, in the controller and the admin UI,
+// takes its article from here, so the two can't disagree.
+export function withIndefiniteArticle(name: string): string {
+  return /^[aeiou]/i.test(name) ? `an ${name}` : `a ${name}`;
+}
 
 /**
  * Cap for the optional SearXNG `engines=` pin. Generous on purpose — the value
@@ -490,14 +565,14 @@ export const DUCK_DEPTH_BOUNDS: SettingsNumericBound = { min: 0, max: 1 };
 // on top of its own feature.
 export const HANDOVER_OFFSET_BOUNDS: SettingsNumericBound = { min: 5, max: 20 };
 
-// The process-minute stride the talk table's programme row samples the station
-// clock on, and therefore the width and alignment every station-clock beat
+// The station-minute stride the talk table's programme row is sampled on, and
+// therefore the width and alignment every station-clock beat
 // window must have. Lives here — with the bound it constrains — rather than as
 // a literal in the table, so the row and the operator's offset cannot drift
 // apart: broadcast/talk-scheduler.ts imports it as the row's `stride`.
 //
-// 5 works for every real IANA zone because every offset is a multiple of 15
-// minutes, so process and station minutes always agree modulo 5.
+// Every real IANA zone's offset is a multiple of 15 minutes, so process and
+// station minutes agree modulo 5 and the row lands on the same ticks either way.
 export const HANDOVER_OFFSET_STEP_MINUTES = 5;
 // −23 (EBU R128 broadcast) … −9 (very loud); −14 is the streaming standard.
 export const LOUDNESS_TARGET_LUFS_BOUNDS: SettingsNumericBound = { min: -23, max: -9 };
@@ -707,7 +782,26 @@ export const transitionsPatchSchema = settingsBlockOf({
   // save-time refusal. Do not add one here.
   pairDrain: settingsBoolLike(),
   stemBlends: settingsBoolLike(),
+  pickTimeStems: settingsBoolLike(),
   equalPowerCrossfade: settingsBoolLike(),
+  // New keys, so no stored leniency to preserve: refused unless a real
+  // boolean / a real number in range (load() repairs a hand edit instead).
+  fadeAudibleEnd: settingsStrictOneOf([true, false], 'transitions.fadeAudibleEnd must be true or false'),
+  fadeAudibleEndDb: z
+    .unknown()
+    .superRefine((raw, ctx) => {
+      if (
+        typeof raw !== 'number' || !Number.isFinite(raw)
+        || raw < FADE_AUDIBLE_END_DB_BOUNDS.min || raw > FADE_AUDIBLE_END_DB_BOUNDS.max
+      ) {
+        ctx.addIssue({
+          code: 'custom',
+          message: `transitions.fadeAudibleEndDb must be number in [${FADE_AUDIBLE_END_DB_BOUNDS.min}, ${FADE_AUDIBLE_END_DB_BOUNDS.max}]`,
+        });
+      }
+    })
+    .transform((raw) => raw as number),
+  tailFromCurve: settingsStrictOneOf([true, false], 'transitions.tailFromCurve must be true or false'),
   effects: transitionEffectsPatchSchema,
 });
 
@@ -804,13 +898,26 @@ export const BACKUP_KEEP_DEFAULT = 7;
  * usual normalize-vs-validate split, neither restating the other's rule.
  */
 export function clampBackupKeep(raw: unknown): number {
-  // Absent and empty are NO answer, not zero. `Number(null)` and `Number('')`
-  // are both 0, which would clamp to the floor of 1 — the most destructive
-  // reading available — for a settings block that simply has no `keep` in it.
-  if (raw === null || raw === undefined || raw === '') return BACKUP_KEEP_DEFAULT;
+  return clampSettingsIntOr(raw, BACKUP_KEEP_BOUNDS, BACKUP_KEEP_DEFAULT);
+}
+
+/**
+ * The lenient integer reading behind clampBackupKeep and the scheduled
+ * tagger's `limit` (settings/normalize.ts): a number-like value floored and
+ * clamped into `bounds`, anything unreadable the `fallback`. Absent and empty
+ * are NO answer, not zero: `Number(null)` and `Number('')` are both 0, which
+ * would clamp to the floor (for `keep`, 1: the most destructive reading
+ * available) for a settings block that simply has no such field in it.
+ */
+export function clampSettingsIntOr(
+  raw: unknown,
+  bounds: { min: number; max: number },
+  fallback: number,
+): number {
+  if (raw === null || raw === undefined || raw === '') return fallback;
   const n = Number(raw);
-  if (!Number.isFinite(n)) return BACKUP_KEEP_DEFAULT;
-  return Math.min(BACKUP_KEEP_BOUNDS.max, Math.max(BACKUP_KEEP_BOUNDS.min, Math.floor(n)));
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(bounds.max, Math.max(bounds.min, Math.floor(n)));
 }
 
 export const backupsPatchSchema = settingsBlockOf({
@@ -825,6 +932,87 @@ export const backupsPatchSchema = settingsBlockOf({
     BACKUP_KEEP_BOUNDS,
     `backups.keep must be int in [${BACKUP_KEEP_BOUNDS.min}, ${BACKUP_KEEP_BOUNDS.max}]`,
   ),
+});
+
+// Scheduled tagging (#2282): a daily tagger run at a set station-clock time,
+// so new music reaches the air without an operator pressing Start. `off` is
+// the default and MUST be first: a station that upgrades and changes nothing
+// has no `tagger` block, reads as `off` and never starts a run on its own.
+// The decision lives in music/tag-schedule-policy.ts, the tick in
+// broadcast/tag-schedule.ts.
+export const SETTINGS_TAGGER_AUTO_MODES = ['off', 'daily'] as const;
+export type TaggerAutoMode = (typeof SETTINGS_TAGGER_AUTO_MODES)[number];
+
+// 24-hour `HH:MM` on the station clock.
+export const TAGGER_AUTO_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+// The run's `--limit`: 0 = every untagged track, the Run tab's "all". The
+// ceiling only stops a typo; no library reaches it.
+export const TAGGER_AUTO_LIMIT_BOUNDS: SettingsNumericBound = { min: 0, max: 1_000_000 };
+
+// The Run tab's four step toggles, by the names POST /tag-library takes.
+export interface TaggerAutoSteps {
+  reconcile: boolean;
+  enrich: boolean;
+  tagMoods: boolean;
+  analyze: boolean;
+}
+export const TAGGER_AUTO_STEP_KEYS = ['reconcile', 'enrich', 'tagMoods', 'analyze'] as const;
+
+export interface TaggerAutoSettings {
+  mode: TaggerAutoMode;
+  time: string;
+  limit: number;
+  steps: TaggerAutoSteps;
+}
+
+// The shipped block: settings/defaults.ts DEFAULTS.tagger.auto, and the admin
+// card's form before its first read. Off, so an upgrade changes nothing.
+export const TAGGER_AUTO_DEFAULTS: Readonly<TaggerAutoSettings> = Object.freeze({
+  mode: 'off',
+  time: '02:30',
+  limit: 0,
+  steps: Object.freeze({ reconcile: true, enrich: true, tagMoods: true, analyze: true }),
+});
+
+export const taggerAutoTimeSchema = z
+  .unknown()
+  .superRefine((raw, ctx) => {
+    if (typeof raw !== 'string' || !TAGGER_AUTO_TIME_RE.test(raw)) {
+      ctx.addIssue({ code: 'custom', message: 'tagger.auto.time must be HH:MM (24-hour)' });
+    }
+  })
+  .transform((raw) => raw as string);
+
+// Each field schema is named once: the POST /settings patch (partial, with
+// settingsBlockOf's leniency) and the Run tab's form (the whole block, through
+// useZodForm) are both built from these, so neither restates a rule.
+const taggerAutoStepsShape = {
+  reconcile: settingsBoolLike(),
+  enrich: settingsBoolLike(),
+  tagMoods: settingsBoolLike(),
+  analyze: settingsBoolLike(),
+};
+const taggerAutoFieldsShape = {
+  mode: settingsStrictOneOf(
+    SETTINGS_TAGGER_AUTO_MODES,
+    `tagger.auto.mode must be one of: ${SETTINGS_TAGGER_AUTO_MODES.join(', ')}`,
+  ),
+  time: taggerAutoTimeSchema,
+  limit: settingsIntLike(
+    TAGGER_AUTO_LIMIT_BOUNDS,
+    `tagger.auto.limit must be int in [${TAGGER_AUTO_LIMIT_BOUNDS.min}, ${TAGGER_AUTO_LIMIT_BOUNDS.max}] (0 = all untagged)`,
+  ),
+};
+
+export const taggerPatchSchema = settingsBlockOf({
+  auto: settingsBlockOf({ ...taggerAutoFieldsShape, steps: settingsBlockOf(taggerAutoStepsShape) }),
+});
+
+/** The whole `tagger.auto` block, as the admin card edits and posts it. */
+export const taggerAutoFormSchema = z.object({
+  ...taggerAutoFieldsShape,
+  steps: z.object(taggerAutoStepsShape),
 });
 
 export const streamPatchSchema = settingsBlockOf({
@@ -969,6 +1157,7 @@ export const djBehaviourPatchSchema = settingsBlockOf({
   showWelcome: z.boolean({ error: 'djBehaviour.showWelcome must be a boolean' }),
   previewNextShow: z.boolean({ error: 'djBehaviour.previewNextShow must be a boolean' }),
   sameHostAcknowledgement: z.boolean({ error: 'djBehaviour.sameHostAcknowledgement must be a boolean' }),
+  holdDuckBetweenSpeakers: z.boolean({ error: 'djBehaviour.holdDuckBetweenSpeakers must be a boolean' }),
   extendedSleeveNotes: z.boolean({ error: 'djBehaviour.extendedSleeveNotes must be a boolean' }),
   releaseYearMentions: z.enum(['regular', 'occasional', 'rare'], {
     error: 'djBehaviour.releaseYearMentions must be regular, occasional or rare',
@@ -1026,6 +1215,7 @@ export const audioPatchSchema = settingsBlockOf({
     { min: 1, max: 1000 },
     'audio.stemCacheGb must be between 1 and 1000',
   ),
+  stemOrphanPurgeEnabled: settingsBoolLike(),
   analyzeQuietMinutes: settingsNumberFloorLike(
     { min: 1, max: 120 },
     'audio.analyzeQuietMinutes must be between 1 and 120',
@@ -1073,6 +1263,10 @@ export const lyricsPatchSchema = settingsBlockOf({
   lrclib: settingsBoolLike(),
 });
 
+export const musicSourcePatchSchema = settingsBlockOf({
+  reportRealPath: settingsBoolLike(),
+});
+
 export const searchPatchSchema = settingsBlockOf({
   provider: settingsStrictOneOf(
     SETTINGS_SEARCH_PROVIDERS,
@@ -1101,7 +1295,7 @@ export const searchPatchSchema = settingsBlockOf({
       }
     })
     .transform((raw) => String(raw).trim()),
-  apiKey: settingsRawStringLike(200, 'search.apiKey must be 0-200 chars'),
+  apiKey: settingsRawStringLike(200, 'search.apiKey must be 0-200 chars').transform(stripSecretControlChars),
   // Optional comma-separated SearXNG engine pin (#1353), appended as the
   // `engines=` query param when non-empty. New field, so it takes the trimmed
   // posture rather than search.apiKey's raw one — there is no stored behaviour
@@ -1115,15 +1309,15 @@ export const searchPatchSchema = settingsBlockOf({
 const scrobbleLastfmSchema = settingsBlockOf({
   enabled: settingsBoolLike(),
   username: settingsTrimmedString(40, 'scrobble.lastfm.username must be 0-40 chars'),
-  apiKey: settingsTrimmedString(200, 'scrobble.lastfm.apiKey must be 0-200 chars'),
-  apiSecret: settingsTrimmedString(200, 'scrobble.lastfm.apiSecret must be 0-200 chars'),
-  sessionKey: settingsTrimmedString(200, 'scrobble.lastfm.sessionKey must be 0-200 chars'),
+  apiKey: settingsTrimmedString(200, 'scrobble.lastfm.apiKey must be 0-200 chars').transform(stripSecretControlChars),
+  apiSecret: settingsTrimmedString(200, 'scrobble.lastfm.apiSecret must be 0-200 chars').transform(stripSecretControlChars),
+  sessionKey: settingsTrimmedString(200, 'scrobble.lastfm.sessionKey must be 0-200 chars').transform(stripSecretControlChars),
 });
 
 const scrobbleListenbrainzSchema = settingsBlockOf({
   enabled: settingsBoolLike(),
   username: settingsTrimmedString(40, 'scrobble.listenbrainz.username must be 0-40 chars'),
-  userToken: settingsTrimmedString(200, 'scrobble.listenbrainz.userToken must be 0-200 chars'),
+  userToken: settingsTrimmedString(200, 'scrobble.listenbrainz.userToken must be 0-200 chars').transform(stripSecretControlChars),
   // No trailing-slash strip: the consumer appends /submit-listens.
   baseUrl: settingsUrlLike({
     max: 500,
@@ -1417,6 +1611,105 @@ export const SETTINGS_FESTIVAL_DESCRIPTION_MAX = 200;
 // ceiling is deliberately low: past a fortnight a "festival window" is just a
 // season, which is what moodSchedule is for.
 export const SETTINGS_FESTIVAL_WINDOW_DAYS_MAX = 14;
+// A festival with an end date (#2112) runs month/day through endMonth/endDay
+// inclusive, wrapping past New Year when the end falls earlier in the year,
+// and windowDays does not apply to it. The cap is higher than the window's
+// because operators asked for their own start and stop dates around a season
+// (a family's Christmas from late November into January), but it still stops
+// a festival from standing in for moodSchedule all year: while one is active
+// its mood outranks weather and time of day in dominantMood.
+export const SETTINGS_FESTIVAL_RANGE_DAYS_MAX = 60;
+
+// Feb has 29 so a range is measured on the longest calendar it can span.
+const FESTIVAL_DAYS_IN_MONTH = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+function festivalDayOfYear(month: number, day: number): number {
+  let n = day;
+  for (let i = 0; i < month - 1; i++) n += FESTIVAL_DAYS_IN_MONTH[i] ?? 31;
+  return n;
+}
+
+function festivalMonthDayOk(month: unknown, day: unknown): boolean {
+  return Number.isInteger(month)
+    && (month as number) >= 1 && (month as number) <= 12
+    && Number.isInteger(day)
+    && (day as number) >= 1
+    && (day as number) <= (FESTIVAL_DAYS_IN_MONTH[(month as number) - 1] ?? 31);
+}
+
+/** Days a start/end pair covers, both ends counted. An end before the start wraps the year. */
+export function festivalRangeDays(
+  month: number, day: number, endMonth: number, endDay: number,
+): number {
+  const span = festivalDayOfYear(endMonth, endDay) - festivalDayOfYear(month, day);
+  return (span < 0 ? span + 366 : span) + 1;
+}
+
+/**
+ * A festival's end date, or null when it is a single day (± window). The one
+ * read of endMonth/endDay for every caller: a half-set, malformed or
+ * over-long end, which only a hand-edited settings.json can hold, reads as
+ * absent, so that festival keeps today's single-day behaviour.
+ */
+export function festivalEnd(f: {
+  month?: unknown; day?: unknown; endMonth?: unknown; endDay?: unknown;
+}): { month: number; day: number } | null {
+  if (f.endMonth == null || f.endDay == null) return null;
+  const month = Number(f.month);
+  const day = Number(f.day);
+  const endMonth = Number(f.endMonth);
+  const endDay = Number(f.endDay);
+  if (!festivalMonthDayOk(month, day) || !festivalMonthDayOk(endMonth, endDay)) return null;
+  if (festivalRangeDays(month, day, endMonth, endDay) > SETTINGS_FESTIVAL_RANGE_DAYS_MAX) return null;
+  return { month: endMonth, day: endDay };
+}
+
+const FESTIVAL_DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Is the festival on, on this calendar date (the station's local date)? The
+ * one rule for the controller (getFestivalContext) and the admin panel's
+ * "now" badge.
+ *
+ * A single-day festival compares real dates, so its window spans month and
+ * year boundaries, and a Feb 29 date rolls to Mar 1 in a common year
+ * (Date.UTC). A ranged one compares month/day keys like the blocklist's
+ * seasonal window: a Feb 29 start begins Mar 1 in a common year, and a Feb 29
+ * end ends on Feb 28. A range of one day is that single day, window ignored.
+ */
+export function festivalActiveOn(
+  f: { month: number; day: number; windowDays?: number; endMonth?: unknown; endDay?: unknown },
+  today: { year: number; month: number; day: number },
+): boolean {
+  const end = festivalEnd(f);
+  if (end) {
+    const k = today.month * 100 + today.day;
+    const from = f.month * 100 + f.day;
+    const to = end.month * 100 + end.day;
+    // A one-day range is that day with no window, judged below like any
+    // single day: a Feb 29 → Feb 29 range would otherwise start Mar 1 and end
+    // Feb 28, and never be on in a common year.
+    if (from !== to) return from <= to ? k >= from && k <= to : k >= from || k <= to;
+  }
+  const window = end ? 0 : f.windowDays || 0;
+  const t = Date.UTC(today.year, today.month - 1, today.day);
+  // Adjacent years cover a window reaching across Dec 31 / Jan 1.
+  for (const yy of [today.year - 1, today.year, today.year + 1]) {
+    if (Math.abs(Date.UTC(yy, f.month - 1, f.day) - t) <= window * FESTIVAL_DAY_MS) return true;
+  }
+  return false;
+}
+
+export type SettingsFestival = {
+  month: number;
+  day: number;
+  name: string;
+  mood: string;
+  description: string;
+  windowDays: number;
+  endMonth?: number;
+  endDay?: number;
+};
 
 export function festivalsSchema(ctx: SettingsMoodContext) {
   const names = ctx.moodNames ? new Set(ctx.moodNames) : null;
@@ -1489,11 +1782,44 @@ export function festivalsSchema(ctx: SettingsMoodContext) {
             `festivals[${i}].windowDays must be an integer 0-${SETTINGS_FESTIVAL_WINDOW_DAYS_MAX}`,
             'windowDays',
           );
+          return;
+        }
+        // Optional end date (#2112): both or neither. null/undefined is
+        // "no end", so a festival saved before this field is unchanged.
+        const hasEndMonth = f.endMonth != null;
+        const hasEndDay = f.endDay != null;
+        if (!hasEndMonth && !hasEndDay) return;
+        if (!hasEndMonth || !hasEndDay) {
+          add(
+            `festivals[${i}] needs both endMonth and endDay, or neither`,
+            hasEndMonth ? 'endDay' : 'endMonth',
+          );
+          return;
+        }
+        const endMonth = Number(f.endMonth);
+        if (!Number.isInteger(endMonth) || endMonth < 1 || endMonth > 12) {
+          add(`festivals[${i}].endMonth must be an integer 1-12`, 'endMonth');
+          return;
+        }
+        const endDaysInMonth = FESTIVAL_DAYS_IN_MONTH[endMonth - 1] ?? 31;
+        const endDay = Number(f.endDay);
+        if (!Number.isInteger(endDay) || endDay < 1 || endDay > endDaysInMonth) {
+          add(
+            `festivals[${i}].endDay must be an integer 1-${endDaysInMonth} for month ${endMonth}`,
+            'endDay',
+          );
+          return;
+        }
+        if (festivalRangeDays(month, day, endMonth, endDay) > SETTINGS_FESTIVAL_RANGE_DAYS_MAX) {
+          add(
+            `festivals[${i}] may run at most ${SETTINGS_FESTIVAL_RANGE_DAYS_MAX} days, start and end included`,
+            'endDay',
+          );
         }
       });
     })
     .transform((raw) =>
-      (raw as Array<Record<string, unknown>>).map((f) => ({
+      (raw as Array<Record<string, unknown>>).map((f): SettingsFestival => ({
         month: Number(f.month),
         day: Number(f.day),
         name: String(f.name ?? '').trim(),
@@ -1503,6 +1829,11 @@ export function festivalsSchema(ctx: SettingsMoodContext) {
             ? f.description.trim().slice(0, SETTINGS_FESTIVAL_DESCRIPTION_MAX)
             : '',
         windowDays: Number(f.windowDays ?? 0),
+        // Present only on a ranged festival, so a single-day one saves
+        // exactly the shape it always has.
+        ...(f.endMonth != null && f.endDay != null
+          ? { endMonth: Number(f.endMonth), endDay: Number(f.endDay) }
+          : {}),
       })),
     );
 }

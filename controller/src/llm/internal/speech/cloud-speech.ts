@@ -203,8 +203,12 @@ function isoCodeFor(name: string): string | null {
 // layered on as a pronunciation directive (#558). ElevenLabs honours only an ISO
 // `language` code, so the soul can't ride there, and openai-compatible servers
 // vary too much to hint at all. No soul and no language → {}.
-function deliveryHint(
-  { language, soul }: { language?: string; soul?: string },
+//
+// A multilingual persona (`alsoSpeaks`, resolved by settings.personaLanguages)
+// must not be pinned to one language: an ElevenLabs code is omitted so the
+// model reads each script as written, and OpenAI is told the line is mixed.
+export function deliveryHint(
+  { language, soul, alsoSpeaks = [] }: { language?: string; soul?: string; alsoSpeaks?: string[] },
   provider: string,
   model: string,
 ): { instructions?: string; language?: string } {
@@ -218,10 +222,12 @@ function deliveryHint(
     if (!/gpt-4o.*tts/i.test(String(model || ''))) return {};
     const parts: string[] = [];
     if (character) parts.push(`Convey this character in your tone and delivery: ${character}.`);
-    if (lang) parts.push(`Speak entirely in ${lang}, using natural, native ${lang} pronunciation and accent. Do not read the text with an English accent.`);
+    if (alsoSpeaks.length) parts.push(`The text mixes ${[lang || 'English', ...alsoSpeaks].join(', ')}. Pronounce each language with its own natural, native pronunciation and accent.`);
+    else if (lang) parts.push(`Speak entirely in ${lang}, using natural, native ${lang} pronunciation and accent. Do not read the text with an English accent.`);
     return parts.length ? { instructions: parts.join(' ') } : {};
   }
   if (provider === 'elevenlabs') {
+    if (alsoSpeaks.length) return {};
     const iso = isoCodeFor(lang);
     return iso ? { language: iso } : {};
   }
@@ -323,7 +329,7 @@ export function isConfigured(providerOverride: string | null = null) {
 // provider + voice while still sharing the global model + apiKey from Settings.
 export async function speak(
   text: string,
-  { outPath, cloudOverride = null, speedScale, language, soul, signal }: { outPath?: string; cloudOverride?: any; speedScale?: number; language?: string; soul?: string; signal?: AbortSignal } = {},
+  { outPath, cloudOverride = null, speedScale, language, alsoSpeaks, soul, signal }: { outPath?: string; cloudOverride?: any; speedScale?: number; language?: string; alsoSpeaks?: string[]; soul?: string; signal?: AbortSignal } = {},
 ) {
   if (!text || !text.trim()) throw new Error('Empty TTS text');
   const base = cloudCfg();
@@ -418,7 +424,7 @@ export async function speak(
     ...(rate.body != null ? { speed: rate.body } : {}),
     // Persona character (soul) + language → provider-native delivery hint
     // (issues #579 / #558).
-    ...deliveryHint({ language, soul }, c.provider, c.model),
+    ...deliveryHint({ language, soul, alsoSpeaks }, c.provider, c.model),
     // ElevenLabs gates 44.1 kHz PCM/WAV behind paid tiers — a free/lower-tier
     // key 403s ("Forbidden") on pcm_44100. mp3 is allowed on every tier and
     // OpenAI honours it too, so it's the safe cross-provider request.

@@ -263,6 +263,14 @@ for (const text of ['Play some soul, avoid stadium rock', 'Play soul with no met
   });
 }
 
+test('an omitted bare-decade era cannot queue a track', async () => {
+  modelOutput = { genre: 'rock' };
+  const result = await submit('Play some rock from the 80s, for my brother');
+  assert.equal(result.outcome, 'unsupported');
+  assert.deepEqual(requestLog.snapshot(1)[0].unsupported, ['era']);
+  assert.equal(queue.upcoming.length, 0);
+});
+
 for (const title of ['Anything But Love', 'Other Than This']) {
   test(`an exclusion-like title still reaches the queue: ${title}`, async () => {
     catalogueSongs = [{ ...exact, title }];
@@ -278,6 +286,19 @@ test('model-detected unsupported conditions survive an otherwise empty plan', as
   const result = await submit('Play the one we discussed earlier');
   assert.equal(result.outcome, 'unsupported');
   assert.equal(queue.upcoming.length, 0);
+});
+
+test('a dedication the model files under unsupported still queues a track (#2133)', async () => {
+  modelOutput = { kind: 'track', unsupported: ['dedication'], mood: 'reflective', search_terms: [], scope: 'song',
+    intent: 'A song in memory of an aunt.', ack: 'Sending this one out with love.' };
+  const result = await submit('Dedicate a song to my favorite Aunt that just passed away. Aunty Mary, I will miss you…');
+  assert.equal(result.status, 'resolved');
+  assert.notEqual(result.outcome, 'unsupported');
+  assert.equal(queue.upcoming.length, 1);
+  const logged = requestLog.snapshot(1)[0];
+  assert.deepEqual(logged.unsupported, []);
+  assert.deepEqual(logged.ignoredUnsupported, ['dedication']);
+  assert.ok(queue.djLog.some(line => /unsupported label\(s\).*ignored: dedication/.test(line.message)));
 });
 
 test('the exclusion backstop still works when interpretation fails', async () => {

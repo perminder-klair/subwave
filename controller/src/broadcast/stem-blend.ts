@@ -8,10 +8,13 @@ import { config } from '../config.js';
 import * as settings from '../settings.js';
 import * as analyzer from '../music/analyzer.js';
 import * as db from '../music/library-db.js';
+import * as library from '../music/library.js';
 import * as mix from '../music/mix.js';
 import * as loudness from '../music/loudness.js';
 import * as stemCache from '../music/stem-cache.js';
-import { readPidfile, isPidAlive } from '../music/tagger-lock.js';
+import { bulkPassRunning } from '../music/tagger-lock.js';
+import { separationInFlight } from './pick-stems.js';
+import { renderStandsDown } from './pick-stems-policy.js';
 import { HARD_DEADLINE_SEC } from './drain-policy.js';
 import { CLIP_SEAM_CROSS_SEC, clipSeamCues, type ClipSeamCues } from './stem-seam.js';
 
@@ -38,19 +41,19 @@ function transitionsDir(): string {
   return path.join(config.stateDir, 'transitions');
 }
 
-// A bulk pass holds the single-flight analyzer worker for minutes; a render would
-// only time out behind it. The pidfile is that pass's own lock.
-function bulkPassRunning(): boolean {
-  try {
-    const info = readPidfile();
-    return !!info && isPidAlive(info.pid);
-  } catch {
-    return false;
-  }
+// bars/outro/lufs are never on the slim track objects, so they resolve from
+// library.db here. The outgoing `outro` comes from library.get()'s projection,
+// the one place music/tail-levels.ts applies transitions.tailFromCurve, so the
+// blend reads the same tail level readings (`startMs`, `lufs`) as the queue's
+// ending, exit canvas and audible-end cut. Off, that projection is the stored
+// outro, so a blend reads exactly what it did.
+export function blendSides(outId: string, inId: string) {
+  const out = db.getTrack(outId);
+  const inn = db.getTrack(inId);
+  if (!out || !inn) return null;
+  return { out: { ...out, outro: library.get(outId)?.outro ?? out.outro }, inn };
 }
 
-// bars/outro/lufs are never on the slim track objects, so they resolve from
-// library.db here.
 export async function maybeRenderBlend(
   outTrack: BlendTrack,
   inTrack: BlendTrack,
@@ -67,11 +70,13 @@ export async function maybeRenderBlend(
   // unconditional: the clip is rendered from the successor's head window starting
   // at zero, so a trimmed leading blank would be baked into the seam.
   if (opts.inHeadTrimmed) return null;
+  // A bulk pass holds the single-flight analyzer worker for minutes; a render would
+  // only time out behind it. The pidfile is that pass's own lock.
   if (bulkPassRunning()) return null;
 
-  const out = db.getTrack(outTrack.id);
-  const inn = db.getTrack(inTrack.id);
-  if (!out || !inn) return null;
+  const sides = blendSides(outTrack.id, inTrack.id);
+  if (!sides) return null;
+  const { out, inn } = sides;
   // Alignment data both sides. The render re-checks all of it; these gates only
   // avoid pointless round-trips.
   if (!out.outro?.bars?.length || !out.durationSec || !inn.bars?.length) return null;
@@ -86,6 +91,17 @@ export async function maybeRenderBlend(
     stemCache.hasWindow(inTrack.id, 'head'),
   ]);
   if (!haveTail || !haveHead) return null;
+  // A pick-time separation (broadcast/pick-stems.ts) holds a worker for a
+  // minute or more. Only a cache hit gets this far, so this costs exactly the
+  // seams that would have blended; with one worker the render would lose the
+  // blend anyway, after holding the sender for its whole budget, and a spare
+  // pool member serves it at once (pick-stems-policy.ts renderStandsDown).
+  if (renderStandsDown({
+    separating: separationInFlight(),
+    backend: analyzer.backendLabel(),
+    concurrency: config.analyzer.concurrency,
+    sidecarConcurrency: analyzer.sidecarConcurrency(),
+  })) return null;
 
   // The render must lose the race to the drain's hard fallback, so it gets the
   // window to the hard deadline minus a write/stamp margin, capped by the render

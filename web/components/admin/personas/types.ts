@@ -13,12 +13,24 @@ export interface PersonaTts {
   speed: number;
 }
 
+// The persona's own rescue voice (#2029): what its lines take when its own
+// engine fails, tried before the station Fallback voice. Engine + voice only —
+// no level trims, credentials stay station-wide. Mirrors the controller's
+// PersonaFallbackVoice (schemas/persona.ts).
+export interface PersonaFallbackVoice {
+  engine: string;
+  cloudProvider: string;
+  voice: string;
+}
+
 export interface Persona {
   id: string;
   name: string;
   tagline: string;
   frequency: string;
   scriptLength: string;
+  identMode: 'improvise' | 'verbatim';
+  identLines: string[];
   // Back-announces, teases what's next and runs callbacks across the session.
   djMode: boolean;
   // 'announce' limits the link to exactly "This is <artist>." / "Next up,
@@ -34,10 +46,15 @@ export interface Persona {
   // directive injected server-side).
   language: string;
   voiceStyle?: string;
+  // Comma-separated languages a multilingual DJ mixes into `language`
+  // ("Japanese"). Empty = a one-language persona.
+  alsoSpeaks: string;
   // Basename like `p_abc123.png`, empty when none. The image is served from
   // /api/persona-avatar/<id>; the basename is held only so a save round-trips it.
   avatar: string;
   tts: PersonaTts;
+  // null = no rescue voice of its own; the station Fallback voice applies.
+  fallbackVoice: PersonaFallbackVoice | null;
   skills: string[];
   /** Operator organisation tags: they filter and group the roster and nothing
    *  else. */

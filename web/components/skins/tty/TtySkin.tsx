@@ -189,7 +189,7 @@ export default function TtySkin(_props: SkinProps) {
   const client = useStationClient();
   const {
     nowPlaying, context, dj, activeShow, listeners, state, session,
-    trackStartedAt, timezone, locale,
+    trackStartedAt, timezone, stationTimezone, locale,
   } = usePlayerFeed();
   const { tunedIn, status, volume, muted, offline, signal } = usePlayerAudio();
   const { toggleMute } = usePlayerActions();
@@ -227,7 +227,9 @@ export default function TtySkin(_props: SkinProps) {
     setInstrument(INSTRUMENTS[(i + 1) % INSTRUMENTS.length]!.id);
   };
 
-  const period = context?.time?.period ?? (clock ? periodForHour(stationHour(clock, timezone)) : undefined);
+  // The scene's time of day is the station's, like context.time.period, so it
+  // stays put when the listener reads the clock in their own zone.
+  const period = context?.time?.period ?? (clock ? periodForHour(stationHour(clock, stationTimezone)) : undefined);
   const weather = weatherOf(context?.weather?.condition);
   const sceneId = scenePick === 'auto' ? autoSceneId(period, weather) : scenePick;
   const scene = sceneById(sceneId);

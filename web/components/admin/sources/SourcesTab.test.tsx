@@ -2,8 +2,13 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { SourcesTab } from './SourcesTab';
 import type { MusicSourceView } from './queries';
+
+// The tab carries the Navidrome Report Real Path card, which reads through a query.
+const render = (props: Parameters<typeof SourcesTab>[0]) =>
+  renderToStaticMarkup(createElement(QueryClientProvider, { client: new QueryClient() }, createElement(SourcesTab, props)));
 
 function outageView(sources: MusicSourceView['sources']): MusicSourceView {
   return {
@@ -27,11 +32,11 @@ for (const [name, sources] of [
   ['another source', [jellyfin]],
 ] satisfies Array<[string, MusicSourceView['sources']]>) {
   test(`${name}: a router outage keeps the direct escape hatch and connection form available`, () => {
-    const html = renderToStaticMarkup(createElement(SourcesTab, {
+    const html = render({
       view: outageView(sources),
       adminFetch: async () => { throw new Error('rendering must not send a request'); },
       reload: async () => {},
-    }));
+    });
     assert.match(html, />Play Navidrome directly<\/button>/);
     assert.doesNotMatch(html, /<button[^>]*\sdisabled(?:=|\s|>)[^>]*>Play Navidrome directly<\/button>/);
     assert.match(html, /id="nv-url"/);
@@ -42,11 +47,11 @@ for (const [name, sources] of [
 test('an outage keeps the direct action disabled until Navidrome credentials are complete', () => {
   const view = outageView([jellyfin]);
   view.navidrome.passSet = false;
-  const html = renderToStaticMarkup(createElement(SourcesTab, {
+  const html = render({
     view,
     adminFetch: async () => { throw new Error('rendering must not send a request'); },
     reload: async () => {},
-  }));
+  });
   assert.match(html, /<button[^>]*\sdisabled(?:=|\s|>)[^>]*>Play Navidrome directly<\/button>/);
   assert.match(html, /id="nv-pass"/);
 });

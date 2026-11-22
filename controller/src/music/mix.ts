@@ -153,12 +153,14 @@ export const CROSS_MIN_SECONDS = 6;
 export const CROSS_MAX_SECONDS = 14;
 
 // Octave-safe timing pulse (#1417): librosa doubles slow material, so halve any
-// reading at or above 110 BPM. Never multiply a low reading — that could turn a
-// genuine slow bar into a half-bar. The stored BPM is untouched.
+// reading at or above OCTAVE_FOLD_BPM. Never multiply a low reading — that could
+// turn a genuine slow bar into a half-bar. The stored BPM is untouched. The
+// tagger's tempo word reads the same line (sound-line.ts taggerSoundWords).
+export const OCTAVE_FOLD_BPM = 110;
 function timingBpm(bpm: number | null): number | null {
   if (typeof bpm !== 'number' || !Number.isFinite(bpm) || bpm <= 0) return null;
   let folded = bpm;
-  while (folded >= 110) folded /= 2;
+  while (folded >= OCTAVE_FOLD_BPM) folded /= 2;
   return folded;
 }
 
@@ -291,15 +293,49 @@ export function vocalTailFor(
   return vocalRanges.some(r => r.endMs >= windDownStartMs);
 }
 
+// The audible-end path (`opts.audibleEnd`, from silence-trim.resolveAudibleEnd:
+// the fade is cut where it stops being audible, transitions.fadeAudibleEnd).
+// The canvas then spans the wind-down up to that cut, clamped 6..12, under the
+// operator's ceiling and never longer than the track's playable span minus 1 s
+// (endSec - cueIn - 1). NO sung-tail 8 s floor, NO tail-drop shaping and NO
+// bar snap: those sized the overlap over a tail the cut has now removed, and
+// pulling it longer would put the overlap back over the near-silent end the
+// cut exists to drop (the operator's offline A/B approved exactly this).
+// The cut, from silence-trim: its end (absolute file seconds, the cueOutSec
+// the trim resolves) and the cue_in it was bounded by.
+export interface AudibleEnd {
+  endSec: number;
+  cueInSec: number | null;
+}
+
+export const AUDIBLE_END_CROSS_MIN_SECONDS = 6;
+export const AUDIBLE_END_CROSS_MAX_SECONDS = 12;
+
 export function endingCrossSecondsFor(
   a: Analysis,
   windDownSec: number | null,
-  opts: { maxSec?: number | null; tailLufs?: number | null; bodyLufs?: number | null; vocalTail?: boolean | null } = {},
+  opts: {
+    maxSec?: number | null;
+    tailLufs?: number | null;
+    bodyLufs?: number | null;
+    vocalTail?: boolean | null;
+    audibleEnd?: AudibleEnd | null;
+  } = {},
 ): number | null {
   const ending = a.ending;
   if (ending !== 'fade' && ending !== 'cold') return null;
   const maxSec = opts.maxSec;
   const ceil = typeof maxSec === 'number' && maxSec > 0 ? Math.min(maxSec, CROSS_MAX_SECONDS) : CROSS_MAX_SECONDS;
+  const ae = opts.audibleEnd;
+  if (ending === 'fade' && ae != null && Number.isFinite(ae.endSec)) {
+    let d = windDownSec != null && Number.isFinite(windDownSec) ? windDownSec : 10;
+    d = Math.max(AUDIBLE_END_CROSS_MIN_SECONDS, Math.min(AUDIBLE_END_CROSS_MAX_SECONDS, d));
+    const bound = ae.endSec - (ae.cueInSec ?? 0) - 1;
+    d = Math.min(ceil, bound, d);
+    const rounded = Math.round(d * 10) / 10;
+    // Quantised to 0.1 s like every canvas, but never rounded up past the bound.
+    return rounded > bound ? Math.floor(d * 10) / 10 : rounded;
+  }
   let secs: number;
   if (ending === 'fade') {
     secs = windDownSec != null && windDownSec > 0 ? windDownSec : 10;

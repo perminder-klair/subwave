@@ -1,0 +1,38 @@
+{
+  "success": true,
+  "data": {
+    "web": [
+      {
+        "url": "https://www.sabrinacarpenter.com/",
+        "title": "Sabrina Carpenter: Home",
+        "description": "October 29th, 2026. Sabrina Carpenter “Man's Best Friend” Out Now Stream/Download Instagram, TikTok, X, Facebook, YouTube.",
+        "position": 1
+      },
+      {
+        "url": "https://www.nytimes.com/topic/sabrina-carpenter",
+        "title": "Sabrina Carpenter",
+        "description": "Sabrina Carpenter Never Misses Her Target on 'Short n' Sweet'. The singer's new album is smart, sly and filled with fury, our critic says. August 29, 2024 ...",
+        "position": 2
+      },
+      {
+        "url": "https://www.facebook.com/sabrinacarpenter/",
+        "title": "Sabrina Carpenter",
+        "description": "Sabrina Carpenter “Man's Best Friend” 🐾 is out now featuring \"Tears\" and \"Manchild\" Public post-credits scene … band, dancers, crew, and team",
+        "position": 3
+      },
+      {
+        "url": "https://www.instagram.com/sabrinacarpenter/?hl=en",
+        "title": "Sabrina Carpenter (@sabrinacarpenter)",
+        "description": "““Man&#39;s Best Friend” out now” Sabrina. Bring Your Love - Music video out now !! Bring Your Love is out now … band, dancers, crew, and team",
+        "position": 4
+      },
+      {
+        "url": "https://people.com/sabrina-carpenter-8670814",
+        "title": "Sabrina Carpenter",
+        "description": "Sabrina Carpenter to Play Ginger Rogers. Sabrina Carpenter Pays Tribute to Dolly Parton 18 Months After Their 'Please Please Please' the show closed after just ...",
+        "position": 5
+      }
+    ]
+  },
+  "creditsUsed": 2
+}

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useSyncExternalStore } from 'react';
 import { AdminReadTimeoutError, runAdminRead } from './admin-read';
+import { adminLockedUntil } from './admin-lock';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
 const STORAGE_KEY = 'subwave_admin_auth';
@@ -15,6 +16,7 @@ export interface AdminAuth {
   auth: string | null;
   needsAuth: boolean;
   hydrated: boolean;
+  lockedUntil: number | null;
   signIn: (user: string, pass: string) => Promise<SignInResult>;
   signOut: () => void;
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
@@ -24,9 +26,10 @@ interface AuthSnapshot {
   auth: string | null;
   needsAuth: boolean;
   hydrated: boolean;
+  lockedUntil: number | null;
 }
 
-const SERVER_SNAPSHOT: AuthSnapshot = { auth: null, needsAuth: false, hydrated: false };
+const SERVER_SNAPSHOT: AuthSnapshot = { auth: null, needsAuth: false, hydrated: false, lockedUntil: null };
 let authSnapshot: AuthSnapshot = SERVER_SNAPSHOT;
 // True only when the snapshot's non-null token is known to have been read
 // from or successfully written to localStorage. If storage is unavailable,
@@ -34,15 +37,34 @@ let authSnapshot: AuthSnapshot = SERVER_SNAPSHOT;
 let authSnapshotPersisted = false;
 let browserStoreStarted = false;
 const authListeners = new Set<() => void>();
+let lockTimer: ReturnType<typeof setTimeout> | null = null;
 
-function publishAuth(next: AuthSnapshot): void {
+// A publish that doesn't name a lock ends it: only holdForLock() starts one.
+function publishAuth({ lockedUntil = null, ...rest }: Omit<AuthSnapshot, 'lockedUntil'> & { lockedUntil?: number | null }): void {
+  const next: AuthSnapshot = { ...rest, lockedUntil };
   if (
     next.auth === authSnapshot.auth
     && next.needsAuth === authSnapshot.needsAuth
     && next.hydrated === authSnapshot.hydrated
+    && next.lockedUntil === authSnapshot.lockedUntil
   ) return;
   authSnapshot = next;
   for (const listener of authListeners) listener();
+}
+
+// The lock refuses every admin read, so showing the sign-in form unmounts
+// AdminShell's QueryClient and its pollers, which would otherwise spin on 429s
+// behind a "can't reach the controller" error. The token stays: a lock says
+// nothing about it, and it is tried again the moment the lock lifts. A wrong
+// one takes the ordinary 401 path from there.
+function holdForLock(lockedUntil: number): void {
+  publishAuth({ ...authSnapshot, needsAuth: true, lockedUntil });
+  if (lockTimer) clearTimeout(lockTimer);
+  lockTimer = setTimeout(() => {
+    lockTimer = null;
+    if (authSnapshot.lockedUntil !== lockedUntil) return;
+    publishAuth({ ...authSnapshot, needsAuth: authSnapshot.auth == null, lockedUntil: null });
+  }, Math.max(0, lockedUntil - Date.now()));
 }
 
 type StoredAuth = { available: true; auth: string | null } | { available: false; auth: null };
@@ -118,6 +140,11 @@ export function useAdminAuth(): AdminAuth {
         : 'Could not reach the controller. Check the station address and your connection, then retry.' };
     }
     if (r.status === 401) return { ok: false, error: 'wrong username or password' };
+    const lockedUntil = await adminLockedUntil(r);
+    if (lockedUntil) {
+      holdForLock(lockedUntil);
+      return { ok: false, error: '' };
+    }
     if (!r.ok) return { ok: false, error: `controller error (${r.status})` };
     try {
       localStorage.setItem(STORAGE_KEY, token);
@@ -141,7 +168,14 @@ export function useAdminAuth(): AdminAuth {
     // retain the persisted fallback until the external-store effect has run.
     const token = authSnapshot.auth || readStoredAuth();
     if (token) headers.Authorization = `Basic ${token}`;
+    // Keeps a rejected fetch from opening the browser's native Basic Auth dialog.
+    headers['X-Subwave-Console'] = '1';
     const r = await fetch(`${API_URL}${path}`, { ...init, headers });
+    const lockedUntil = await adminLockedUntil(r);
+    if (lockedUntil) {
+      holdForLock(lockedUntil);
+      return r;
+    }
     if (r.status === 401) {
       // localStorage is the cross-tab source of truth even before the
       // StorageEvent lands, so read it first and re-read immediately before
@@ -171,9 +205,10 @@ export function useAdminAuth(): AdminAuth {
         authSnapshotPersisted = false;
         publishAuth({ auth: null, needsAuth: true, hydrated: true });
       }
-    } else if (token && authSnapshot.auth === token && authSnapshot.needsAuth) {
+    } else if (token && authSnapshot.auth === token && authSnapshot.needsAuth && !authSnapshot.lockedUntil) {
       // A late response for credentials already rejected must not undo the
       // shared sign-out; only the store's current token may clear this flag.
+      // A public read succeeds straight through the lock, so it can't end one.
       publishAuth({ ...authSnapshot, needsAuth: false });
     }
     return r;

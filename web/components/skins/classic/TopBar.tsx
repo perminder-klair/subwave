@@ -36,7 +36,7 @@ export default memo(function TopBar({
       // viewport-fit=cover lets the header extend under the iPhone notch. The
       // left/right max() against the baseline gutter stops landscape on a
       // notched phone clipping the wordmark.
-      className="player-topbar absolute top-0 right-0 left-0 z-30 flex flex-col gap-1 border-b border-ink bg-bg/55 pt-[calc(env(safe-area-inset-top)_+_0.625rem)] pr-[max(1rem,env(safe-area-inset-right))]
+      className="player-topbar absolute top-0 right-0 left-0 z-30 flex flex-col gap-1 border-b border-ink bg-[var(--topbar-fill)] pt-[calc(env(safe-area-inset-top)_+_0.625rem)] pr-[max(1rem,env(safe-area-inset-right))]
         pb-2.5 pl-[max(1rem,env(safe-area-inset-left))]
         backdrop-blur-xl backdrop-saturate-150
         sm:pt-[calc(env(safe-area-inset-top)_+_0.875rem)] sm:pr-[max(2rem,env(safe-area-inset-right))]

@@ -29,6 +29,10 @@ import {
 } from '../music/sourceDraft';
 import type { MusicCapabilities, RouterTestResult } from '../../../lib/schemas.generated';
 import { NavidromeConnection } from './NavidromeConnection';
+import { NavidromeRealPathCard } from '../settings/NavidromeRealPathCard';
+import { NowBanner } from '../settings/shared';
+import { Button } from '../../ui/button';
+import { useHosted } from '../HostedContext';
 import { navidromeReady, type MusicSourceView, type SaveResponse } from './queries';
 
 const NAVIDROME = 'navidrome';
@@ -54,6 +58,30 @@ interface SourcesTabProps {
 
 export function SourcesTab({ view, adminFetch, reload }: SourcesTabProps) {
   const direct = view.mode === 'navidrome';
+  // Hosted with its own library (SUB/WAVE Cloud runs Navidrome + an upload box
+  // for this station and wires the connection in): there is nothing to set here.
+  const { hosted, musicUploadUrl, musicLibraryUrl } = useHosted();
+  if (hosted && musicUploadUrl) {
+    return (
+      <Card title="Music library" sub="hosted for you">
+        <div className="grid gap-[18px]">
+          <NowBanner label={<>Music source · Managed by SUB/WAVE Cloud</>}>
+            Sign in with this station&apos;s admin username and password.
+          </NowBanner>
+          <div className="flex flex-wrap gap-3">
+            <Button asChild variant="solid">
+              <a href={musicUploadUrl} target="_blank" rel="noreferrer">Upload music</a>
+            </Button>
+            {musicLibraryUrl && (
+              <Button asChild variant="outline">
+                <a href={musicLibraryUrl} target="_blank" rel="noreferrer">Browse library</a>
+              </Button>
+            )}
+          </div>
+        </div>
+      </Card>
+    );
+  }
   return (
     <div className="grid gap-4">
       {view.failover.active && (
@@ -85,6 +113,8 @@ export function SourcesTab({ view, adminFetch, reload }: SourcesTabProps) {
           <DirectCard view={view} adminFetch={adminFetch} reload={reload} />
         </>
       )}
+
+      <NavidromeRealPathCard adminFetch={adminFetch} />
     </div>
   );
 }

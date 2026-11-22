@@ -75,11 +75,24 @@ function isLiquidsoapReachable(timeoutMs = 800): Promise<boolean> {
   });
 }
 
+const mixerRestartListeners = new Set<() => void>();
+
+// Told as a restart starts and again once it has landed: whatever was known
+// about the running mixer says nothing about the one that comes back.
+export function onMixerRestart(listener: () => void): void {
+  mixerRestartListeners.add(listener);
+}
+
+function mixerRestarting(): void {
+  for (const listener of mixerRestartListeners) listener();
+}
+
 export async function restartLiquidsoap() {
   // sendCommand resolving is NOT proof the restart landed — the telnet socket
   // can close cleanly with an empty buffer. Confirm by watching the port go
   // down, and resend if it doesn't.
   invalidateStreamStatus();
+  mixerRestarting();
   let lastErr: Error | null = null;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
@@ -94,7 +107,10 @@ export async function restartLiquidsoap() {
     // so a port still accepting after the window means the command was dropped.
     const deadline = Date.now() + 8000;
     while (Date.now() < deadline) {
-      if (!(await isLiquidsoapReachable())) return; // confirmed down → restart took
+      if (!(await isLiquidsoapReachable())) { // confirmed down → restart took
+        mixerRestarting();
+        return;
+      }
       await sleep(250);
     }
   }
@@ -132,6 +148,23 @@ export async function subhttpProbeOutcome(probeId: string): Promise<ResolveProbe
   }
 }
 
+// Whether the broadcast container can read this file (radio.liq `path_readable`),
+// a different question from whether the controller can: Liquidsoap opens it. Only
+// a complete, exact answer counts. 'unknown' is a telnet failure, a timeout, or a
+// mixer older than the command, whose reply is an "ERROR: unknown command" line.
+export type PathReadable = 'yes' | 'no' | 'unknown';
+
+export async function pathReadable(path: string, timeoutMs = 2000): Promise<PathReadable> {
+  // One telnet line: a path that can't be sent on it can't be asked about.
+  if (!path || /[\r\n\0]/.test(path)) return 'unknown';
+  try {
+    const reply = await sendCommand(`path_readable ${path}`, timeoutMs, { requireComplete: true });
+    return reply === 'yes' || reply === 'no' ? reply : 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
 // `<id>.reload`, confirmed only by a complete OK. Best-effort: errors are
 // swallowed so a playlist write never fails on its reload.
 async function reloadPlaylist(id: 'auto' | 'jingles'): Promise<boolean> {
@@ -150,14 +183,33 @@ export async function reloadAutoPlaylist(): Promise<boolean> {
   return reloadPlaylist('auto');
 }
 
-// Re-read jingles.m3u, the mixer's own rotate (radio.liq `id="jingles"`). Its
-// reload_mode="watch" follows the file's inode on Liquidsoap 2.4.5, so it goes
-// deaf after the first atomic rewrite (#2008). 2.4.6 watches the directory, and
-// there the watch and this both reload, which only reshuffles the rotate. A
-// mixer without the rotate (jingleRatio 0, or the controller drawing jingles)
-// answers "unknown command": false, with nothing to reload.
+// Re-read jingles.m3u, the mixer's own rotate (radio.liq `jingles.reload`). A
+// file watch alone cannot be trusted with it (on Liquidsoap 2.4.5 it followed
+// the inode the first atomic rewrite replaced, #2008), so every write sends
+// this; radio.liq's own watch is only the backup. Between stingers the mixer
+// replaces its playlist, dropping the clip the old list had prepared, so the
+// on-air show's new list airs at the next stinger (#2367); during one it reloads
+// in place. A mixer without the rotate (jingleRatio 0, or the controller drawing
+// jingles) answers "unknown command": false, with nothing to reload.
 export async function reloadJinglesPlaylist(): Promise<boolean> {
   return reloadPlaylist('jingles');
+}
+
+// Whether the running mixer replaces its jingle playlist between stingers
+// (radio.liq `jingle_list_swap`, #2367). radio.liq registers the command whatever
+// the rotate, so a complete "unknown command" is a mixer older than the swap,
+// which applies a show's jingle list one stinger late: 'no'. 'unknown' is a
+// telnet failure, a timeout or any other reply, and says nothing either way.
+export type JingleListSwap = 'yes' | 'no' | 'unknown';
+
+export async function jingleListSwap(timeoutMs = 2000): Promise<JingleListSwap> {
+  try {
+    const reply = await sendCommand('jingle_list_swap', timeoutMs, { requireComplete: true });
+    if (reply === 'yes') return 'yes';
+    return /^ERROR: unknown command/i.test(reply) ? 'no' : 'unknown';
+  } catch {
+    return 'unknown';
+  }
 }
 
 // Whether the fallback has a track ready to air: after auto.reload the mixer's

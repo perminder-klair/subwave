@@ -32,6 +32,13 @@ export const AUDIO_EMBEDDING_DIM = 512;
 export const SQL_HAS_MOODS = `moods IS NOT NULL AND json_array_length(moods) > 0`;
 export const SQL_NO_MOODS = `(moods IS NULL OR json_array_length(moods) = 0)`;
 
+// The tail window's vocal spans and nothing else of outro_json, whose beat grids
+// must stay out of bulk reads. The json_valid guard is load-bearing: `->` throws on
+// a malformed row, and one bad outro would take the whole read with it. `->`, not
+// json_extract: it keeps a JSON string quoted, so only a real array reads as spans.
+export const SQL_TAIL_VOCAL_RANGES =
+  `CASE WHEN json_valid(outro_json) THEN outro_json -> '$.vocalRanges' END`;
+
 let db: Database.Database | null = null;
 let currentEmbeddingDim: number | null = null;
 // Minted per open(), so change tokens from different handles are never

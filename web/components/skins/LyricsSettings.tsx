@@ -35,6 +35,10 @@ export function usePopoverDismiss(
     };
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
+      // The key is spent: a skin's own Escape shortcut (useKeyboardShortcuts
+      // stands down on a prevented key) must not also act on this press, and
+      // by the time it hears it the popover has already re-rendered shut.
+      event.preventDefault();
       close();
       triggerRef.current?.focus();
     };

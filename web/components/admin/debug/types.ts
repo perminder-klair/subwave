@@ -208,6 +208,8 @@ export interface DebugContext {
   time?: { period?: string; mood?: string; vibe?: string; show?: string };
   weather?: {
     condition?: string;
+    // The forecast's own wording ("mainly clear"), which the spoken line uses.
+    detail?: string | null;
     mood?: string | null;
     temp?: number | null;
     tempUnit?: string;

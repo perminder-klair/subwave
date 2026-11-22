@@ -31,10 +31,26 @@
 #       Regression check — the plain crossfade's equal-power curve (J4) holds the
 #       level mid-cross where linear dips ~3 dB, and only song-to-song seams take
 #       it. Lifts equal_power_fade and the equal_power_seam rule from radio.liq.
+#   scripts/fx-render-test.sh ampgain
+#       Regression check — a transition gain must ignore the incoming track's
+#       liq_amplify (every amplify in dj_transition passes override=null). Lifts
+#       the sweep's incoming side and renders it with an annotated incoming.
 #   scripts/fx-render-test.sh jingledry
 #       Regression check — a stinger shorter than the crossfade must air dry at
 #       full level, not as its own fade-in under the outgoing track. Lifts the
 #       seam block and the jingle mark from radio.liq.
+#   scripts/fx-render-test.sh sweepstep
+#       Regression check — the sweep must not step the level when it engages,
+#       must hold the blend within 1 dB of the linear plain crossfade, and must
+#       still choke the outgoing's highs. Lifts both sweep blocks from radio.liq.
+#       A sweep seam never takes the equal-power curve, so the reference is the
+#       linear fade.
+#   scripts/fx-render-test.sh orphans
+#       Regression check — jingle seams must not leave never-started clocks
+#       behind (a_source/b_source built but unused on a jingle seam leaked ~3
+#       clocks per jingle on air). Lifts the a_source / b_source / seam blocks
+#       from radio.liq, plays tracks and jingles for ORPHANS_SECS (default 60 s,
+#       capped at 0.5 CPU) and counts `ticks: 0` clocks over the telnet.
 #
 # Output lands in .fx-render/ next to this script (gitignored).
 
@@ -211,18 +227,29 @@ def t(a, b) =
           end
         9000.0 * pow(1100.0 / 9000.0, depth)
       end
+      # Engage ramp + makeup, in lockstep with radio.liq's sweep LEVEL block.
+      def sweep_engage() =
+        e = source.elapsed(sweep_src)
+        e = if e < 0. then 0. else e end
+        t_eng = 0.06 * d
+        x = if e >= t_eng then 1.0 else e / t_eng end
+        3.0 * x * x - 2.0 * x * x * x
+      end
       def sweep_gain() =
         e = source.elapsed(sweep_src)
         e = if e < 0. then 0. else e end
-        g_max = 1.35
-        t_from = 0.30 * d
-        t_to   = 0.50 * d
-        if e <= t_from then 1.0
-        elsif e >= t_to then g_max
-        else
-          x = (e - t_from) / (t_to - t_from)
-          1.0 + (3.0 * x * x - 2.0 * x * x * x) * (g_max - 1.0)
-        end
+        g_early = 1.12
+        g_late  = 0.88
+        t_from = 0.40 * d
+        t_to   = 0.70 * d
+        g =
+          if e <= t_from then g_early
+          elsif e >= t_to then g_late
+          else
+            x = (e - t_from) / (t_to - t_from)
+            g_early + (3.0 * x * x - 2.0 * x * x * x) * (g_late - g_early)
+          end
+        1.0 + sweep_engage() * (g - 1.0)
       end
       # Parallel dry bleed, the "never goes quiet" guarantee. Wetness on cascaded
       # stages multiplies the dry path, so a wetness cap can't hold a floor; an
@@ -230,8 +257,9 @@ def t(a, b) =
       # track in the mix however deep the cutoff dives.
       swept = filter.rc(frequency=sweep_cut, mode="low", wetness=1.,
                 filter.rc(frequency=sweep_cut, mode="low", wetness=1., a_src))
-      amplify(sweep_gain, add(normalize=false,
-        [amplify(0.30, a_src), amplify(0.75, swept)]))
+      amplify(override=null, sweep_gain, add(normalize=false,
+        [amplify(override=null, fun () -> 1.0 - 0.70 * sweep_engage(), a_src),
+         amplify(override=null, fun () -> 0.75 * sweep_engage(), swept)]))
     else a_src end
   a_src =
     if blend_on then
@@ -245,7 +273,7 @@ def t(a, b) =
         30.0 * pow(1800.0 / 30.0, sxx)
       end
       blend_low = filter.rc(frequency=blend_hp, mode="low", wetness=1., a_src)
-      add(normalize=false, [a_src, amplify(-1., blend_low)])
+      add(normalize=false, [a_src, amplify(override=null, -1., blend_low)])
     else a_src end
   a_src =
     if washout_on then
@@ -298,7 +326,7 @@ def t(a, b) =
       washed = comb(delay=0.30, feedback=wash_fb, a_src)   # radio.liq's default tap
       washed = filter.rc(frequency=tail_cut, mode="low", wetness=tail_wet,
                  filter.rc(frequency=tail_cut, mode="low", wetness=tail_wet, washed))
-      amplify(wash_gain, washed)
+      amplify(override=null, wash_gain, washed)
     else a_src end
   # DISSOLVE — keep in lockstep with radio.liq's dissolve block: 4 parallel
   # combs at mutually prime delays, shared swell/hold/release feedback, ONE
@@ -357,11 +385,11 @@ def t(a, b) =
          comb(delay=0.113, feedback=diss_fb, a_src),
          comb(delay=0.151, feedback=diss_fb, a_src),
          comb(delay=0.181, feedback=diss_fb, a_src),
-         amplify(-4., a_src)])
-      washed = amplify(0.7, washed)
+         amplify(override=null, -4., a_src)])
+      washed = amplify(override=null, 0.7, washed)
       washed = filter.rc(frequency=diss_cut, mode="low", wetness=diss_wet,
                  filter.rc(frequency=diss_cut, mode="low", wetness=diss_wet, washed))
-      add(normalize=false, [a_src, amplify(diss_gain, washed)])
+      add(normalize=false, [a_src, amplify(override=null, diss_gain, washed)])
     else a_src end
   # CHOP — keep in lockstep with radio.liq's chop block: compressed clock
   # dd=min(d,10) shared with the incoming fade, accelerating gate (beat →
@@ -432,7 +460,7 @@ def t(a, b) =
           end
         g * master
       end
-      amplify(chop_gain, a_src)
+      amplify(override=null, chop_gain, a_src)
     else a_src end
   # LOOP — keep in lockstep with radio.liq's loop block: comb is a one-shot
   # feed-forward echo, so the loop is a cascade of doubling delays (taps at every
@@ -475,14 +503,14 @@ def t(a, b) =
         e = if e < 0. then 0. else e end
         if e >= d then 0.0 else 1.0 - e / d end
       end
-      gated  = amplify(loop_dry, a_src)
+      gated  = amplify(override=null, loop_dry, a_src)
       looped = comb(delay=bar, feedback=0.0, gated)
       looped = comb(delay=2.0 * bar, feedback=0.0, looped)
       looped = if 4.0 * bar < d then comb(delay=4.0 * bar, feedback=0.0, looped) else looped end
       looped = if 8.0 * bar < d then comb(delay=8.0 * bar, feedback=0.0, looped) else looped end
       looped = filter.rc(frequency=loop_cut, mode="low", wetness=loop_wet,
                  filter.rc(frequency=loop_cut, mode="low", wetness=loop_wet, looped))
-      amplify(loop_gain, looped)
+      amplify(override=null, loop_gain, looped)
     else a_src end
   b_fade = if chop_on then chop_dd else d end
   b_src = fade.in(duration=b_fade, b.source)
@@ -538,7 +566,7 @@ def t(a, b) =
       bsf = filter.rc(frequency=surf_cut, mode="low", wetness=surf_wet,
               filter.rc(frequency=surf_cut, mode="low", wetness=surf_wet, in_src))
       bsf_low = filter.rc(frequency=160., mode="low", wetness=1., bsf)
-      add(normalize=false, [bsf, amplify(bass_amt, bsf_low)])
+      add(normalize=false, [bsf, amplify(override=null, bass_amt, bsf_low)])
     else b_src end
   add(normalize=false, [a_src, b_src])
 end
@@ -1013,15 +1041,241 @@ LIQ
   echo "EQPOWER PASS — equal-power holds the level through a plain crossfade, and only song-to-song seams take it"
 }
 
+# ampgain — a transition gain must not pick up the incoming track's liq_amplify.
+# Every analysed track reaches the cross with a per-track loudness gain in its
+# `liq_amplify` metadata (applied once, before the cross, as in radio.liq).
+# Liquidsoap's `amplify` replaces its own factor with that metadata unless it
+# is called with override=null, so a gesture gain on the incoming side becomes
+# the track gain applied a second time. The sweep's bass swap is the incoming
+# gain that shows it: lifted from radio.liq, rendered with the incoming plain
+# and with liq_amplify "-6 dB", its low band (< 100 Hz) must sit exactly 6 dB
+# down (within 0.5 dB) in every 1 s window from the start of the cross to 3 s
+# after it, skipping windows under -60 dB (the fade-in's first second, where a
+# 16-bit render's quantisation floor, not the gain, sets the difference). The same block with override=null stripped is rendered too and must
+# FAIL that tolerance, so the check is proven to see the bug (the fx renders
+# elsewhere push un-annotated files and cannot).
+ampgain() {
+  mkdir -p "$WORK"
+  local radio="$HERE/../liquidsoap/radio.liq"
+  awk '/^  # SWEEP, incoming side/{on=1} on{print} on&&/^    end$/{exit}' "$radio" > "$WORK/amp-fixed.liq"
+  grep -q 'bass_amt' "$WORK/amp-fixed.liq" \
+    || { echo "AMPGAIN FAIL — could not lift the sweep's incoming side out of radio.liq"; return 1; }
+  sed 's/amplify(override=null, /amplify(/g' "$WORK/amp-fixed.liq" > "$WORK/amp-bug.liq"
+  [ -f "$WORK/amp-s.wav" ] || ffmpeg -v error -y -f lavfi -i "anullsrc=r=44100:cl=stereo" -t 20 "$WORK/amp-s.wav"
+  [ -f "$WORK/amp-b.wav" ] || ffmpeg -v error -y -f lavfi -i "anoisesrc=color=pink:seed=5:amplitude=0.25" -t 30 -ar 44100 -ac 2 "$WORK/amp-b.wav"
+  local v ann b
+  for v in fixed bug; do for ann in plain gain; do
+    b='single("/work/amp-b.wav")'
+    [ "$ann" = gain ] && b='single("annotate:liq_amplify=\"-6 dB\":/work/amp-b.wav")'
+    cat > "$WORK/amp-$v-$ann.liq" <<LIQ
+settings.frame.audio.samplerate := 44100
+d = 12.
+def tr(a, b) =
+  sweeping = true
+  b_source = fade.in(duration=d, b.source)
+$(cat "$WORK/amp-$v.liq")
+  add(normalize=false, [fade.out(duration=d, a.source), b_source])
+end
+s = amplify(override="liq_amplify", 1., sequence([once(single("/work/amp-s.wav")), once($b)]))
+s = cross(duration=d, tr, s)
+output.file(%wav, fallible=true, on_stop=shutdown, "/work/amp-$v-$ann.wav", s)
+LIQ
+    liq "amp-$v-$ann.liq" > "$WORK/amp-$v-$ann.log" 2>&1 &
+  done; done
+  wait
+  # The cross runs 8..20 s. Low band, 1 s windows 8..22 s: worst |gain - plain + 6|.
+  lowband() {
+    ffmpeg -v error -i "$WORK/amp-$1.wav" -af "lowpass=f=100,lowpass=f=100,asetnsamples=n=44100,astats=metadata=1:reset=1:measure_perchannel=none:measure_overall=RMS_level,ametadata=print:file=-" -f null - 2>/dev/null \
+      | awk -F= '/RMS_level/{v[n++]=$2} END{for(i=8;i<23;i++) printf "%s ", v[i]; print ""}'
+  }
+  worst() {
+    { lowband "$1-plain"; lowband "$1-gain"; } | awk 'NR==1{for(i=1;i<=NF;i++)a[i]=$i; n=NF} NR==2{w=0; for(i=1;i<=n;i++){if(a[i]<-60)continue; d=a[i]-$i-6; if(d<0)d=-d; if(d>w)w=d}; printf "%.2f\n", w}'
+  }
+  local wf wb
+  wf=$(worst fixed); wb=$(worst bug)
+  echo "  sweep bass swap, incoming with liq_amplify -6 dB: worst 1 s window off (plain - 6 dB) by $wf dB (radio.liq), $wb dB (override=null stripped)"
+  awk -v w="$wb" 'BEGIN{exit !(w != "" && w > 1.0)}' \
+    || { echo "AMPGAIN FAIL — the check cannot see the bug: the stripped block also holds -6 dB"; return 1; }
+  awk -v w="$wf" 'BEGIN{exit !(w != "" && w <= 0.5)}' \
+    || { echo "AMPGAIN FAIL — a transition gain on the incoming picks up its liq_amplify"; return 1; }
+  echo "AMPGAIN PASS — the incoming's liq_amplify applies once; the sweep's gains ignore it"
+}
+
+# sweepstep — the sweep must
+# not change the level when it engages, and must hold the blend within 1 dB of
+# the linear plain crossfade, while still choking the outgoing's highs. The
+# a-side and b-side sweep blocks are LIFTED from radio.liq so the harness cannot
+# drift from the mixer. Deterministic pink noise, A and B at the same level.
+sweepstep_render() { # sweepstep_render <mode dry|sweep> <out>
+  # Drop the last run's output first, so a failed render is never measured.
+  rm -f "$WORK/$2"
+  cat > "$WORK/sweepstep.liq" <<LIQ
+settings.log.stdout := true
+settings.log.level := 2
+q = request.queue(id="q")
+q.push(request.create("/work/sweepstep-a.wav"))
+q.push(request.create("/work/sweepstep-b.wav"))
+def t(a, b) =
+  d = 12.
+  sweeping = $( [ "$1" = sweep ] && echo true || echo false )
+  a_source =
+    if sweeping then fade.out(duration=d, type="log", a.source)
+    else fade.out(duration=d, a.source) end
+$(cat "$WORK/sweepstep-a.liq")
+  b_source = fade.in(duration=d, b.source)
+$(cat "$WORK/sweepstep-b.liq")
+  add(normalize=false, [a_source, b_source])
+end
+music = cross(duration=12., t, (q:source))
+output.file(%wav, fallible=true, "/work/$2", music)
+clock.assign_new(sync="none", [music])
+thread.run(delay=40., fun() -> shutdown())
+LIQ
+  local log
+  log=$(liq sweepstep.liq) || { echo "$log"; echo "SWEEPSTEP FAIL — the $1 render failed (Liquidsoap log above)"; return 1; }
+}
+
+sweepstep() {
+  local src="$HERE/../liquidsoap/radio.liq"
+  awk '/^  # SWEEP ENVELOPE/{on=1} on{print} on&&/^    end$/{exit}' "$src" > "$WORK/sweepstep-a.liq"
+  awk '/^  # SWEEP, incoming side/{on=1} on{print} on&&/^    end$/{exit}' "$src" > "$WORK/sweepstep-b.liq"
+  grep -q 'sweep_cut' "$WORK/sweepstep-a.liq" && grep -q 'surf_cut' "$WORK/sweepstep-b.liq" \
+    || { echo "SWEEPSTEP FAIL — could not lift the sweep blocks from radio.liq"; return 1; }
+  ffmpeg -v error -y -f lavfi -i "anoisesrc=color=pink:seed=1:duration=50" -af volume=-14dB -ar 44100 -ac 2 "$WORK/sweepstep-a.wav"
+  ffmpeg -v error -y -f lavfi -i "anoisesrc=color=pink:seed=2:duration=40" -af volume=-14dB -ar 44100 -ac 2 "$WORK/sweepstep-b.wav"
+  sweepstep_render dry sweepstep-dry.wav || return 1
+  sweepstep_render sweep sweepstep-sweep.wav || return 1
+  # A is 50 s and cross() buffers its final 12 s: the blend runs 38 s -> 50 s.
+  local fail=0 x0 delta
+  diff_db() { # diff_db <start> <len> [filter] — sweep minus dry, dB; fails when either side measures nothing
+    local f="${3:-anull}" a b
+    a=$(ffmpeg -hide_banner -nostats -ss "$1" -t "$2" -i "$WORK/sweepstep-dry.wav" -af "$f,astats=metadata=0:reset=0" -f null - 2>&1 | awk '/Overall/{o=1} o && /RMS level dB/{print $NF; exit}')
+    b=$(ffmpeg -hide_banner -nostats -ss "$1" -t "$2" -i "$WORK/sweepstep-sweep.wav" -af "$f,astats=metadata=0:reset=0" -f null - 2>&1 | awk '/Overall/{o=1} o && /RMS level dB/{print $NF; exit}')
+    # A short or silent render reads empty or -inf, which awk would score as a
+    # 0 dB difference and pass.
+    [[ "$a" =~ ^-?[0-9]+(\.[0-9]+)?$ && "$b" =~ ^-?[0-9]+(\.[0-9]+)?$ ]] || return 1
+    awk -v a="$a" -v b="$b" 'BEGIN { printf "%.2f", b - a }'
+  }
+  delta=$(diff_db 38.0 0.25) || { echo "SWEEPSTEP FAIL — no level measured at the engage (a render came out short or silent)"; return 1; }
+  echo "engage (first 0.25 s): ${delta} dB against the linear fade"
+  awk -v d="$delta" 'BEGIN { exit !(d >= -0.5 && d <= 0.5) }' || { echo "SWEEPSTEP FAIL — the level steps when the sweep engages"; fail=1; }
+  for x0 in 38 39 40 41 42 43 44 45 46 47 48 49; do
+    delta=$(diff_db "$x0" 1) || { echo "SWEEPSTEP FAIL — no level measured at ${x0} s (a render came out short or silent)"; return 1; }
+    echo "  ${x0}-$((x0 + 1)) s: ${delta} dB"
+    awk -v d="$delta" 'BEGIN { exit !(d >= -1.0 && d <= 1.0) }' || { echo "SWEEPSTEP FAIL — blend level off the linear fade by more than 1 dB at ${x0} s"; fail=1; }
+  done
+  # Still a sweep: the outgoing's highs are choked mid-blend.
+  # 40-42 s: the cutoff is diving while the outgoing still carries the blend
+  # (the linear fade's highs come mostly from it here); later the incoming is
+  # fully open and its own highs fill the band.
+  delta=$(diff_db 40 2 "highpass=f=4000,highpass=f=4000") || { echo "SWEEPSTEP FAIL — no high-band level measured at 40 s"; return 1; }
+  echo "highs (>4 kHz) mid-blend: ${delta} dB against the linear fade"
+  awk -v d="$delta" 'BEGIN { exit !(d <= -6.0) }' || { echo "SWEEPSTEP FAIL — the sweep no longer chokes the highs"; fail=1; }
+  [ "$fail" = 0 ] && echo "SWEEPSTEP PASS — no step at the engage, blend within 1 dB of the linear fade, highs still choked"
+  return "$fail"
+}
+
+orphans() {
+  # Liquidsoap 2.4.6 never frees an operator that was built and never wired in:
+  # it stays as its own never-started clock (`ticks: 0` in `clock.dump`) and the
+  # stream clock scans it every frame. A jingle seam reads the raw a.source /
+  # b.source, so dj_transition must not build the faded/effected a_source /
+  # b_source for it. This plays tracks and jingles through a cross with the
+  # a_source / b_source / seam blocks LIFTED from radio.liq, then counts the
+  # orphan clocks over the telnet `clock.dump` after a full GC. Before the fix
+  # this left several (1,478 on air after 8 days); after it must be zero.
+  local secs="${ORPHANS_SECS:-60}" rounds="${ORPHANS_ROUNDS:-3}" rl="$HERE/../liquidsoap/radio.liq" mark
+  [ -f "$WORK/ot.wav" ] || ffmpeg -v error -y -f lavfi -i "sine=frequency=440:duration=4" -af volume=-12dB -ar 44100 -ac 2 "$WORK/ot.wav"
+  [ -f "$WORK/oj.wav" ] || ffmpeg -v error -y -f lavfi -i "sine=frequency=1000:duration=1.2" -af volume=-12dB -ar 44100 -ac 2 "$WORK/oj.wav"
+  printf '/work/ot.wav\n' > "$WORK/orph-tracks.m3u"
+  printf '/work/oj.wav\n' > "$WORK/orph-jingles.m3u"
+  grep -E '^  (boundary_fading|jingle_out|jingle_in|washing|looping|sweeping|dissolving|chopping|blending) = ' "$rl" > "$WORK/orph-arming.liq"
+  awk '/^half_pi = /{on=1} on{print} on&&/^end$/{exit}' "$rl" > "$WORK/orph-eqfade.liq"
+  awk '/^  def flagged\(m, k\)/{on=1} on{print} on&&/liq_blend"\)$/{exit}' "$rl" > "$WORK/orph-eqrule.liq"
+  awk '/^  a_source =$/{n++} n==1{print} n==1&&/^    end$/{exit}' "$rl" > "$WORK/orph-a.liq"
+  # The first b_source is either one line (`b_source = fade.in(...)`) or an if-block.
+  awk '/^  b_source =/{ if ($0 ~ /fade\.in/) {print; exit} on=1 } on{print} on&&/^    end$/{exit}' "$rl" > "$WORK/orph-b.liq"
+  awk '/^  seam =$/{on=1} on{print} on&&/^    end$/{exit}' "$rl" > "$WORK/orph-seam.liq"
+  mark=$(grep -m1 -oE 'metadata\.map\(update=true, fun \(_\) -> \[\("subwave_jingle", "true"\)\]' "$rl")
+  [ "$(wc -l < "$WORK/orph-arming.liq")" = 9 ] && [ -n "$mark" ] && [ -s "$WORK/orph-a.liq" ] \
+    && grep -q 'def equal_power_fade' "$WORK/orph-eqfade.liq" && grep -q 'equal_power_seam =' "$WORK/orph-eqrule.liq" \
+    && grep -q "fade.in" "$WORK/orph-b.liq" && grep -q "jingle_in" "$WORK/orph-seam.liq" \
+    || { echo "ORPHANS FAIL — could not lift the arming lines / a_source / b_source / seam blocks from radio.liq"; return 1; }
+  {
+    cat <<'LIQ'
+settings.log.stdout := true
+settings.log.level := 2
+settings.server.telnet := true
+settings.server.telnet.bind_addr := "127.0.0.1"
+settings.server.telnet.port := 1234
+tracks = playlist(mode="randomize", reload_mode="never", "/work/orph-tracks.m3u")
+LIQ
+    echo "jingles = ${mark}, playlist(mode=\"randomize\", reload_mode=\"never\", \"/work/orph-jingles.m3u\"))"
+    cat <<'LIQ'
+music = rotate(weights=[1, 2], [jingles, tracks])
+jseams = ref(0)
+equal_power_crossfade = ref(true)
+%include "/work/orph-eqfade.liq"
+def t(a, b) =
+%include "/work/orph-arming.liq"
+%include "/work/orph-eqrule.liq"
+  if jingle_in or jingle_out then jseams := jseams() + 1 end
+  d = min(source.remaining(a.source), source.remaining(b.source))
+  a_fade = d
+  b_fade = d
+%include "/work/orph-a.liq"
+%include "/work/orph-b.liq"
+%include "/work/orph-seam.liq"
+  seam
+end
+music = amplify(override="liq_amplify", 1., music)
+music = cross(duration=0.5, persist_override=true, t, music)
+output.dummy(fallible=true, music)
+clock.assign_new(sync="none", [music])
+server.register("jseams", fun (_) -> string(jseams()))
+LIQ
+  } > "$WORK/orph.liq"
+  cat > "$WORK/orph-probe.sh" <<'PROBE'
+#!/usr/bin/env bash
+# runs INSIDE the liquidsoap container: orph-probe.sh <seconds>
+liquidsoap /work/orph.liq > /work/orph.log 2>&1 &
+P=$!
+q() { exec 3<>/dev/tcp/127.0.0.1/1234; printf '%s\nquit\n' "$1" >&3; timeout 20 cat <&3; exec 3>&-; }
+sleep "$1"
+q runtime.gc.full_major >/dev/null; sleep 2
+D=$(q clock.dump)
+echo "ORPHANS_RESULT jingle_seams=$(q jseams | head -1) clocks=$(grep -c 'ticks: ' <<<"$D") orphans=$(grep -c 'source.dynamic.*ticks: 0,' <<<"$D")"
+kill $P
+PROBE
+  # The leak is probabilistic (an unused operator is only left behind some of the
+  # time, 1 to 10 clocks per 200 seams measured), so one clean run proves little:
+  # run several rounds, each in its own liquidsoap, and fail if ANY round leaks.
+  local out n js r total=0 leaked=0
+  for r in $(seq 1 "$rounds"); do
+    out=$(docker run --rm --cpus 0.5 --user "$(id -u):$(id -g)" -v "$WORK":/work --entrypoint bash "$IMAGE" /work/orph-probe.sh "$secs" 2>&1) || { echo "$out"; return 1; }
+    echo "round $r: $(grep ORPHANS_RESULT <<<"$out")"
+    n=$(sed -n 's/.*orphans=\([0-9]*\).*/\1/p' <<<"$out" | tail -1)
+    js=$(sed -n 's/.*jingle_seams=\([0-9]*\).*/\1/p' <<<"$out" | tail -1)
+    [ "${js:-0}" -ge 20 ] || { echo "ORPHANS FAIL — only ${js:-0} jingle seams played in ${secs}s, the check did not exercise the leak"; return 1; }
+    total=$((total + js))
+    [ "${n:-1}" = 0 ] || leaked=$((leaked + n))
+  done
+  [ "$leaked" = 0 ] || { echo "ORPHANS FAIL — ${leaked} never-started clock(s) left behind after ${total} jingle seams in ${rounds} rounds (a jingle seam builds an operator it never uses)"; return 1; }
+  echo "ORPHANS PASS — ${total} jingle seams over ${rounds} rounds left no orphaned clocks"
+}
+
 case "${1:-}" in
   probe)  probe ;;
+  orphans) orphans ;;
   render) shift; render "$@" ;;
   loopcheck) loopcheck ;;
   loopgaps) loopgaps ;;
   jingleseam) jingleseam ;;
   jingledry) jingledry ;;
   eqpower) eqpower ;;
+  ampgain) ampgain ;;
+  sweepstep) sweepstep ;;
   xdur)   xdur ;;
   xchain) xchain ;;
-  *) echo "usage: $0 probe | render <a-audio> <b-audio> [dry|sweep|washout|both|blend|dissolve|chop|loop|all] | loopcheck | loopgaps | jingleseam | jingledry | eqpower | xdur | xchain"; exit 2 ;;
+  *) echo "usage: $0 probe | render <a-audio> <b-audio> [dry|sweep|washout|both|blend|dissolve|chop|loop|all] | loopcheck | loopgaps | jingleseam | jingledry | eqpower | ampgain | sweepstep | orphans | xdur | xchain"; exit 2 ;;
 esac

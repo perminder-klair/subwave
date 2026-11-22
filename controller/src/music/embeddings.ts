@@ -3,7 +3,7 @@
 // go through it.
 
 import { embedMany } from 'ai';
-import { isInstrumental } from './lyric-vocal.js';
+import { soundDescriptors, type TrackAcoustics } from './sound-line.js';
 import {
   embeddingModel,
   activeEmbeddingModelLabel,
@@ -19,9 +19,17 @@ import {
 } from '../llm/provider.js';
 import type { EmbeddingCfg, EmbeddingTextPrefixes } from '../llm/provider.js';
 import { moodVocab } from '../settings.js';
+import { LLM_PROVIDER_CATALOG } from '../schemas/providers.js';
 import crypto from 'node:crypto';
 
 const LYRIC_EXCERPT_CHARS = 400; // cap lyrics before they bloat the embedding text
+
+// The chat-only help's cloud row, from the catalogue so a new embedding
+// gateway is listed without a copy edit.
+const CLOUD_EMBEDDING_LABELS = LLM_PROVIDER_CATALOG
+  .filter((p) => p.kind === 'cloud' && p.embedding)
+  .map((p) => p.label)
+  .join(' / ');
 
 export interface SongMeta {
   title?: string | null;
@@ -39,21 +47,11 @@ export interface TrackEnrichment {
   lyricExcerpt?: string | null;
 }
 
-// Measured acoustics from the analyzer pass (#1246). Never the tagger's own
-// `moods` / `energy`: those are decided from these vectors, so feeding them
-// back is circular.
-export interface TrackAcoustics {
-  bpm?: number | null;
-  musicalKey?: string | null;      // Camelot code, e.g. '8A'
-  // Zero-shot CLAP moods (music/audio-moods.ts). Heavy analyzer tier only.
-  audioMoods?: string[] | null;
-  // tracks.vocal_ranges. Total sung duration determines instrumental status;
-  // null/undefined = not computed.
-  vocalRanges?: unknown[] | null;
-  vocalRangesInvalid?: boolean;
-  // The pace curve is deliberately not an input: its range (~0.02–0.5) makes a
-  // fixed threshold stamp one word on ~everything.
-}
+// The Sound: line's words live in sound-line.ts, which library-db reads too.
+export {
+  soundDescriptors, soundWords, trackAcoustics,
+  type SoundWords, type TrackAcoustics,
+} from './sound-line.js';
 
 // Bump when formatTrackText's output shape moves vectors. Recorded in
 // embedding_meta.text_format; legacy rows read as 1.
@@ -61,43 +59,6 @@ export interface TrackAcoustics {
 //   2  ... + the Sound: descriptor line + the Era: decade line (#1246)
 //   3  tolerate short vocal bleed in the instrumental descriptor (#1655)
 export const EMBED_TEXT_VERSION = 3;
-
-// Tempo as a word, not a number: "128" embeds as an arbitrary token.
-function tempoWord(bpm: number): string | null {
-  if (!Number.isFinite(bpm) || bpm <= 0) return null;   // 0 = unknown, never "very slow"
-  if (bpm < 80) return 'slow tempo';
-  if (bpm < 105) return 'mid-tempo';
-  if (bpm < 130) return 'upbeat tempo';
-  return 'fast tempo';
-}
-
-// Only the mode of a Camelot code is legible ('A' = minor, 'B' = major); the
-// tonic number stays out. Positions outside 1-12 yield null.
-function keyModeWord(camelot: string): string | null {
-  const m = /^\s*(?:[1-9]|1[0-2])\s*([AB])\s*$/i.exec(camelot);
-  if (!m) return null;
-  return m[1].toUpperCase() === 'A' ? 'minor key' : 'major key';
-}
-
-// Descriptor words for a track's measured sound, in a stable order (the same
-// input must always produce the same vector). Empty when nothing was analysed.
-export function soundDescriptors(acoustics?: TrackAcoustics | null): string[] {
-  if (!acoustics) return [];
-  const words: string[] = [];
-  for (const m of acoustics.audioMoods ?? []) {
-    const t = String(m || '').trim();
-    if (t) words.push(t);
-  }
-  const tempo = acoustics.bpm != null ? tempoWord(Number(acoustics.bpm)) : null;
-  if (tempo) words.push(tempo);
-  const mode = acoustics.musicalKey ? keyModeWord(acoustics.musicalKey) : null;
-  if (mode) words.push(mode);
-  // [] is a measurement ("no vocals found"), null is its absence.
-  if (isInstrumental(acoustics.vocalRanges, acoustics.vocalRangesInvalid) === true) {
-    words.push('instrumental');
-  }
-  return words;
-}
 
 // The Era line's decade word ('1990s'). Input is the resolved era year, never
 // raw `year`. Sub-millennium years are junk tags, not ancient recordings.
@@ -394,7 +355,7 @@ function actionableMessage(
         `  library tagger can't use it. (The DJ still works on "${provider}".)\n` +
         `  Pick an embedding-capable provider in /admin/settings → Embedding:\n` +
         `    • Ollama   — local + free (ollama pull nomic-embed-text; auto-pulled)\n` +
-        `    • OpenAI / Google / OpenRouter — cloud (needs the matching API key)\n` +
+        `    • ${CLOUD_EMBEDDING_LABELS} — cloud (needs the matching API key)\n` +
         `    • locca / openai-compatible — your own embedding server`
       );
     case 'not_embedding_model':

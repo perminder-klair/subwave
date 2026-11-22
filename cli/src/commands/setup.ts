@@ -10,6 +10,7 @@ import {
   getRootEnv,
   getRootEnvExample,
   parseEnvFile,
+  readEnvValue,
   readSetupConfig,
   writeEnvFile,
   have,
@@ -282,7 +283,7 @@ async function detectOllamaUrl(): Promise<string | null> {
 const DJ_BRAIN_BASE_URL = 'https://my.getsubwave.com/v1';
 type LlmOption = { value: LlmProvider | 'later' | 'dj-brain'; label: string; hint: string };
 const DJ_BRAIN_OPTION: LlmOption = {
-  value: 'dj-brain', label: 'SUB/WAVE DJ Brain — hosted', hint: 'no model to run — one key from my.getsubwave.com/brain, from £5/mo',
+  value: 'dj-brain', label: 'SUB/WAVE DJ Brain — hosted', hint: 'no model to run — one key from my.getsubwave.com/brain, from $6/mo',
 };
 // The catalogue by group (on your network, then vendors, then gateways), with
 // DJ Brain offered right after the Ollama default.
@@ -475,10 +476,14 @@ async function runBashSetup(env: NodeJS.ProcessEnv): Promise<void> {
   // scripts/ dir, so inline the one step that matters: state/ writable by every
   // container UID (they vary, hence 777).
   const { isCloneMode } = await import('../home.ts');
+  // Same precedence as compose: a shell export, else the install's .env. A
+  // relative path is relative to the install, as compose resolves it.
+  const stateDirRaw =
+    env.STATE_DIR?.trim() || readEnvValue(getRootEnv(), 'STATE_DIR');
+  const stateDir = resolve(getSubwaveHome(), stateDirRaw || 'state');
   if (!isCloneMode(getSubwaveHome())) {
     header('State directory perms (standalone install)');
     const { chmodSync, mkdirSync } = await import('node:fs');
-    const stateDir = env.STATE_DIR ?? resolve(getSubwaveHome(), 'state');
     mkdirSync(stateDir, { recursive: true });
     try {
       chmodSync(stateDir, 0o777);
@@ -494,7 +499,8 @@ async function runBashSetup(env: NodeJS.ProcessEnv): Promise<void> {
   await new Promise<void>((resolveP, reject) => {
     const child = spawn('bash', ['scripts/setup.sh'], {
       cwd: getSubwaveHome(),
-      env,
+      // setup.sh reads STATE_DIR from its environment only.
+      env: stateDirRaw ? { ...env, STATE_DIR: stateDir } : env,
       stdio: 'inherit',
     });
     child.on('exit', (code) => {

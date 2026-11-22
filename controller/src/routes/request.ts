@@ -27,10 +27,11 @@ import {
 } from '../middleware/ratelimit.js';
 import { validatePublicBody } from '../middleware/validate.js';
 import { listenerRequestSchema } from '../schemas/request.js';
-import { directRequestUnsupported, isRefusedOutcome, modelFreeRequest, nameSearchTerms, repairRequestMatch, requestArtistMatches, resolveDirectRequest } from '../music/request-match.js';
+import { classifyUnsupportedLabels, directRequestUnsupported, isRefusedOutcome, modelFreeRequest, nameSearchTerms, repairRequestMatch, requestArtistMatches, resolveDirectRequest } from '../music/request-match.js';
 import { requestWaitClause } from '../broadcast/queue/pure.js';
 import { matchedRequestLookups, matchedRequestStandIn } from '../util/request-claim.js';
 import { ARTIST_VARIETY_WINDOW, drawRequestCandidate } from '../broadcast/dj-agent/artist-guard.js';
+import { heldBackFromShow } from '../music/explicit-policy.js';
 
 export const router = express.Router();
 
@@ -53,11 +54,16 @@ function pruneRequests() {
   }
 }
 
+// A clean show's rule inside every draw, so a draw lands on what can air and
+// the refusal below is left for an ask with nothing else to offer. Silent:
+// heldBackForShow is the one that says so in the booth log.
+const heldBack = (song: any) => heldBackFromShow(song, settings.resolveActiveShow());
+
 // The shortcut shares identity lookup. Seed/queued tracks are excluded; recent
 // plays retain the upstream soft two-hour preference.
 async function pickMoreByArtist(artistName: string, recentIds: Set<string>, seedId?: string | null) {
   const result = await resolveDirectRequest({ artist: artistName }, {
-    catalog: subsonic, recentIds: new Set<string>(), queuedIds: queue.queuedIds(), currentId: seedId,
+    catalog: subsonic, recentIds: new Set<string>(), queuedIds: queue.queuedIds(), currentId: seedId, heldBack,
     choose: songs => {
       const fresh = songs.filter(song => !recentIds.has(song.id));
       const pool = fresh.length ? fresh : songs;
@@ -77,7 +83,7 @@ async function pickSimilarToTrack(reference, recentIds: Set<string>) {
   const exclude = new Set(recentIds);
   exclude.add(id);
   const pickFresh = (songs) => {
-    const list = (songs || []).filter((s) => s?.id && !exclude.has(s.id));
+    const list = (songs || []).filter((s) => s?.id && !exclude.has(s.id) && !heldBack(s));
     if (list.length === 0) return null;
     return list[Math.floor(Math.random() * list.length)];
   };
@@ -125,6 +131,7 @@ function recordOutcome(entry) {
       lookupErrors: entry.lookupErrors ?? [],
       interpretationFallback: entry.interpretationFallback ?? false,
       unsupported: entry.unsupported ?? [],
+      ignoredUnsupported: entry.ignoredUnsupported ?? [],
       unmetPreferences: entry.unmetPreferences ?? [],
       track: entry.pick
         ? { title: entry.pick.title, artist: entry.pick.artist, id: entry.pick.id }
@@ -179,6 +186,20 @@ function withWaitNotice(ack: string | null | undefined, trackId: string | null |
   // round, so it is the one worth naming.
   const blockLabel = [...queue.upcoming.slice(0, idx)].reverse().find(i => i.block)?.block?.label ?? null;
   return `${ack}${requestWaitClause({ waitSec: queue.airForecastSec(queue.upcoming[idx]), blockLabel })}`;
+}
+
+// A clean show holds a track tagged explicit back from listeners too. The draws
+// already go around one (heldBack), so what reaches this is an ask with nothing
+// else to offer. Checked before the intro is written, and declined by the caller
+// with the same not-found copy as the blocklist, so the reason does not leak. The
+// agent path never gets here: its scope hides these tracks from the model. Judged
+// on the show on air now, and an operator's own push does not come through this
+// route.
+function heldBackForShow(track: any): boolean {
+  const show = settings.resolveActiveShow();
+  if (!heldBackFromShow(track, show)) return false;
+  queue.log('blocked', `${track?.title} — ${track?.artist} (request held back: tagged explicit, clean show "${show?.name}")`);
+  return true;
 }
 
 // A comparison ("something like Michael Jackson", "anything like this",
@@ -276,6 +297,11 @@ async function resolveRequest(entry) {
     if (!pick) {
       return failed(`Couldn't find anything close to "${reference?.track?.title || refArtist}" in the crates.`);
     }
+    if (heldBackForShow(pick)) {
+      entry.pick = pick;
+      entry.pickSource = `${entry.pickSource}:explicit`;
+      return failed(`Couldn't find anything close to "${reference?.track?.title || refArtist}" in the crates.`);
+    }
     // The fallback can land on a different artist; phrase the ack from the pick.
     const sameArtist = requestArtistMatches(refArtist, pick);
     const ackLine = sameArtist ? `More from ${refArtist}, coming up.` : `More like that, coming up.`;
@@ -298,6 +324,7 @@ async function resolveRequest(entry) {
       queue.log('request-guard', `more-like-this intro echoed request text — ${generatedIntro.guard}`);
     }
     const introScript = generatedIntro.introScript;
+    let introDropped = false;
     const pos = await queue.push({
       track: pick, requestedBy: requester, intent: 'more_like_this', introScript,
       introKind: 'dj-speak',
@@ -305,6 +332,7 @@ async function resolveRequest(entry) {
       // otherwise re-resolve the speaker off the wall clock.
       introPersona: generatedIntro.introPersona,
       introHostSpeech: generatedIntro.introHostSpeech,
+      onStandInDropped: () => { introDropped = true; },
     });
     entry.pick = pick;
     if (pos === -2) {
@@ -323,12 +351,13 @@ async function resolveRequest(entry) {
       session.appendTurn({ role: 'dj', kind: 'request', text: dupAck, meta: { trackId: pick.id, requester } });
       return resolved({ ack: dupAck, track: { title: pick.title, artist: pick.artist }, queuePosition: null });
     }
+    const airedIntro = introDropped ? null : introScript || null;
     session.appendTurn({
       role: 'dj', kind: 'request',
-      text: introScript || ackLine,
+      text: airedIntro || ackLine,
       meta: { trackId: pick.id, requester },
     });
-    entry.introScript = introScript || null;
+    entry.introScript = airedIntro;
     return resolved({
       ack: withWaitNotice(ackLine, pick.id),
       track: { title: pick.title, artist: pick.artist },
@@ -392,6 +421,13 @@ async function resolveRequest(entry) {
     }
   }
   const unsupported = directRequestUnsupported(text, matched);
+  // Labels naming no condition ("dedication") were dropped above; keep them
+  // visible to the operator.
+  const ignoredUnsupported = matched.kind === 'chat' ? [] : classifyUnsupportedLabels(matched.unsupported).ignored;
+  if (ignoredUnsupported.length) {
+    entry.ignoredUnsupported = ignoredUnsupported;
+    queue.log('request', `matcher's unsupported label(s) name no refusable condition, ignored: ${ignoredUnsupported.join(', ')}`);
+  }
   if (unsupported.length) {
     entry.path = 'cascade';
     entry.pickSource = 'unsupported';
@@ -468,6 +504,7 @@ async function resolveRequest(entry) {
     recentIds: cdMin > 0 ? queue.recentlyPlayedIds(cdMin / 60) : new Set<string>(),
     queuedIds: queue.queuedIds(),
     currentId: queue.current?.track?.id,
+    heldBack,
     moodSongs: async mood => { await library.load(); return library.songsByMood(mood); },
     fallbackSongs: async () => {
       let moodSongs: any[] = [];
@@ -518,6 +555,12 @@ async function resolveRequest(entry) {
     session.appendTurn({ role: 'dj', kind: 'request', text: ack, meta: { trackId: pick.id, requester } });
     return resolved({ ack, track: { title: pick.title, artist: pick.artist }, queuePosition: null });
   }
+  if (heldBackForShow(pick)) {
+    entry.pick = pick;
+    entry.outcome = 'no-match';
+    entry.pickSource = `${pickSource}:explicit`;
+    return failed(sorryNoMatch(requester));
+  }
   queue.log('request', `resolved via ${pickSource} (${selection.outcome}): ${pick.title} — ${pick.artist}`);
   // Substitutions need honest fixed copy. A real match keeps the screened
   // persona-language acknowledgement; optional preference misses stay private.
@@ -553,6 +596,7 @@ async function resolveRequest(entry) {
   const introScript = generatedIntro.introScript;
 
   // 4. Enqueue. push() dedups a track a concurrent request already queued (#619).
+  let introDropped = false;
   const pos = await queue.push({
     track: pick,
     requestedBy: requester,
@@ -561,6 +605,7 @@ async function resolveRequest(entry) {
     introKind: 'dj-speak',
     introPersona: generatedIntro.introPersona,
     introHostSpeech: generatedIntro.introHostSpeech,
+    onStandInDropped: () => { introDropped = true; },
   });
   entry.pick = pick;
   if (pos === -2) {
@@ -577,14 +622,15 @@ async function resolveRequest(entry) {
     session.appendTurn({ role: 'dj', kind: 'request', text: dupAck, meta: { trackId: pick.id, requester } });
     return resolved({ ack: dupAck, track: { title: pick.title, artist: pick.artist }, queuePosition: null });
   }
+  const airedIntro = introDropped ? null : introScript || null;
   session.appendTurn({
     role: 'dj', kind: 'request',
-    text: introScript || ack || `Queued "${pick.title}".`,
+    text: airedIntro || ack || `Queued "${pick.title}".`,
     meta: { trackId: pick.id, requester },
   });
 
   entry.pickSource = pickSource;
-  entry.introScript = introScript || null;
+  entry.introScript = airedIntro;
   return resolved({
     ack: withWaitNotice(ack, pick.id),
     track: { title: pick.title, artist: pick.artist },

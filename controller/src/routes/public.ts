@@ -14,9 +14,11 @@ import { getFullContext, geocodePlace } from '../context.js';
 import { queue } from '../broadcast/queue.js';
 import * as session from '../broadcast/session.js';
 import { getStreamStatus } from '../broadcast/listeners.js';
-import { isIdle } from '../broadcast/stream-idle.js';
+import { idleWindow, isIdle } from '../broadcast/stream-idle.js';
 import { currentStarve } from '../broadcast/music-starve.js';
+import { advertisedBufferSeconds } from '../broadcast/stream-mounts.js';
 import { getSetupStatusSync } from '../setup/firstRun.js';
+import { advertisedMounts } from '../setup/hosted.js';
 import { clockDisplay, getStationTimezone, zonedParts } from '../time.js';
 import { composeBoothFeed } from '../broadcast/booth-carry.js';
 import { publicQueueState, publicSessionTurn } from '../util/public-feed.js';
@@ -250,9 +252,19 @@ router.get('/now-playing', async (req, res) => {
     // callers still get it from the same getFullContext. `spokenTime` stays.
     const publicClock: any = { ...(ctx.clock as any) };
     delete publicClock.spokenTimeOptions;
+    // The resolved show carries `topic` but never `description` (#2358): no
+    // model reads the listener blurb, so it is joined here, at the public
+    // boundary, from the stored show.
+    const publicContext: any = { ...ctx, clock: publicClock };
+    if (ctx.activeShow) {
+      publicContext.activeShow = {
+        ...(ctx.activeShow as any),
+        description: storedShowDescription(stationSettings, (ctx.activeShow as any).id),
+      };
+    }
     res.json({
       nowPlaying,
-      context: { ...ctx, clock: publicClock },
+      context: publicContext,
       dj: {
         name: persona?.name || 'Frequency',
         tagline: persona?.tagline || '',
@@ -276,11 +288,13 @@ router.get('/now-playing', async (req, res) => {
         // Seconds a listener sits behind the live edge; every timestamp here is
         // live-edge, so players subtract this for listener-time (#1114). Never
         // measure it as `buffered.end - currentTime` (that is the demux window).
-        // Operator surfaces (admin, MCP) intentionally keep live edge.
-        bufferSeconds: stationSettings.stream?.bufferSeconds ?? 22,
-        opusEnabled: stationSettings.stream?.opusEnabled === true,
-        flacEnabled: stationSettings.stream?.flacEnabled === true,
-        aacEnabled: stationSettings.stream?.aacEnabled === true,
+        // Operator surfaces (admin, MCP) intentionally keep live edge. The burst
+        // the running mounts were rendered with, not a setting saved since (#2142).
+        bufferSeconds: advertisedBufferSeconds(),
+        // The mounts the mixer runs: under a hosted station's bitrate ceiling
+        // FLAC (and AAC below its floor) is off whatever was saved, so a
+        // client is never offered a mount that isn't there.
+        ...advertisedMounts(stationSettings.stream),
       },
       // Aggregate only; the model/cost breakdown stays on admin-gated /stats.
       llmTokens: lifetimeTokenCount(),
@@ -300,14 +314,15 @@ function listenMounts(req: express.Request) {
   const origin = publicOrigin(req);
   const s = settings.get();
   const station = s.station || 'SUB/WAVE';
+  const mounts = advertisedMounts(s.stream);
   const entries = [{ url: `${origin}/stream.mp3`, title: station }];
-  if (s.stream?.opusEnabled === true) {
+  if (mounts.opusEnabled) {
     entries.push({ url: `${origin}/stream.opus`, title: `${station} (Opus)` });
   }
-  if (s.stream?.flacEnabled === true) {
+  if (mounts.flacEnabled) {
     entries.push({ url: `${origin}/stream.flac`, title: `${station} (FLAC)` });
   }
-  if (s.stream?.aacEnabled === true) {
+  if (mounts.aacEnabled) {
     entries.push({ url: `${origin}/stream.aac`, title: `${station} (AAC)` });
   }
   return { station, entries };
@@ -354,6 +369,12 @@ router.get('/listen.m3u', (req, res) => {
   res.send(lines.join('\n') + '\n');
 });
 
+// A stored show's listener blurb by id, '' when unset or the show is gone.
+function storedShowDescription(s: any, showId: unknown): string {
+  const show = (s?.shows || []).find((sh: any) => sh?.id === showId);
+  return typeof show?.description === 'string' ? show.description : '';
+}
+
 // Public-safe DJ + station info: only fields the DJ already says on air.
 router.get('/dj', async (req, res) => {
   try {
@@ -396,6 +417,8 @@ router.get('/schedule', async (req, res) => {
       id: show.id,
       name: show.name,
       topic: show.topic,
+      // The listener blurb (#2358). '' = unset: clients show `topic` instead.
+      description: show.description || '',
       // `mood` is the lead entry for older clients, derived and never stored (#929).
       moods: Array.isArray(show.moods) ? show.moods : [],
       mood: Array.isArray(show.moods) && show.moods.length ? show.moods[0] : '',
@@ -460,6 +483,12 @@ router.get('/state', (req, res) => {
     needsSetup: getSetupStatusSync().needsSetup,
     // Programme paused by the idle gate (zero listeners), not broken.
     streamIdle: isIdle(),
+    // The latest idle pause as ages in ms ({ startedMsAgo, endedMsAgo }, null
+    // before the first since boot or once withdrawn: new mounts, a status poll
+    // that cannot vouch for them, an idle command the mixer did not confirm).
+    // The web player sizes its skip over a woken station's stale silence from
+    // it (#2072).
+    streamIdleWindow: idleWindow(),
     // Music chain starved (#1300), emergency loop on air. Not streamIdle, which
     // is a deliberate pause.
     musicStarved: starve.starved,
@@ -534,6 +563,8 @@ router.post(
 // The web player's gate (#478). Same password as /listener-auth, opposite
 // failure mode: fails CLOSED whenever either privacy lock is on. Rate-limited,
 // since the caller is an arbitrary browser. The password is never logged.
+// Installed apps and the web gate read these exact answers, so they are a
+// contract (scripts/station-auth-route.test.ts).
 router.post(
   '/station-auth',
   express.json({ limit: '10kb' }),

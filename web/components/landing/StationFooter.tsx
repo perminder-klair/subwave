@@ -172,6 +172,22 @@ export default function StationFooter({ djName }: { djName?: string }) {
             className="font-semibold tracking-[inherit] text-ink hover:text-vermilion"
           >
             Buy me a coffee
+          </AnimatedLink>{' '}
+          ·{' '}
+          <AnimatedLink
+            href="https://shop.getsubwave.com/"
+            variant="arrow"
+            className="font-semibold tracking-[inherit] text-ink hover:text-vermilion"
+          >
+            Shop
+          </AnimatedLink>{' '}
+          ·{' '}
+          <AnimatedLink
+            href="https://gta.getsubwave.com/"
+            variant="arrow"
+            className="font-semibold tracking-[inherit] text-ink hover:text-vermilion"
+          >
+            Steal the Radio
           </AnimatedLink>
         </span>
       </div>

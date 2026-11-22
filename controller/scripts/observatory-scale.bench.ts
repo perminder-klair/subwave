@@ -102,6 +102,7 @@ interface SeedRow {
   beatsJson: string | null;
   barsJson: string | null;
   keyRangesJson: string | null;
+  outroJson: string | null;
   mapX: number | null;
   mapY: number | null;
 }
@@ -123,6 +124,7 @@ function makeRow(i: number, rng: () => number): SeedRow {
   let beatsJson: string | null = null;
   let barsJson: string | null = null;
   let keyRangesJson: string | null = null;
+  let outroJson: string | null = null;
   if (analysed) {
     const totalMs = durationSec * 1000;
     const spans = (n: number) =>
@@ -142,6 +144,13 @@ function makeRow(i: number, rng: () => number): SeedRow {
       { startMs: 0, endMs: totalMs >> 1, tonic: 'C', mode: 'major' },
       { startMs: totalMs >> 1, endMs: totalMs, tonic: 'A', mode: 'minor' },
     ]);
+    // The tail's verdict read parses this column; a 20 s tail grid, as stored.
+    const tailStartMs = totalMs - 20_000;
+    const tailBeats = Array.from({ length: Math.floor(20_000 / beatMs) }, (_, k) => Math.round(tailStartMs + k * beatMs));
+    outroJson = JSON.stringify({
+      startMs: tailStartMs, ending: 'fade', lufs: -16, bpm: Math.round(bpm || 120), beats: tailBeats,
+      bars: tailBeats.filter((_, k) => k % 4 === 0), vocalRanges: rng() < 0.5 ? [{ startMs: tailStartMs, endMs: tailStartMs + 8_000 }] : [],
+    });
   }
 
   return {
@@ -167,6 +176,7 @@ function makeRow(i: number, rng: () => number): SeedRow {
     beatsJson,
     barsJson,
     keyRangesJson,
+    outroJson,
     mapX: mapped ? rng() : null,
     mapY: mapped ? rng() : null,
   };
@@ -224,9 +234,9 @@ async function main() {
       INSERT INTO tracks (id, title, artist, album, year, genres, duration_sec,
         moods, energy, source, confidence, tagger_version, tagged_at,
         bpm, musical_key, analysis_confidence, analysis_version, loudness_lufs,
-        pace_json, vocal_ranges_json, structure_json, beats_json, bars_json, key_ranges_json,
+        pace_json, vocal_ranges_json, structure_json, beats_json, bars_json, key_ranges_json, outro_json,
         map_x, map_y)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 3, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 3, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const insertChunk = raw.transaction((rows: SeedRow[]) => {
       for (const r of rows) {
@@ -234,7 +244,7 @@ async function main() {
           r.id, r.title, r.artist, r.album, r.year, r.genre ? JSON.stringify([r.genre]) : null, r.durationSec,
           JSON.stringify(r.moods), r.energy, r.source, r.confidence, '2026-01-01T00:00:00Z',
           r.bpm, r.musicalKey, r.analysisConfidence, r.analysed ? 1 : null, r.loudnessLufs,
-          r.paceJson, r.vocalRangesJson, r.structureJson, r.beatsJson, r.barsJson, r.keyRangesJson,
+          r.paceJson, r.vocalRangesJson, r.structureJson, r.beatsJson, r.barsJson, r.keyRangesJson, r.outroJson,
           r.mapX, r.mapY,
         );
       }

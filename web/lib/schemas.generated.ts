@@ -330,6 +330,77 @@ export type SkipBody = z.infer<typeof skipBodySchema>;
  *  Navidrome must cost one call a minute, not twenty. */
 export const FILE_FORMAT_RETRY_MS = 60_000;
 
+// ─── from controller/src/schemas/hosted.ts ───────────────────────────────
+
+// Hosted mode (SUBWAVE_HOSTED): the rules a SUB/WAVE Cloud station shares
+// between the controller and the web admin. The controller reads the env
+// through util/env.ts with these parsers and enforces the rules on every save
+// (setup/hosted.ts); the web's server pages read the same env through the
+// generated mirror (web/lib/hosted.ts) to decide what to show. One parser per
+// variable, so the two sides can never read one value two ways.
+//
+// Each parser takes the raw, non-empty env string; an unset or empty variable
+// never reaches it (util/env.ts and web/lib/hosted.ts treat that as "unset").
+
+
+const HOSTED_FLAG_ON = ['1', 'true', 'yes', 'on'] as const;
+const HOSTED_FLAG_OFF = ['0', 'false', 'no', 'off'] as const;
+
+/** SUBWAVE_HOSTED: on or off. Any other word is malformed, never "on". */
+export const hostedFlagSchema = z
+  .string()
+  .transform((v) => v.trim().toLowerCase())
+  .pipe(z.enum([...HOSTED_FLAG_ON, ...HOSTED_FLAG_OFF], { error: 'is not one of 1/true/yes/on or 0/false/no/off' }))
+  .transform((v) => (HOSTED_FLAG_ON as readonly string[]).includes(v));
+
+/**
+ * The lowest stream ceiling a station can have. MP3 is always served and its
+ * lowest bitrate is 64 (SETTINGS_MP3_BITRATES, pinned by hosted-mode.test.ts),
+ * so a ceiling under it could not be honoured: the MP3 mount would air above it.
+ */
+export const HOSTED_MIN_BITRATE = 64;
+const HOSTED_MAX_BITRATE_LIMIT = 10_000;
+
+/**
+ * SUBWAVE_MAX_BITRATE: this station's stream ceiling, whole kbps. An
+ * unpublished hosting ceiling the box agent sets to guard the box's shared
+ * port, not a plan limit (plans sell listening hours).
+ *
+ * The box's listener ceiling (SUBWAVE_LISTENER_CAP) has no parser here on
+ * purpose: Icecast enforces it through the ICECAST_MAX_CLIENTS the box agent
+ * sets, and nothing in the controller or the admin reads or shows it.
+ */
+export const hostedMaxBitrateSchema = z
+  .string()
+  .transform((v) => v.trim())
+  .pipe(z.string().regex(/^\d+$/, 'is not a whole number of kbps'))
+  .transform(Number)
+  .pipe(z
+    .number()
+    .int()
+    .min(HOSTED_MIN_BITRATE, `must be at least ${HOSTED_MIN_BITRATE} kbps, MP3's lowest bitrate`)
+    .max(HOSTED_MAX_BITRATE_LIMIT, `must be at most ${HOSTED_MAX_BITRATE_LIMIT} kbps`));
+
+/**
+ * SUBWAVE_MUSIC_UPLOAD_URL / SUBWAVE_MUSIC_LIBRARY_URL: https only, so a stray
+ * value can't become a javascript: link on the music source page.
+ */
+export const hostedHttpsUrlSchema = z
+  .string()
+  .transform((v) => v.trim())
+  .pipe(z.string().regex(/^https:\/\/[^\s"'<>]+$/, 'is not an https URL'));
+
+/**
+ * The engines a persona or jingle voice slot may pin on a hosted station: the
+ * station default (`inherit`) and the two local engines the box runs, plus the
+ * brain's cloud voice when the station itself speaks through it (premium).
+ * Heavy engines aren't on hosted boxes, and a cloud pin on a base station would
+ * need a key of the owner's own, which hosted mode doesn't store.
+ */
+export function hostedPersonaEngines(defaultEngine: unknown): string[] {
+  return ['inherit', 'kokoro', 'piper', ...(defaultEngine === 'cloud' ? ['cloud'] : [])];
+}
+
 // ─── from controller/src/schemas/imaging.ts ──────────────────────────────
 
 // Shared imaging schemas — sfx, beds, jingles and clone voices, one contract in
@@ -535,10 +606,23 @@ export function manualTagSchema(ctx: ManualTagContext) {
 /** Floor for a plausible recording year. Mirrors musicbrainz.ts MIN_YEAR. */
 export const ORIGINAL_YEAR_MIN = 1900;
 
+/** The latest plausible recording year: next year (a pre-release), in UTC.
+ *  Read per call, not at module load, so it moves with the calendar. One window
+ *  for every year an operator types: the per-track override below, the Era
+ *  tab's one-year decision (eraOverrideSchema) and its web inputs. */
+export function originalYearMax(now: Date = new Date()): number {
+  return now.getUTCFullYear() + 1;
+}
+
+/** A whole year inside [ORIGINAL_YEAR_MIN, originalYearMax()]. */
+export function isValidOriginalYear(n: unknown, now: Date = new Date()): n is number {
+  return typeof n === 'number' && Number.isInteger(n) && n >= ORIGINAL_YEAR_MIN && n <= originalYearMax(now);
+}
+
 export function originalYearSchema() {
   // Per request, not at module load: a schema frozen at boot starts refusing
   // next January.
-  const max = new Date().getUTCFullYear() + 1;
+  const max = originalYearMax();
   return z.object({
     // Same wording and blank-string refusal as manualTagSchema: one editor
     // posts to both routes.
@@ -649,6 +733,39 @@ export interface SceneReference {
   /** The REST of this filter's own list. Empty means the orphaned values were
    *  all it had — NOT a claim that the filter now matches no tracks. */
   remaining: string[];
+}
+
+// POST /library/era/override: the Era tab's decision for one album. The album
+// is named as { album, albumArtist? } and checked by the route (which keys it
+// and refuses an unscanned album); this owns the decision and its year.
+export const ERA_VERDICTS = ['trusted', 'year', 'suspect'] as const;
+/** The three ways out of the Era list (era_override.verdict). */
+export type EraVerdict = (typeof ERA_VERDICTS)[number];
+
+export function eraOverrideSchema() {
+  return z.object({
+    album: z.unknown(),
+    albumArtist: z.unknown().optional(),
+    verdict: z.unknown().transform((raw, c) => {
+      if (raw === null || (typeof raw === 'string' && (ERA_VERDICTS as readonly string[]).includes(raw))) {
+        return raw as EraVerdict | null;
+      }
+      c.addIssue({ code: 'custom', message: "verdict must be 'trusted', 'year', 'suspect' or null" });
+      return z.NEVER;
+    }),
+    year: z.unknown().optional(),
+  }).transform((b, c) => {
+    if (b.verdict !== 'year') return { ...b, year: null };
+    if (!isValidOriginalYear(b.year)) {
+      c.addIssue({
+        code: 'custom',
+        path: ['year'],
+        message: `year must be a whole year between ${ORIGINAL_YEAR_MIN} and ${originalYearMax()}`,
+      });
+      return z.NEVER;
+    }
+    return { ...b, year: b.year };
+  });
 }
 
 // ─── from controller/src/schemas/lyrics.ts ───────────────────────────────
@@ -1206,6 +1323,11 @@ export const PERSONA_SCRIPT_LENGTHS = [
   'storyteller',
 ] as const;
 
+// Station IDs can use operator-written lines instead of improvising.
+export const PERSONA_IDENT_MODES = ['improvise', 'verbatim'] as const;
+export const PERSONA_IDENT_LINES_LIMIT = 20;
+export const PERSONA_IDENT_LINE_MAX = 300;
+
 // 'natural' (default) is the ordinary between-track link; 'announce' is exactly
 // "This is <artist>." Absent/invalid → 'natural', so an upgrade is unchanged.
 export const PERSONA_LINK_STYLES = [
@@ -1531,6 +1653,57 @@ export function repairTtsVoiceSlot(raw: unknown, opts?: { allowInherit?: boolean
   };
 }
 
+/**
+ * A persona's own RESCUE voice (#2029): the engine + voice its lines take when
+ * its own engine fails, tried before the station-wide `settings.tts.fallback`.
+ * Voice identity only. Credentials always come from the station's `tts.*`
+ * blocks, and the persona's own `tts` is never forwarded to a rescue (#1793).
+ *
+ * Same shape as the station slot: no gainDb/speed (a third trim on a rescue
+ * would be a level surprise nobody configured) and no `enabled` flag — null is
+ * "none".
+ */
+export interface PersonaFallbackVoice {
+  engine: string;
+  cloudProvider: string;
+  voice: string;
+}
+
+/** Strict `fallbackVoice`: absent/null → null, else the shared voice-slot rules
+ *  WITHOUT `inherit` (a rescue cannot follow the station, the same rule as
+ *  `tts.fallback`), projected to engine + provider + voice. */
+const personaFallbackVoice = z
+  .unknown()
+  .optional()
+  .transform((raw, ctx): PersonaFallbackVoice | null => {
+    if (raw == null) return null;
+    // An absent provider reads as 'openai' only where it is unused (every
+    // engine but cloud), so `{engine: 'gemini', voice: 'Kore'}` saves. A cloud
+    // rescue must name its provider: defaulting it would quietly point an
+    // ElevenLabs station's rescue at OpenAI.
+    const r = (typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+    const parsed = ttsVoiceSlotSchema('fallbackVoice').safeParse(
+      r.engine === 'cloud' ? r : { ...r, cloudProvider: r.cloudProvider ?? 'openai' },
+    );
+    if (!parsed.success) {
+      for (const issue of parsed.error.issues) {
+        ctx.addIssue({ code: 'custom', message: issue.message });
+      }
+      return z.NEVER;
+    }
+    const { engine, cloudProvider, voice } = parsed.data;
+    return { engine, cloudProvider, voice };
+  });
+
+/** The lenient LOAD-path twin: anything the strict field refuses becomes null.
+ *  Deliberately NOT repaired onto a piper/kokoro floor — inventing a rescue
+ *  voice the operator never chose is worse than having none. */
+export function repairPersonaFallbackVoice(raw: unknown): PersonaFallbackVoice | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const parsed = personaFallbackVoice.safeParse(raw);
+  return parsed.success ? parsed.data : null;
+}
+
 // Explicit null reads as "absent" on every OPTIONAL field; zod's `.default()`
 // fires only on undefined.
 const personaNullToUndefined = (v: unknown) => (v == null ? undefined : v);
@@ -1559,6 +1732,8 @@ export interface PersonaParsed {
   tagline: string;
   frequency: string;
   scriptLength: string;
+  identMode: 'improvise' | 'verbatim';
+  identLines: string[];
   djMode: boolean;
   linkStyle: string;
   humour: number;
@@ -1568,8 +1743,10 @@ export interface PersonaParsed {
   musicLean: string;
   language: string;
   voiceStyle: string;
+  alsoSpeaks: string;
   avatar: string;
   tts: TtsVoiceSlot;
+  fallbackVoice: PersonaFallbackVoice | null;
   skills: string[] | null;
   tags: string[];
 }
@@ -1639,6 +1816,16 @@ export const personaSchema = z
         .max(PERSONA_VOICE_STYLE_MAX, `voiceStyle must be 0-${PERSONA_VOICE_STYLE_MAX} chars`)
         .default(''),
     ),
+    // Languages a multilingual DJ mixes INTO `language`, comma-separated.
+    // '' = one language. Read only by settings/persona.ts personaLanguages.
+    alsoSpeaks: z.preprocess(
+      personaNullToUndefined,
+      z
+        .string({ error: 'alsoSpeaks must be a string' })
+        .trim()
+        .max(PERSONA_LANGUAGE_MAX, `alsoSpeaks must be 0-${PERSONA_LANGUAGE_MAX} chars`)
+        .default(''),
+    ),
     frequency: z.enum(PERSONA_FREQUENCIES, {
       error: `frequency must be one of: ${PERSONA_FREQUENCIES.join(', ')}`,
     }),
@@ -1649,6 +1836,24 @@ export const personaSchema = z
           error: `scriptLength must be one of: ${PERSONA_SCRIPT_LENGTHS.join(', ')}`,
         })
         .default('concise'),
+    ),
+    identMode: z.preprocess(
+      personaNullToUndefined,
+      z.enum(PERSONA_IDENT_MODES, {
+        error: `identMode must be one of: ${PERSONA_IDENT_MODES.join(', ')}`,
+      }).default('improvise'),
+    ),
+    identLines: z.preprocess(
+      personaNullToUndefined,
+      z.array(z.string({ error: 'identLines must contain strings' }), {
+        error: 'identLines must be an array of strings',
+      })
+        .transform(items => items.map(line => line.trim()).filter(Boolean))
+        .refine(items => items.length <= PERSONA_IDENT_LINES_LIMIT,
+          `identLines must be at most ${PERSONA_IDENT_LINES_LIMIT} lines`)
+        .refine(items => items.every(line => line.length <= PERSONA_IDENT_LINE_MAX),
+          `identLines must be at most ${PERSONA_IDENT_LINE_MAX} chars per line`)
+        .default([]),
     ),
     // Absent → false. Present must be a real boolean (unlike a show's `=== true`
     // booleans): the strict path has always refused a non-boolean here.
@@ -1688,6 +1893,7 @@ export const personaSchema = z
         .transform((v) => v ?? ''),
     ),
     tts: ttsVoiceSlotSchema('tts', { allowInherit: true }),
+    fallbackVoice: personaFallbackVoice,
     // Absent → null ("all skills", the legacy default).
     skills: z.preprocess(
       personaNullToUndefined,
@@ -1729,6 +1935,8 @@ export const personaSchema = z
       tagline: p.tagline,
       frequency: p.frequency,
       scriptLength: p.scriptLength,
+      identMode: p.identMode,
+      identLines: p.identLines,
       djMode: p.djMode,
       linkStyle: p.linkStyle,
       humour: p.humour,
@@ -1738,8 +1946,10 @@ export const personaSchema = z
       musicLean: p.musicLean,
       language: p.language,
       voiceStyle: p.voiceStyle,
+      alsoSpeaks: p.alsoSpeaks,
       avatar: p.avatar,
       tts: p.tts,
+      fallbackVoice: p.fallbackVoice,
       skills: p.skills,
       tags: p.tags,
     }),
@@ -1781,6 +1991,10 @@ export function repairPersonaForLoad(
     voiceStyle: typeof raw.voiceStyle === 'string'
       ? raw.voiceStyle.trim().slice(0, PERSONA_VOICE_STYLE_MAX)
       : undefined,
+    alsoSpeaks:
+      typeof raw.alsoSpeaks === 'string'
+        ? raw.alsoSpeaks.trim().slice(0, PERSONA_LANGUAGE_MAX)
+        : undefined,
     frequency: (PERSONA_FREQUENCIES as readonly string[]).includes(raw.frequency as string)
       ? raw.frequency
       : 'moderate',
@@ -1788,6 +2002,14 @@ export function repairPersonaForLoad(
       raw.scriptLength as string,
     )
       ? raw.scriptLength
+      : undefined,
+    identMode: (PERSONA_IDENT_MODES as readonly string[]).includes(raw.identMode as string)
+      ? raw.identMode
+      : undefined,
+    identLines: Array.isArray(raw.identLines)
+      ? raw.identLines.filter((line): line is string => typeof line === 'string')
+          .map(line => line.trim().slice(0, PERSONA_IDENT_LINE_MAX)).filter(Boolean)
+          .slice(0, PERSONA_IDENT_LINES_LIMIT)
       : undefined,
     djMode: raw.djMode === true ? true : undefined,
     linkStyle: (PERSONA_LINK_STYLES as readonly string[]).includes(raw.linkStyle as string)
@@ -1798,6 +2020,7 @@ export function repairPersonaForLoad(
         ? raw.avatar.trim()
         : undefined,
     tts: repairTtsVoiceSlot(raw.tts, { allowInherit: true }),
+    fallbackVoice: repairPersonaFallbackVoice(raw.fallbackVoice),
     // Non-array → undefined → the schema's null default ("all skills"). Renames
     // are applied here, not in the schema: a rename migrates stored data rather
     // than stating a rule a submitted value must satisfy.
@@ -1895,8 +2118,9 @@ export function repairDjPromptForLoad(
 
 /**
  * Personas that will NOT speak through the station voice `{engine, provider}` —
- * what the admin DJ Brain section warns about and its one-click fix patches to
- * 'inherit'. A persona already on `inherit` is never listed.
+ * what the admin TTS voice page warns about under a DJ Brain studio voice, and
+ * its one-click fix patches to 'inherit'. A persona already on `inherit` is
+ * never listed.
  *
  * `provider` matters: the four cloud providers share one dispatcher but are
  * independent targets, so cloud/openai does not follow an openai-compatible
@@ -2469,6 +2693,17 @@ export const LLM_PROVIDER_CATALOG: readonly LlmProviderEntry[] = [
     embedding: { defaultModel: 'openai/text-embedding-3-small', suggestions: VENDOR_PREFIXED_OPENAI_EMBEDDING_MODELS },
   },
   {
+    // Bare OpenAI ids (gpt-5.4-mini), not `vendor/model`, so OpenAI's own
+    // reasoning rule, never Requesty's: dotted GPT-5s reject 'minimal' (#2097).
+    // GET /models answers a bad or missing bearer with 401 invalid_api_key.
+    id: 'cheaperinference', label: 'Cheaper Inference', longLabel: 'Cheaper Inference (multi-vendor aggregator)',
+    blurb: 'Multi-vendor aggregator',
+    group: 'gateway', kind: 'cloud', envVar: 'CHEAPER_INFERENCE_API_KEY', keyPlaceholder: 'Cheaper Inference API key',
+    exampleModel: 'gpt-5.4-mini', cliLabel: 'Cheaper Inference — multi-vendor',
+    openaiCompatible: { baseUrl: 'https://api.cheaperinference.com/v1', reasoning: 'openaiModels' },
+    embedding: { defaultModel: 'text-embedding-3-small', suggestions: OPENAI_EMBEDDING_MODELS },
+  },
+  {
     id: 'anthropic', label: 'Anthropic', longLabel: 'Anthropic (Claude)', blurb: 'Claude · cloud',
     group: 'vendor', kind: 'cloud', envVar: 'ANTHROPIC_API_KEY', keyPlaceholder: 'sk-ant-...',
     exampleModel: 'claude-sonnet-4-5', cliLabel: 'Anthropic — Claude',
@@ -2528,6 +2763,146 @@ export const OPENAI_COMPATIBLE_GATEWAYS: readonly OpenAICompatibleGateway[] = LL
     const gw = openaiCompatibleGateway(p.id);
     return gw ? [gw] : [];
   });
+
+// ─── from controller/src/schemas/reasoning.ts ────────────────────────────
+
+// The reasoning level an LLM leg can ask for while `llm.reasoning` is on
+// (#2296), and the one predicate that says which legs can express a level.
+// Both sides read this: the controller's capability descriptors
+// (llm/internal/provider/capabilities.ts) and the admin form's picker, through
+// the web/lib/schemas.generated.ts mirror, so the picker is shown exactly where
+// the controller would send the level. Mirrored by `npm run gen:schemas`, so it
+// imports nothing.
+//
+// 'default' is today's "On": what the call sends is decided by the descriptor
+// alone, as before the field existed, on every provider but one. The
+// announced exception (#2357) is a native-Anthropic, manual-thinking Claude
+// model, whose Default is a fixed MANUAL_THINKING_DEFAULT_BUDGET rather than
+// the SDK's medium. A level is only ever read while reasoning is on, and only
+// on a leg reasoningEffortOffered() accepts; anywhere else it is kept in
+// settings but sends nothing, so a saved level survives a provider switch and
+// back.
+
+export const REASONING_EFFORTS = ['default', 'low', 'medium', 'high'] as const;
+export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
+
+export function isReasoningEffort(v: unknown): v is ReasoningEffort {
+  return typeof v === 'string' && (REASONING_EFFORTS as readonly string[]).includes(v);
+}
+
+/** Stored value → a level. Absent or unknown is 'default' (today's "On"). */
+export function normalizeReasoningEffort(v: unknown): ReasoningEffort {
+  return isReasoningEffort(v) ? v : 'default';
+}
+
+// Fixed thinking budgets for a manual-thinking Claude model (below), per level.
+// The SDK's own levels are a share of the model's max output (medium is 19,200
+// tokens on a 64k model, 9,600 on Opus 4/4.1) — far beyond a ~150-token DJ
+// line — so a level the operator picks is a small fixed budget instead
+// (LiteLLM uses the same scale).
+export const MANUAL_THINKING_BUDGETS = { low: 1024, medium: 2048, high: 4096 } as const;
+
+// What 'default' sends on a manual-thinking Claude model: Low's budget, the
+// API minimum. Until #2357 Default kept the SDK's medium (above); lowering it
+// is an announced exception to "an upgrade is byte-identical" (root
+// CLAUDE.md), applying to a stored "On" from before the field too.
+export const MANUAL_THINKING_DEFAULT_BUDGET = MANUAL_THINKING_BUDGETS.low;
+
+// A Claude model id, served only by Anthropic or a proxy/gateway in front of it.
+const CLAUDE_MODEL_RE = /(?:^|\/)claude-/i;
+export function claudeModelId(modelId: unknown): boolean {
+  return CLAUDE_MODEL_RE.test(String(modelId || ''));
+}
+
+// Gemma has no thinking mode; any reasoning field 400s it (#1044).
+const GEMMA_MODEL_RE = /(^|\/)gemma-/i;
+export function gemmaModelId(modelId: unknown): boolean {
+  return GEMMA_MODEL_RE.test(String(modelId || ''));
+}
+
+// OpenAI ids that take reasoning_effort; gpt-4-class models 400 on any effort.
+const OPENAI_REASONING_MODEL_RE = /^(o\d|gpt-5)/i;
+export function openaiReasoningModelId(modelId: unknown): boolean {
+  return OPENAI_REASONING_MODEL_RE.test(String(modelId || ''));
+}
+
+/**
+ * The SDK's max output for a Claude id that thinks on a manual budget
+ * (`supportsAdaptiveThinking: false` in @ai-sdk/anthropic's
+ * getModelCapabilities), or null for an adaptive id. Mirrors the SDK's checks
+ * in its order, so an id it treats as adaptive is never sent a budget (4.7+
+ * answer one with a 400), and any unknown `claude-*` id counts as adaptive, as
+ * the SDK does. A non-Claude id is null.
+ */
+export function manualThinkingClaudeMaxOutput(modelId: unknown): number | null {
+  const id = String(modelId || '');
+  if (!id.includes('claude-')) return null;
+  if (/claude-(?:sonnet-5|opus-5|fable-5|opus-4-8|opus-4-7|sonnet-4-6|opus-4-6)/.test(id)) return null;
+  if (/claude-(?:sonnet-4-5|opus-4-5|haiku-4-5)/.test(id)) return 64000;
+  if (id.includes('claude-opus-4-1')) return 32000;
+  if (/claude-sonnet-4(?:-|@)/.test(id)) return 64000;
+  if (/claude-opus-4(?:-|@)/.test(id)) return 32000;
+  if (id.includes('claude-3-haiku')) return 4096;
+  if (/claude-(?:instant(?:-|$)|v?2(?=$|[-.:])|3(?=$|[-.]))/.test(id)) return 4096;
+  return null;
+}
+
+export function manualThinkingClaudeModel(modelId: unknown): boolean {
+  return manualThinkingClaudeMaxOutput(modelId) != null;
+}
+
+/**
+ * The thinking budget 'default' sends on a manual-thinking Claude model
+ * (MANUAL_THINKING_DEFAULT_BUDGET), for the picker's hint. null for any other
+ * id, where Default sends no budget of SUB/WAVE's own.
+ */
+export function manualThinkingDefaultBudget(modelId: unknown): number | null {
+  return manualThinkingClaudeModel(modelId) ? MANUAL_THINKING_DEFAULT_BUDGET : null;
+}
+
+export interface ReasoningEffortLeg {
+  provider?: unknown;
+  model?: unknown;
+  compatibleMode?: unknown;
+}
+
+/**
+ * True when this leg can send a reasoning level, so the picker is shown and
+ * the descriptor reads it. `gatewayRule` is the catalogue's reasoning rule for
+ * a fixed-endpoint OpenAI-compatible gateway (Requesty and the like), looked up
+ * by the caller, since this module imports nothing.
+ *
+ * Not offered, where there is no portable level: Ollama (a level string 400s
+ * boolean-only models), local OpenAI-compatible and locca (llama.cpp/vLLM read
+ * chat_template_kwargs), a hosted OpenAI-compatible server that isn't a Claude
+ * proxy (its own thinking fields go in Request parameters, #2355), Gemma, and
+ * gpt-4-class OpenAI ids.
+ */
+export function reasoningEffortOffered(leg: ReasoningEffortLeg | null | undefined, gatewayRule?: string): boolean {
+  const provider = String(leg?.provider || '');
+  const model = leg?.model;
+  switch (provider) {
+    case 'anthropic':
+    case 'deepseek':
+    case 'openrouter':
+      return true;
+    case 'openai':
+      return openaiReasoningModelId(model);
+    case 'google':
+    case 'gateway':
+      return !gemmaModelId(model);
+    case 'openai-compatible':
+      return leg?.compatibleMode === 'hosted' && claudeModelId(model);
+    case 'ollama':
+    case 'locca':
+      return false;
+    default:
+      if (gatewayRule === 'openaiModels') return openaiReasoningModelId(model);
+      if (gatewayRule === 'minimalWhenOff') return true;
+      if (gatewayRule === 'vendorRouted') return !gemmaModelId(model);
+      return false;
+  }
+}
 
 // ─── from controller/src/schemas/request.ts ──────────────────────────────
 
@@ -2987,6 +3362,9 @@ export const BEDS_TAIL_SEC_BOUNDS: SettingsNumericBound = { min: 0, max: 15 };
 // the other side: past 30s an operator is describing a different problem
 // (a corrupt rip) than the one a cue point solves.
 export const SILENCE_TRIM_MIN_GAP_MS_BOUNDS: SettingsNumericBound = { min: 250, max: 30000 };
+// transitions.fadeAudibleEndDb: how far under the track's own loudness a fade
+// ending stops being audible (music/silence-trim.ts).
+export const FADE_AUDIBLE_END_DB_BOUNDS: SettingsNumericBound = { min: 15, max: 35 };
 
 /**
  * `parseInt(raw, 10)` + a bounds check, exactly as the hand-rolled branch did.
@@ -3183,6 +3561,21 @@ export function settingsTrimmedString(max: number, message: string) {
 }
 
 /**
+ * A control character (C0 or DEL) in a saved secret. No real key holds one, and
+ * fetch refuses a header value with a NUL, CR or LF in it, quoting the whole
+ * value in its error. Every save path strips them, as the admin form's inputs
+ * already do for line breaks, so a key pasted across a wrap through the API or
+ * a restored backup is joined rather than refused; the key probes refuse one
+ * instead (setup/secrets.ts secretValueIssue). The load path leaves a stored
+ * value alone. Defined here because a mirrored module may import only zod.
+ */
+export const SECRET_CONTROL_CHAR_RE = /[\x00-\x1F\x7F]/;
+
+export function stripSecretControlChars(value: string): string {
+  return value.replace(new RegExp(SECRET_CONTROL_CHAR_RE.source, 'g'), '');
+}
+
+/**
  * `String(raw)` with NO trim and NO nullish default — search.apiKey's posture.
  *
  * `null` becomes the four-character string 'null' and is STORED. That is not a
@@ -3232,6 +3625,32 @@ export const LLM_HEADER_VALUE_RE = /^[\x20-\x7E]+$/;
 /** At most this many custom headers per leg, and this long a value. */
 export const LLM_HEADERS_MAX = 10;
 export const LLM_HEADER_VALUE_MAX = 500;
+
+/**
+ * Free-form request-body rows, `{ key, value }`: the openai-compatible cloud
+ * TTS provider's `tts.cloud.compatParams` (#1317) and the chat legs'
+ * `llm.bodyParams` / `llm.toolCallBodyParams` (#2296). One row grammar for
+ * both, here so the admin form can pre-flight a row with the same rule the
+ * save path (`settings/compat-params.ts` `validateCompatParams`) enforces.
+ * A value that parses as a JSON literal is sent as one, anything else as a
+ * string.
+ */
+export const BODY_PARAM_KEY_RE = /^[A-Za-z_][A-Za-z0-9_.-]*$/;
+export const BODY_PARAM_MAX_ENTRIES = 20;
+export const BODY_PARAM_KEY_MAX = 60;
+export const BODY_PARAM_VALUE_MAX = 400;
+
+/**
+ * Chat body fields the station sets on every request, refused in both LLM
+ * lists at save time and skipped at send time: overriding any of them could
+ * break a forced tool call, the output cap or the hosted #1693 pairing.
+ * `max_completion_tokens` is the output cap's other spelling: the SDK sends it
+ * only for OpenAI reasoning ids, and vLLM reads it ahead of `max_tokens`.
+ */
+export const LLM_BODY_PARAM_RESERVED_KEYS = [
+  'model', 'messages', 'tools', 'tool_choice', 'stream',
+  'max_tokens', 'max_completion_tokens', 'response_format', 'stream_options',
+];
 
 // Native Google safety flags are independent per LLM leg. Only a literal true
 // enables blocking; absent or malformed flags preserve the permissive default.
@@ -3372,9 +3791,40 @@ export const SEARCH_PROVIDER_CATALOG = [
     keyName: 'Keenable', keyPlaceholder: 'keen_…', keyUrl: 'https://keenable.ai/console', keyPrefix: 'keen_',
     hint: 'Keenable web search: real web results with no signup or API key, rate limited per IP. An optional Keenable key raises the limit. SUB/WAVE caches every search for 30 minutes.',
   },
+  {
+    id: 'parallel', group: 'keyless', label: 'Parallel (no key needed)', key: 'none',
+    hint: 'Parallel web search via its anonymous MCP endpoint. No signup or key needed; free-tier rate limits apply. SUB/WAVE caches every search for 30 minutes.',
+  },
+  {
+    id: 'firecrawl', group: 'keyed', label: 'Firecrawl (API key)', key: 'required',
+    keyName: 'Firecrawl', keyPlaceholder: 'fc-…', keyUrl: 'https://www.firecrawl.dev/app/api-keys',
+    hint: 'Firecrawl web search: real web results for artist queries. Needs an API key. SUB/WAVE caches every search for 30 minutes.',
+  },
+  {
+    id: 'outcrawl', group: 'keyed', label: 'Outcrawl (API key, free monthly credits)', key: 'required',
+    keyName: 'Outcrawl', keyPlaceholder: 'ock_…', keyUrl: 'https://outcrawl.ai/console',
+    hint: 'Outcrawl web search: real web results for artist queries. Needs an API key; the free tier includes 1,000 credits a month. SUB/WAVE caches every search for 30 minutes.',
+  },
+  {
+    id: 'specstream', group: 'keyed', label: 'SpecStream (API key)', key: 'required',
+    keyName: 'SpecStream', keyPlaceholder: 'ss_live_…', keyUrl: 'https://specstream.ai/signup',
+    hint: 'SpecStream web search: real web results for artist queries. Needs an API key; a paid API at $1 per 1,000 searches. SUB/WAVE caches every search for 30 minutes.',
+  },
 ] as const satisfies readonly SearchProviderEntry[];
 
 export const SETTINGS_SEARCH_PROVIDERS = SEARCH_PROVIDER_CATALOG.map((p) => p.id);
+
+// One catalogue row by id, or undefined for an id the catalogue doesn't list.
+export function searchProviderEntry(id: string | undefined): SearchProviderEntry | undefined {
+  return SEARCH_PROVIDER_CATALOG.find((p) => p.id === id);
+}
+
+// A key name with its indefinite article: "a Tavily", "an Outcrawl". Every
+// sentence that names a provider's key, in the controller and the admin UI,
+// takes its article from here, so the two can't disagree.
+export function withIndefiniteArticle(name: string): string {
+  return /^[aeiou]/i.test(name) ? `an ${name}` : `a ${name}`;
+}
 
 /**
  * Cap for the optional SearXNG `engines=` pin. Generous on purpose — the value
@@ -3409,14 +3859,14 @@ export const DUCK_DEPTH_BOUNDS: SettingsNumericBound = { min: 0, max: 1 };
 // on top of its own feature.
 export const HANDOVER_OFFSET_BOUNDS: SettingsNumericBound = { min: 5, max: 20 };
 
-// The process-minute stride the talk table's programme row samples the station
-// clock on, and therefore the width and alignment every station-clock beat
+// The station-minute stride the talk table's programme row is sampled on, and
+// therefore the width and alignment every station-clock beat
 // window must have. Lives here — with the bound it constrains — rather than as
 // a literal in the table, so the row and the operator's offset cannot drift
 // apart: broadcast/talk-scheduler.ts imports it as the row's `stride`.
 //
-// 5 works for every real IANA zone because every offset is a multiple of 15
-// minutes, so process and station minutes always agree modulo 5.
+// Every real IANA zone's offset is a multiple of 15 minutes, so process and
+// station minutes agree modulo 5 and the row lands on the same ticks either way.
 export const HANDOVER_OFFSET_STEP_MINUTES = 5;
 // −23 (EBU R128 broadcast) … −9 (very loud); −14 is the streaming standard.
 export const LOUDNESS_TARGET_LUFS_BOUNDS: SettingsNumericBound = { min: -23, max: -9 };
@@ -3626,7 +4076,26 @@ export const transitionsPatchSchema = settingsBlockOf({
   // save-time refusal. Do not add one here.
   pairDrain: settingsBoolLike(),
   stemBlends: settingsBoolLike(),
+  pickTimeStems: settingsBoolLike(),
   equalPowerCrossfade: settingsBoolLike(),
+  // New keys, so no stored leniency to preserve: refused unless a real
+  // boolean / a real number in range (load() repairs a hand edit instead).
+  fadeAudibleEnd: settingsStrictOneOf([true, false], 'transitions.fadeAudibleEnd must be true or false'),
+  fadeAudibleEndDb: z
+    .unknown()
+    .superRefine((raw, ctx) => {
+      if (
+        typeof raw !== 'number' || !Number.isFinite(raw)
+        || raw < FADE_AUDIBLE_END_DB_BOUNDS.min || raw > FADE_AUDIBLE_END_DB_BOUNDS.max
+      ) {
+        ctx.addIssue({
+          code: 'custom',
+          message: `transitions.fadeAudibleEndDb must be number in [${FADE_AUDIBLE_END_DB_BOUNDS.min}, ${FADE_AUDIBLE_END_DB_BOUNDS.max}]`,
+        });
+      }
+    })
+    .transform((raw) => raw as number),
+  tailFromCurve: settingsStrictOneOf([true, false], 'transitions.tailFromCurve must be true or false'),
   effects: transitionEffectsPatchSchema,
 });
 
@@ -3723,13 +4192,26 @@ export const BACKUP_KEEP_DEFAULT = 7;
  * usual normalize-vs-validate split, neither restating the other's rule.
  */
 export function clampBackupKeep(raw: unknown): number {
-  // Absent and empty are NO answer, not zero. `Number(null)` and `Number('')`
-  // are both 0, which would clamp to the floor of 1 — the most destructive
-  // reading available — for a settings block that simply has no `keep` in it.
-  if (raw === null || raw === undefined || raw === '') return BACKUP_KEEP_DEFAULT;
+  return clampSettingsIntOr(raw, BACKUP_KEEP_BOUNDS, BACKUP_KEEP_DEFAULT);
+}
+
+/**
+ * The lenient integer reading behind clampBackupKeep and the scheduled
+ * tagger's `limit` (settings/normalize.ts): a number-like value floored and
+ * clamped into `bounds`, anything unreadable the `fallback`. Absent and empty
+ * are NO answer, not zero: `Number(null)` and `Number('')` are both 0, which
+ * would clamp to the floor (for `keep`, 1: the most destructive reading
+ * available) for a settings block that simply has no such field in it.
+ */
+export function clampSettingsIntOr(
+  raw: unknown,
+  bounds: { min: number; max: number },
+  fallback: number,
+): number {
+  if (raw === null || raw === undefined || raw === '') return fallback;
   const n = Number(raw);
-  if (!Number.isFinite(n)) return BACKUP_KEEP_DEFAULT;
-  return Math.min(BACKUP_KEEP_BOUNDS.max, Math.max(BACKUP_KEEP_BOUNDS.min, Math.floor(n)));
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(bounds.max, Math.max(bounds.min, Math.floor(n)));
 }
 
 export const backupsPatchSchema = settingsBlockOf({
@@ -3744,6 +4226,87 @@ export const backupsPatchSchema = settingsBlockOf({
     BACKUP_KEEP_BOUNDS,
     `backups.keep must be int in [${BACKUP_KEEP_BOUNDS.min}, ${BACKUP_KEEP_BOUNDS.max}]`,
   ),
+});
+
+// Scheduled tagging (#2282): a daily tagger run at a set station-clock time,
+// so new music reaches the air without an operator pressing Start. `off` is
+// the default and MUST be first: a station that upgrades and changes nothing
+// has no `tagger` block, reads as `off` and never starts a run on its own.
+// The decision lives in music/tag-schedule-policy.ts, the tick in
+// broadcast/tag-schedule.ts.
+export const SETTINGS_TAGGER_AUTO_MODES = ['off', 'daily'] as const;
+export type TaggerAutoMode = (typeof SETTINGS_TAGGER_AUTO_MODES)[number];
+
+// 24-hour `HH:MM` on the station clock.
+export const TAGGER_AUTO_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+// The run's `--limit`: 0 = every untagged track, the Run tab's "all". The
+// ceiling only stops a typo; no library reaches it.
+export const TAGGER_AUTO_LIMIT_BOUNDS: SettingsNumericBound = { min: 0, max: 1_000_000 };
+
+// The Run tab's four step toggles, by the names POST /tag-library takes.
+export interface TaggerAutoSteps {
+  reconcile: boolean;
+  enrich: boolean;
+  tagMoods: boolean;
+  analyze: boolean;
+}
+export const TAGGER_AUTO_STEP_KEYS = ['reconcile', 'enrich', 'tagMoods', 'analyze'] as const;
+
+export interface TaggerAutoSettings {
+  mode: TaggerAutoMode;
+  time: string;
+  limit: number;
+  steps: TaggerAutoSteps;
+}
+
+// The shipped block: settings/defaults.ts DEFAULTS.tagger.auto, and the admin
+// card's form before its first read. Off, so an upgrade changes nothing.
+export const TAGGER_AUTO_DEFAULTS: Readonly<TaggerAutoSettings> = Object.freeze({
+  mode: 'off',
+  time: '02:30',
+  limit: 0,
+  steps: Object.freeze({ reconcile: true, enrich: true, tagMoods: true, analyze: true }),
+});
+
+export const taggerAutoTimeSchema = z
+  .unknown()
+  .superRefine((raw, ctx) => {
+    if (typeof raw !== 'string' || !TAGGER_AUTO_TIME_RE.test(raw)) {
+      ctx.addIssue({ code: 'custom', message: 'tagger.auto.time must be HH:MM (24-hour)' });
+    }
+  })
+  .transform((raw) => raw as string);
+
+// Each field schema is named once: the POST /settings patch (partial, with
+// settingsBlockOf's leniency) and the Run tab's form (the whole block, through
+// useZodForm) are both built from these, so neither restates a rule.
+const taggerAutoStepsShape = {
+  reconcile: settingsBoolLike(),
+  enrich: settingsBoolLike(),
+  tagMoods: settingsBoolLike(),
+  analyze: settingsBoolLike(),
+};
+const taggerAutoFieldsShape = {
+  mode: settingsStrictOneOf(
+    SETTINGS_TAGGER_AUTO_MODES,
+    `tagger.auto.mode must be one of: ${SETTINGS_TAGGER_AUTO_MODES.join(', ')}`,
+  ),
+  time: taggerAutoTimeSchema,
+  limit: settingsIntLike(
+    TAGGER_AUTO_LIMIT_BOUNDS,
+    `tagger.auto.limit must be int in [${TAGGER_AUTO_LIMIT_BOUNDS.min}, ${TAGGER_AUTO_LIMIT_BOUNDS.max}] (0 = all untagged)`,
+  ),
+};
+
+export const taggerPatchSchema = settingsBlockOf({
+  auto: settingsBlockOf({ ...taggerAutoFieldsShape, steps: settingsBlockOf(taggerAutoStepsShape) }),
+});
+
+/** The whole `tagger.auto` block, as the admin card edits and posts it. */
+export const taggerAutoFormSchema = z.object({
+  ...taggerAutoFieldsShape,
+  steps: z.object(taggerAutoStepsShape),
 });
 
 export const streamPatchSchema = settingsBlockOf({
@@ -3888,6 +4451,7 @@ export const djBehaviourPatchSchema = settingsBlockOf({
   showWelcome: z.boolean({ error: 'djBehaviour.showWelcome must be a boolean' }),
   previewNextShow: z.boolean({ error: 'djBehaviour.previewNextShow must be a boolean' }),
   sameHostAcknowledgement: z.boolean({ error: 'djBehaviour.sameHostAcknowledgement must be a boolean' }),
+  holdDuckBetweenSpeakers: z.boolean({ error: 'djBehaviour.holdDuckBetweenSpeakers must be a boolean' }),
   extendedSleeveNotes: z.boolean({ error: 'djBehaviour.extendedSleeveNotes must be a boolean' }),
   releaseYearMentions: z.enum(['regular', 'occasional', 'rare'], {
     error: 'djBehaviour.releaseYearMentions must be regular, occasional or rare',
@@ -3945,6 +4509,7 @@ export const audioPatchSchema = settingsBlockOf({
     { min: 1, max: 1000 },
     'audio.stemCacheGb must be between 1 and 1000',
   ),
+  stemOrphanPurgeEnabled: settingsBoolLike(),
   analyzeQuietMinutes: settingsNumberFloorLike(
     { min: 1, max: 120 },
     'audio.analyzeQuietMinutes must be between 1 and 120',
@@ -3992,6 +4557,10 @@ export const lyricsPatchSchema = settingsBlockOf({
   lrclib: settingsBoolLike(),
 });
 
+export const musicSourcePatchSchema = settingsBlockOf({
+  reportRealPath: settingsBoolLike(),
+});
+
 export const searchPatchSchema = settingsBlockOf({
   provider: settingsStrictOneOf(
     SETTINGS_SEARCH_PROVIDERS,
@@ -4020,7 +4589,7 @@ export const searchPatchSchema = settingsBlockOf({
       }
     })
     .transform((raw) => String(raw).trim()),
-  apiKey: settingsRawStringLike(200, 'search.apiKey must be 0-200 chars'),
+  apiKey: settingsRawStringLike(200, 'search.apiKey must be 0-200 chars').transform(stripSecretControlChars),
   // Optional comma-separated SearXNG engine pin (#1353), appended as the
   // `engines=` query param when non-empty. New field, so it takes the trimmed
   // posture rather than search.apiKey's raw one — there is no stored behaviour
@@ -4034,15 +4603,15 @@ export const searchPatchSchema = settingsBlockOf({
 const scrobbleLastfmSchema = settingsBlockOf({
   enabled: settingsBoolLike(),
   username: settingsTrimmedString(40, 'scrobble.lastfm.username must be 0-40 chars'),
-  apiKey: settingsTrimmedString(200, 'scrobble.lastfm.apiKey must be 0-200 chars'),
-  apiSecret: settingsTrimmedString(200, 'scrobble.lastfm.apiSecret must be 0-200 chars'),
-  sessionKey: settingsTrimmedString(200, 'scrobble.lastfm.sessionKey must be 0-200 chars'),
+  apiKey: settingsTrimmedString(200, 'scrobble.lastfm.apiKey must be 0-200 chars').transform(stripSecretControlChars),
+  apiSecret: settingsTrimmedString(200, 'scrobble.lastfm.apiSecret must be 0-200 chars').transform(stripSecretControlChars),
+  sessionKey: settingsTrimmedString(200, 'scrobble.lastfm.sessionKey must be 0-200 chars').transform(stripSecretControlChars),
 });
 
 const scrobbleListenbrainzSchema = settingsBlockOf({
   enabled: settingsBoolLike(),
   username: settingsTrimmedString(40, 'scrobble.listenbrainz.username must be 0-40 chars'),
-  userToken: settingsTrimmedString(200, 'scrobble.listenbrainz.userToken must be 0-200 chars'),
+  userToken: settingsTrimmedString(200, 'scrobble.listenbrainz.userToken must be 0-200 chars').transform(stripSecretControlChars),
   // No trailing-slash strip: the consumer appends /submit-listens.
   baseUrl: settingsUrlLike({
     max: 500,
@@ -4336,6 +4905,105 @@ export const SETTINGS_FESTIVAL_DESCRIPTION_MAX = 200;
 // ceiling is deliberately low: past a fortnight a "festival window" is just a
 // season, which is what moodSchedule is for.
 export const SETTINGS_FESTIVAL_WINDOW_DAYS_MAX = 14;
+// A festival with an end date (#2112) runs month/day through endMonth/endDay
+// inclusive, wrapping past New Year when the end falls earlier in the year,
+// and windowDays does not apply to it. The cap is higher than the window's
+// because operators asked for their own start and stop dates around a season
+// (a family's Christmas from late November into January), but it still stops
+// a festival from standing in for moodSchedule all year: while one is active
+// its mood outranks weather and time of day in dominantMood.
+export const SETTINGS_FESTIVAL_RANGE_DAYS_MAX = 60;
+
+// Feb has 29 so a range is measured on the longest calendar it can span.
+const FESTIVAL_DAYS_IN_MONTH = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+function festivalDayOfYear(month: number, day: number): number {
+  let n = day;
+  for (let i = 0; i < month - 1; i++) n += FESTIVAL_DAYS_IN_MONTH[i] ?? 31;
+  return n;
+}
+
+function festivalMonthDayOk(month: unknown, day: unknown): boolean {
+  return Number.isInteger(month)
+    && (month as number) >= 1 && (month as number) <= 12
+    && Number.isInteger(day)
+    && (day as number) >= 1
+    && (day as number) <= (FESTIVAL_DAYS_IN_MONTH[(month as number) - 1] ?? 31);
+}
+
+/** Days a start/end pair covers, both ends counted. An end before the start wraps the year. */
+export function festivalRangeDays(
+  month: number, day: number, endMonth: number, endDay: number,
+): number {
+  const span = festivalDayOfYear(endMonth, endDay) - festivalDayOfYear(month, day);
+  return (span < 0 ? span + 366 : span) + 1;
+}
+
+/**
+ * A festival's end date, or null when it is a single day (± window). The one
+ * read of endMonth/endDay for every caller: a half-set, malformed or
+ * over-long end, which only a hand-edited settings.json can hold, reads as
+ * absent, so that festival keeps today's single-day behaviour.
+ */
+export function festivalEnd(f: {
+  month?: unknown; day?: unknown; endMonth?: unknown; endDay?: unknown;
+}): { month: number; day: number } | null {
+  if (f.endMonth == null || f.endDay == null) return null;
+  const month = Number(f.month);
+  const day = Number(f.day);
+  const endMonth = Number(f.endMonth);
+  const endDay = Number(f.endDay);
+  if (!festivalMonthDayOk(month, day) || !festivalMonthDayOk(endMonth, endDay)) return null;
+  if (festivalRangeDays(month, day, endMonth, endDay) > SETTINGS_FESTIVAL_RANGE_DAYS_MAX) return null;
+  return { month: endMonth, day: endDay };
+}
+
+const FESTIVAL_DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Is the festival on, on this calendar date (the station's local date)? The
+ * one rule for the controller (getFestivalContext) and the admin panel's
+ * "now" badge.
+ *
+ * A single-day festival compares real dates, so its window spans month and
+ * year boundaries, and a Feb 29 date rolls to Mar 1 in a common year
+ * (Date.UTC). A ranged one compares month/day keys like the blocklist's
+ * seasonal window: a Feb 29 start begins Mar 1 in a common year, and a Feb 29
+ * end ends on Feb 28. A range of one day is that single day, window ignored.
+ */
+export function festivalActiveOn(
+  f: { month: number; day: number; windowDays?: number; endMonth?: unknown; endDay?: unknown },
+  today: { year: number; month: number; day: number },
+): boolean {
+  const end = festivalEnd(f);
+  if (end) {
+    const k = today.month * 100 + today.day;
+    const from = f.month * 100 + f.day;
+    const to = end.month * 100 + end.day;
+    // A one-day range is that day with no window, judged below like any
+    // single day: a Feb 29 → Feb 29 range would otherwise start Mar 1 and end
+    // Feb 28, and never be on in a common year.
+    if (from !== to) return from <= to ? k >= from && k <= to : k >= from || k <= to;
+  }
+  const window = end ? 0 : f.windowDays || 0;
+  const t = Date.UTC(today.year, today.month - 1, today.day);
+  // Adjacent years cover a window reaching across Dec 31 / Jan 1.
+  for (const yy of [today.year - 1, today.year, today.year + 1]) {
+    if (Math.abs(Date.UTC(yy, f.month - 1, f.day) - t) <= window * FESTIVAL_DAY_MS) return true;
+  }
+  return false;
+}
+
+export type SettingsFestival = {
+  month: number;
+  day: number;
+  name: string;
+  mood: string;
+  description: string;
+  windowDays: number;
+  endMonth?: number;
+  endDay?: number;
+};
 
 export function festivalsSchema(ctx: SettingsMoodContext) {
   const names = ctx.moodNames ? new Set(ctx.moodNames) : null;
@@ -4408,11 +5076,44 @@ export function festivalsSchema(ctx: SettingsMoodContext) {
             `festivals[${i}].windowDays must be an integer 0-${SETTINGS_FESTIVAL_WINDOW_DAYS_MAX}`,
             'windowDays',
           );
+          return;
+        }
+        // Optional end date (#2112): both or neither. null/undefined is
+        // "no end", so a festival saved before this field is unchanged.
+        const hasEndMonth = f.endMonth != null;
+        const hasEndDay = f.endDay != null;
+        if (!hasEndMonth && !hasEndDay) return;
+        if (!hasEndMonth || !hasEndDay) {
+          add(
+            `festivals[${i}] needs both endMonth and endDay, or neither`,
+            hasEndMonth ? 'endDay' : 'endMonth',
+          );
+          return;
+        }
+        const endMonth = Number(f.endMonth);
+        if (!Number.isInteger(endMonth) || endMonth < 1 || endMonth > 12) {
+          add(`festivals[${i}].endMonth must be an integer 1-12`, 'endMonth');
+          return;
+        }
+        const endDaysInMonth = FESTIVAL_DAYS_IN_MONTH[endMonth - 1] ?? 31;
+        const endDay = Number(f.endDay);
+        if (!Number.isInteger(endDay) || endDay < 1 || endDay > endDaysInMonth) {
+          add(
+            `festivals[${i}].endDay must be an integer 1-${endDaysInMonth} for month ${endMonth}`,
+            'endDay',
+          );
+          return;
+        }
+        if (festivalRangeDays(month, day, endMonth, endDay) > SETTINGS_FESTIVAL_RANGE_DAYS_MAX) {
+          add(
+            `festivals[${i}] may run at most ${SETTINGS_FESTIVAL_RANGE_DAYS_MAX} days, start and end included`,
+            'endDay',
+          );
         }
       });
     })
     .transform((raw) =>
-      (raw as Array<Record<string, unknown>>).map((f) => ({
+      (raw as Array<Record<string, unknown>>).map((f): SettingsFestival => ({
         month: Number(f.month),
         day: Number(f.day),
         name: String(f.name ?? '').trim(),
@@ -4422,6 +5123,11 @@ export function festivalsSchema(ctx: SettingsMoodContext) {
             ? f.description.trim().slice(0, SETTINGS_FESTIVAL_DESCRIPTION_MAX)
             : '',
         windowDays: Number(f.windowDays ?? 0),
+        // Present only on a ranged festival, so a single-day one saves
+        // exactly the shape it always has.
+        ...(f.endMonth != null && f.endDay != null
+          ? { endMonth: Number(f.endMonth), endDay: Number(f.endDay) }
+          : {}),
       })),
     );
 }
@@ -4664,7 +5370,7 @@ export const preparationStatusSchema = z.discriminatedUnion('kind', [
 ]);
 export type PreparationStatus = z.output<typeof preparationStatusSchema>;
 
-export const preparationArtistSchema = z.object({ id: z.string().min(1), name: z.string().min(1), album: z.array(z.object({ id: z.string(), songCount: z.number().optional() })).default([]) });
+export const preparationArtistSchema = z.object({ id: z.string().min(1), name: z.string().min(1), album: z.array(z.object({ id: z.string(), songCount: z.number().optional(), artistId: z.string().nullish().catch(null) })).default([]) });
 export const preparationArtistCreditSchema = z.object({ id: z.string().min(1), name: z.string().optional() });
 export const preparationTrackSchema = z.object({
   id: z.string().min(1), artistId: z.string().nullable().optional(),
@@ -4698,9 +5404,15 @@ export const SHOW_ID_RE = /^[a-z0-9_]{3,32}$/;
 export const SHOWS_LIMIT = 64;
 export const SHOW_NAME_MAX = 60;
 export const SHOW_TOPIC_MAX = 2000;
+// Listener-facing blurb (#2358): plain text, the show's twin of a persona's
+// tagline. `topic` stays the DJ's brief; this one never reaches a prompt.
+export const SHOW_DESCRIPTION_MAX = 300;
 export const GUESTS_PER_SHOW = 3;
 export const PLAYLISTS_PER_SHOW = 10;
 export const EXCLUDED_PLAYLISTS_PER_SHOW = 10;
+// Per-show jingle filenames / bed names the automatic draws may use (#1875, #1188).
+export const SHOW_IMAGING_ALLOWLIST_MAX = 64;
+const SHOW_IMAGING_ITEM_MAX = 128;
 // Per-attribute ceiling on the multi-value music filters (#929).
 export const SHOW_FILTER_VALUES_MAX = 15;
 export const SHOW_GENRE_MAX = 64;
@@ -4726,6 +5438,31 @@ export const SHOW_MIN_TRACK_LENGTH_MAX = 3600;
 
 export const SHOW_ENERGY = ['low', 'medium', 'high'] as const;
 export const SHOW_VOCALS = ['instrumental', 'vocal'] as const;
+
+// What an era-suspect album IS, set (or confirmed) by the operator in Library →
+// Era and pre-filled from the title (music/album-kind.ts). Declared here, not
+// there, because a show can leave out whole kinds (`excludedAlbumKinds`) and
+// schema modules import only zod. Order is the admin dropdown's.
+export const ALBUM_KINDS = [
+  'best-of', 'themed', 'label', 'dj-mix', 'dj-choice', 'original-album', 'reissue',
+  'soundtrack', 'tribute', 'chart', 'live', 'box-set', 'sampler',
+] as const;
+export type AlbumKind = (typeof ALBUM_KINDS)[number];
+export const ALBUM_KIND_LABELS: Record<AlbumKind, string> = {
+  'best-of': 'Best Of',
+  themed: 'Themed Compilation',
+  label: 'Label Compilation',
+  'dj-mix': 'DJ Mix',
+  'dj-choice': 'DJ Choice',
+  'original-album': 'Original Album',
+  reissue: 'Reissue or Remaster',
+  soundtrack: 'Soundtrack',
+  tribute: 'Tribute or Covers',
+  chart: 'Chart or Dated Hits',
+  live: 'Live or Festival',
+  'box-set': 'Box Set',
+  sampler: 'Sampler or Promo',
+};
 
 export type EraWindow = { fromYear: number | null; toYear: number | null };
 
@@ -4796,6 +5533,13 @@ function showStringList(opts: {
       }),
   );
 }
+
+// Per-show jingle filenames / bed names: same shape on save and on load.
+const IMAGING_ALLOWLIST_REPAIR = { max: SHOW_IMAGING_ALLOWLIST_MAX, itemMax: SHOW_IMAGING_ITEM_MAX };
+const imagingAllowlist = () => showStringList({
+  ...IMAGING_ALLOWLIST_REPAIR,
+  overflowError: `must have at most ${SHOW_IMAGING_ALLOWLIST_MAX} entries`,
+});
 
 // One era-window year bound, shared by showYear and the load path's
 // repairEraWindow. null / '' means "open end"; a numeric string is accepted
@@ -5081,11 +5825,40 @@ function showObjectSchema(ctx: ShowSchemaContext) {
         max: EXCLUDED_PLAYLISTS_PER_SHOW,
         overflowError: `must have at most ${EXCLUDED_PLAYLISTS_PER_SHOW} entries`,
       }),
+      // A clean show: tracks tagged explicit stay off air (music/explicit-policy.ts).
+      // Stands alone, not one of the filters filtersStrict governs.
+      excludeExplicit: showBool(),
+      // Album kinds this show never plays (Library → Era sets a kind per album),
+      // e.g. 'dj-mix': a track cut out of a continuous mix starts and ends
+      // mid-blend. Hard-dropped with the excluded playlists
+      // (show-playlist.resolveExcludedPlaylistIds). [] = no constraint.
+      excludedAlbumKinds: showStringList({
+        max: ALBUM_KINDS.length,
+        values: ALBUM_KINDS,
+        overflowError: `must have at most ${ALBUM_KINDS.length} entries`,
+      }),
       // Organisation only, declared LAST so persisted key order is unchanged.
       // Unlike every other list here a bad entry is REFUSED rather than dropped:
       // a tag is typed by hand and must not vanish on save. The load twin
       // (repairShowTags) drops instead.
       tags: showTags,
+      // Imaging allowlists: jingle filenames and bed names the automatic draws
+      // may use while this show is on air. Empty = every one. Shape-checked
+      // only, like playlistIds: a deleted entry matches nothing at pick time.
+      allowedJingles: imagingAllowlist(),
+      allowedBeds: imagingAllowlist(),
+      // What listeners read on the schedule and the On Now card (#2358). ''
+      // means "not set": listener surfaces fall back to `topic`. Never read by
+      // a model path; `topic` alone is the DJ's brief. Declared last so the
+      // persisted key order is otherwise unchanged.
+      description: z.preprocess(
+        nullToUndefined,
+        z
+          .string()
+          .trim()
+          .max(SHOW_DESCRIPTION_MAX, `description must be 0-${SHOW_DESCRIPTION_MAX} chars`)
+          .default(''),
+      ),
     })
     // Needs two fields at once, so it cannot live on guestPersonaIds.
     .check((c) => {
@@ -5198,6 +5971,11 @@ export function repairShowForLoad(
     id: typeof raw.id === 'string' && SHOW_ID_RE.test(raw.id) ? raw.id : undefined,
     name: typeof raw.name === 'string' ? raw.name.trim().slice(0, SHOW_NAME_MAX) : undefined,
     topic: typeof raw.topic === 'string' ? raw.topic.slice(0, SHOW_TOPIC_MAX) : undefined,
+    // Trimmed before the cut, unlike topic: the schema trims too, so an
+    // untrimmed 300-char cut could still overflow after a leading space.
+    description: typeof raw.description === 'string'
+      ? raw.description.trim().slice(0, SHOW_DESCRIPTION_MAX)
+      : undefined,
     segmentSkill: typeof raw.segmentSkill === 'string' && raw.segmentSkill.trim() !== (typeof raw.preparationSkill === 'string' ? raw.preparationSkill.trim() : '')
       ? raw.segmentSkill.trim().slice(0, SHOW_SEGMENT_SKILL_MAX)
       : undefined,
@@ -5238,9 +6016,17 @@ export function repairShowForLoad(
     // than failing the show. Non-array reads as absent (schema's [] default).
     tags: repairShowTags(raw.tags),
     playlistIds: repairShowStringList(raw.playlistIds, { max: PLAYLISTS_PER_SHOW }),
+    // An unknown kind is dropped, never fatal: a show that stops leaving one
+    // kind out beats a show that stops loading.
+    excludedAlbumKinds: repairShowStringList(raw.excludedAlbumKinds, {
+      max: ALBUM_KINDS.length,
+      values: ALBUM_KINDS,
+    }),
     excludedPlaylistIds: repairShowStringList(raw.excludedPlaylistIds, {
       max: EXCLUDED_PLAYLISTS_PER_SHOW,
     }),
+    allowedJingles: repairShowStringList(raw.allowedJingles, IMAGING_ALLOWLIST_REPAIR),
+    allowedBeds: repairShowStringList(raw.allowedBeds, IMAGING_ALLOWLIST_REPAIR),
   };
 }
 
@@ -5510,6 +6296,58 @@ const skillCohostsSchema = z.preprocess(
   z.boolean({ error: 'cohosts must be a boolean' }).default(false),
 );
 
+// A skill's own TTS voice override: the engine, voice and cloud provider of a
+// persona's voice slot. Gain and speed are not part of it, because they stay
+// the speaker's: an override changes whose voice is heard, never how loud or
+// how fast. Absent or null means the on-air DJ's voice.
+export interface SkillVoiceSlot {
+  engine: string;
+  voice: string;
+  cloudProvider: string;
+}
+
+// The per-engine voice rules live once, in persona.ts (ttsVoiceSlotSchema, and
+// repairTtsVoiceSlot for the disk read). This module may import only zod, so
+// it takes the slot schema as an argument: schemas/skill-server.ts passes
+// persona's for the routes, and the skill editor passes the mirrored copy.
+// What stays here is the skill's own posture around that slot: null is "no
+// override", and a missing provider is openai, as it is in SKILL.md.
+export function skillVoiceSchema(slot: z.ZodType<SkillVoiceSlot>) {
+  // `.optional()` so a body with no `voice` key at all (a community install, an
+  // older client) reaches the transform as "no override", where zod would
+  // otherwise refuse the missing key.
+  return z.unknown().optional().transform((raw, ctx): SkillVoiceSlot | null => {
+    if (raw == null) return null;
+    if (typeof raw !== 'object' || Array.isArray(raw)) {
+      ctx.issues.push({ code: 'custom', input: raw, message: 'voice must be an object or null' });
+      return z.NEVER;
+    }
+    const t = raw as Record<string, unknown>;
+    const trim = (v: unknown) => (typeof v === 'string' ? v.trim() : v);
+    const parsed = slot.safeParse({
+      ...t,
+      engine: trim(t.engine),
+      cloudProvider: trim(t.cloudProvider) || 'openai',
+    });
+    if (!parsed.success) {
+      for (const issue of parsed.error.issues) {
+        ctx.issues.push({ code: 'custom', input: raw, message: issue.message });
+      }
+      return z.NEVER;
+    }
+    const { engine, voice, cloudProvider } = parsed.data;
+    return { engine, voice, cloudProvider };
+  });
+}
+
+/** A skill-file schema below with the voice override attached. */
+export function withSkillVoice<Shape extends z.ZodRawShape>(
+  schema: z.ZodObject<Shape>,
+  slot: z.ZodType<SkillVoiceSlot>,
+) {
+  return schema.extend({ voice: skillVoiceSchema(slot) });
+}
+
 // The fields every skill's SKILL.md carries, built-in or custom.
 export const builtinSkillFileSchema = z.object({
   label: skillLabelSchema,
@@ -5541,8 +6379,10 @@ export const skillCreateSchema = customSkillFileSchema.extend({
   name: skillSlugSchema,
 });
 
+// The voice is attached by withSkillVoice, so it is optional here: a body
+// parsed without it (a community install) carries no override.
 export type SkillFileParsed = z.output<typeof builtinSkillFileSchema> &
-  Partial<z.output<typeof customSkillFileSchema>>;
+  Partial<z.output<typeof customSkillFileSchema>> & { voice?: SkillVoiceSlot | null };
 
 /**
  * Parsed body → the field object writeSkillFile consumes. The only real work
@@ -5564,6 +6404,7 @@ export function skillFieldsFrom(kind: string, parsed: SkillFileParsed) {
     requiresKey: parsed.requiresKey,
     tags: parsed.tags,
     brief: parsed.brief,
+    voice: parsed.voice ?? null,
   };
 }
 
@@ -5649,6 +6490,156 @@ export type StationCreate = z.output<typeof stationCreateSchema>;
 // Rename is display-name only — the slug and data folder stay put — so it
 // shares the name rule and nothing else.
 export const stationRenameSchema = z.object({ name: stationNameSchema });
+
+// ─── from controller/src/schemas/steer.ts ────────────────────────────────
+
+// A steer: the operator leans the music and the talk for a while, without
+// touching the schedule. Sibling of the takeover in schemas/schedule.ts and
+// shaped like it (an absolute window, `until` spent on the request), but it
+// never changes which show is on air.
+//
+// Zod only: this file is mirrored into the admin bundle.
+
+export const STEER_PROMPT_MAX = 500;
+// Restated from schedule.ts (OVERRIDE_MIN_MINUTES / OVERRIDE_MAX_MINUTES): a
+// mirrored schema file imports nothing but zod. Pinned equal by steer-schema.test.ts.
+export const STEER_MIN_MINUTES = 15;
+export const STEER_MAX_MINUTES = 720;
+
+export const STEER_UNTIL = ['once', 'fixed', 'schedule-change'] as const;
+export type SteerUntil = (typeof STEER_UNTIL)[number];
+
+export interface Steer {
+  /** Only this playlist plays while the steer runs, or null. */
+  playlistId: string | null;
+  /** The operator's direction, already trimmed. May be empty with a playlist. */
+  prompt: string;
+  startedAt: number;
+  expiresAt: number;
+}
+
+export interface SteerContext {
+  /** Epoch-ms "now", or null to not judge expiry (see ScheduleOverrideContext). */
+  now: number | null;
+}
+
+const collapse = (s: string) => s.replace(/\s+/g, ' ').trim();
+const NOTHING_TO_STEER = 'pick a playlist or say what to steer towards';
+
+export function steerSchema(ctx: SteerContext) {
+  return z
+    .object(
+      {
+        playlistId: z.string({ error: 'must be a playlist id' }).min(1, 'must be a playlist id').nullable().default(null),
+        prompt: z.string({ error: 'must be text' }).transform(collapse).pipe(
+          z.string().max(STEER_PROMPT_MAX, `must be at most ${STEER_PROMPT_MAX} characters`),
+        ),
+        startedAt: z.number({ error: 'must be an epoch-ms number' }).finite('must be an epoch-ms number'),
+        expiresAt: z.number({ error: 'must be an epoch-ms number' }).finite('must be an epoch-ms number'),
+      },
+      { error: 'must be an object' },
+    )
+    .check((c) => {
+      const { playlistId, prompt, startedAt, expiresAt } = c.value;
+      if (!prompt && !playlistId) {
+        c.issues.push({ code: 'custom', input: prompt, path: ['prompt'], message: NOTHING_TO_STEER });
+      }
+      if (startedAt >= expiresAt) {
+        c.issues.push({ code: 'custom', input: expiresAt, path: ['expiresAt'], message: 'must be after startedAt' });
+      } else if (expiresAt - startedAt > STEER_MAX_MINUTES * 60_000) {
+        c.issues.push({
+          code: 'custom', input: expiresAt, path: ['expiresAt'],
+          message: `window must be at most ${STEER_MAX_MINUTES} minutes`,
+        });
+      }
+      if (ctx.now !== null && expiresAt <= ctx.now) {
+        c.issues.push({ code: 'custom', input: expiresAt, path: ['expiresAt'], message: 'window has already expired' });
+      }
+    });
+}
+
+const STEER_MINUTES_MESSAGE = `must be an integer between ${STEER_MIN_MINUTES} and ${STEER_MAX_MINUTES}`;
+
+/**
+ * POST /steer's body. `until` says how long it lasts: `'fixed'` for `minutes`,
+ * `'schedule-change'` to the next grid boundary, and `'once'` for a single
+ * track worked out under it and queued, with nothing stored and no steer left
+ * running. `minutes` is REQUIRED under `'fixed'` and REFUSED otherwise, the
+ * takeover's own posture.
+ */
+export const steerRequestSchema = z
+  .object({
+    playlistId: z.string({ error: 'must be a playlist id' }).min(1, 'must be a playlist id').nullable().default(null),
+    prompt: z.string({ error: 'must be text' }).transform(collapse).pipe(
+      z.string().max(STEER_PROMPT_MAX, `must be at most ${STEER_PROMPT_MAX} characters`),
+    ).default(''),
+    until: z.enum(STEER_UNTIL, { error: "must be 'once', 'fixed' or 'schedule-change'" }).default('fixed'),
+    minutes: z.coerce
+      .number({ error: STEER_MINUTES_MESSAGE })
+      .int(STEER_MINUTES_MESSAGE)
+      .min(STEER_MIN_MINUTES, STEER_MINUTES_MESSAGE)
+      .max(STEER_MAX_MINUTES, STEER_MINUTES_MESSAGE)
+      .optional(),
+    /** Also drop the picks already queued, so the steer applies at once. */
+    startNow: z.boolean({ error: 'must be true or false' }).default(false),
+    /** Have the host introduce the opening tracks with one link before the first. */
+    introduce: z.boolean({ error: 'must be true or false' }).default(false),
+  })
+  .check((c) => {
+    if (!c.value.prompt && !c.value.playlistId) {
+      c.issues.push({ code: 'custom', input: c.value.prompt, path: ['prompt'], message: NOTHING_TO_STEER });
+    }
+    if (c.value.until === 'fixed' && c.value.minutes == null) {
+      c.issues.push({ code: 'custom', input: c.value.minutes, path: ['minutes'], message: STEER_MINUTES_MESSAGE });
+    }
+    if (c.value.until !== 'fixed' && c.value.minutes != null) {
+      c.issues.push({
+        code: 'custom', input: c.value.minutes, path: ['minutes'],
+        message: 'must be omitted unless the steer runs for a set time',
+      });
+    }
+  });
+
+/** The most tracks a steer opens with (`routes/steer.ts`). */
+export const STEER_OPENING_TRACKS = 5;
+/** How long Preview's opening list is remembered for Start to queue unchanged. */
+export const STEER_PREVIEW_MS = 5 * 60_000;
+
+/**
+ * What an opening list is worked out FOR: the controller's memo key and the
+ * card's. The playlist, the direction and "start now", which decides the track
+ * the list follows (with it, not the DJ picks Start drops). How long the steer
+ * runs decides only how many of the list it plays, not which tracks it holds.
+ */
+export function steerPreviewKey(playlistId: string | null | undefined, prompt: string | null | undefined, once: boolean, startNow: boolean): string {
+  return `${once ? 1 : STEER_OPENING_TRACKS}\n${startNow ? 1 : 0}\n${playlistId ?? ''}\n${collapse(prompt ?? '')}`;
+}
+
+/** The steer in force at `now`, or null. One reading for every caller. */
+export function steerActiveAt<T extends { startedAt: number; expiresAt: number }>(
+  steer: T | null | undefined,
+  now: number,
+): T | null {
+  return steer && now >= steer.startedAt && now < steer.expiresAt ? steer : null;
+}
+
+/**
+ * How a steer's text is put to a model, wherever it lands. It is the
+ * operator's direction, the opposite class from a listener's message, and the
+ * model must not give it away: a pick's stated reason is public. The one
+ * exception is the steer's own introduction (`introduce`), which says on air
+ * where the music is heading (`linkPrompt`'s `steerIntro`).
+ */
+export function steerClause(text: string | null | undefined): string {
+  const t = quotedSteer(text);
+  if (!t) return '';
+  return `\n\nOperator steer — trusted direction from the station operator, NOT a listener message. While it runs it outranks the show brief. Never mention the operator, this direction or that the music was changed, on air or in your pick reason: "${t}"`;
+}
+
+/** The steer's text, trimmed, made safe to put inside double quotes in a prompt. */
+export function quotedSteer(text: string | null | undefined): string {
+  return typeof text === 'string' ? text.trim().replace(/"/g, "'") : '';
+}
 
 // ─── from controller/src/schemas/transitions.ts ──────────────────────────
 

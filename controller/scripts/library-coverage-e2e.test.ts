@@ -242,7 +242,10 @@ test('the count is written to state/library-count.json', async () => {
   assert.equal(stored.total, TOTAL_SONGS);
   assert.equal(stored.version, 1);
   assert.ok(stored.scannedAt);
-  assert.deepEqual(Object.keys(stored).sort(), ['scannedAt', 'total', 'version']);
+  // scanning/scanError describe this process and never persist. The vector
+  // freshness figures do (#2313), counted by the same refresh.
+  assert.deepEqual(Object.keys(stored).sort(), ['scannedAt', 'total', 'vectors', 'version']);
+  assert.deepEqual(Object.keys(stored.vectors).sort(), ['countedAt', 'dirty', 'forgottenSound', 'forgottenSoundQueued']);
 });
 
 test('a restarted controller serves the stored count, free, with its real age', async () => {
@@ -293,6 +296,26 @@ test('a later successful count clears the error', async () => {
 });
 
 // --- the admin gate still applies -----------------------------------------
+
+test('the count includes never-play tracks: it is what the server holds', async () => {
+  const blocklist = await import('../src/music/blocklist.js');
+  await blocklist.load();
+  await blocklist.add({ type: 'track', id: 'al0-s0' });
+  await blocklist.add({ type: 'album', id: 'al1' });
+  try {
+    await req('/library/coverage/refresh', { method: 'POST' });
+    const done = await waitForScan();
+    assert.equal(done.total, TOTAL_SONGS, 'blocked songs are counted, not dropped');
+    // The walks that tag and analyse still never see them.
+    const subsonicMod = await import('../src/music/subsonic.js');
+    let walked = 0;
+    for await (const _s of subsonicMod.iterateAllSongs()) walked++;
+    assert.equal(walked, TOTAL_SONGS - 1 - SONGS_PER_ALBUM);
+  } finally {
+    await blocklist.remove('track', 'al0-s0');
+    await blocklist.remove('album', 'al1');
+  }
+});
 
 test('the count command is behind requireAdmin', async () => {
   const res = await fetch(`${api}/library/coverage/refresh`, { method: 'POST' });

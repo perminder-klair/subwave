@@ -73,6 +73,11 @@ export const PERSONA_SCRIPT_LENGTHS = [
   'storyteller',
 ] as const;
 
+// Station IDs can use operator-written lines instead of improvising.
+export const PERSONA_IDENT_MODES = ['improvise', 'verbatim'] as const;
+export const PERSONA_IDENT_LINES_LIMIT = 20;
+export const PERSONA_IDENT_LINE_MAX = 300;
+
 // 'natural' (default) is the ordinary between-track link; 'announce' is exactly
 // "This is <artist>." Absent/invalid → 'natural', so an upgrade is unchanged.
 export const PERSONA_LINK_STYLES = [
@@ -398,6 +403,57 @@ export function repairTtsVoiceSlot(raw: unknown, opts?: { allowInherit?: boolean
   };
 }
 
+/**
+ * A persona's own RESCUE voice (#2029): the engine + voice its lines take when
+ * its own engine fails, tried before the station-wide `settings.tts.fallback`.
+ * Voice identity only. Credentials always come from the station's `tts.*`
+ * blocks, and the persona's own `tts` is never forwarded to a rescue (#1793).
+ *
+ * Same shape as the station slot: no gainDb/speed (a third trim on a rescue
+ * would be a level surprise nobody configured) and no `enabled` flag — null is
+ * "none".
+ */
+export interface PersonaFallbackVoice {
+  engine: string;
+  cloudProvider: string;
+  voice: string;
+}
+
+/** Strict `fallbackVoice`: absent/null → null, else the shared voice-slot rules
+ *  WITHOUT `inherit` (a rescue cannot follow the station, the same rule as
+ *  `tts.fallback`), projected to engine + provider + voice. */
+const personaFallbackVoice = z
+  .unknown()
+  .optional()
+  .transform((raw, ctx): PersonaFallbackVoice | null => {
+    if (raw == null) return null;
+    // An absent provider reads as 'openai' only where it is unused (every
+    // engine but cloud), so `{engine: 'gemini', voice: 'Kore'}` saves. A cloud
+    // rescue must name its provider: defaulting it would quietly point an
+    // ElevenLabs station's rescue at OpenAI.
+    const r = (typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+    const parsed = ttsVoiceSlotSchema('fallbackVoice').safeParse(
+      r.engine === 'cloud' ? r : { ...r, cloudProvider: r.cloudProvider ?? 'openai' },
+    );
+    if (!parsed.success) {
+      for (const issue of parsed.error.issues) {
+        ctx.addIssue({ code: 'custom', message: issue.message });
+      }
+      return z.NEVER;
+    }
+    const { engine, cloudProvider, voice } = parsed.data;
+    return { engine, cloudProvider, voice };
+  });
+
+/** The lenient LOAD-path twin: anything the strict field refuses becomes null.
+ *  Deliberately NOT repaired onto a piper/kokoro floor — inventing a rescue
+ *  voice the operator never chose is worse than having none. */
+export function repairPersonaFallbackVoice(raw: unknown): PersonaFallbackVoice | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const parsed = personaFallbackVoice.safeParse(raw);
+  return parsed.success ? parsed.data : null;
+}
+
 // Explicit null reads as "absent" on every OPTIONAL field; zod's `.default()`
 // fires only on undefined.
 const personaNullToUndefined = (v: unknown) => (v == null ? undefined : v);
@@ -426,6 +482,8 @@ export interface PersonaParsed {
   tagline: string;
   frequency: string;
   scriptLength: string;
+  identMode: 'improvise' | 'verbatim';
+  identLines: string[];
   djMode: boolean;
   linkStyle: string;
   humour: number;
@@ -435,8 +493,10 @@ export interface PersonaParsed {
   musicLean: string;
   language: string;
   voiceStyle: string;
+  alsoSpeaks: string;
   avatar: string;
   tts: TtsVoiceSlot;
+  fallbackVoice: PersonaFallbackVoice | null;
   skills: string[] | null;
   tags: string[];
 }
@@ -506,6 +566,16 @@ export const personaSchema = z
         .max(PERSONA_VOICE_STYLE_MAX, `voiceStyle must be 0-${PERSONA_VOICE_STYLE_MAX} chars`)
         .default(''),
     ),
+    // Languages a multilingual DJ mixes INTO `language`, comma-separated.
+    // '' = one language. Read only by settings/persona.ts personaLanguages.
+    alsoSpeaks: z.preprocess(
+      personaNullToUndefined,
+      z
+        .string({ error: 'alsoSpeaks must be a string' })
+        .trim()
+        .max(PERSONA_LANGUAGE_MAX, `alsoSpeaks must be 0-${PERSONA_LANGUAGE_MAX} chars`)
+        .default(''),
+    ),
     frequency: z.enum(PERSONA_FREQUENCIES, {
       error: `frequency must be one of: ${PERSONA_FREQUENCIES.join(', ')}`,
     }),
@@ -516,6 +586,24 @@ export const personaSchema = z
           error: `scriptLength must be one of: ${PERSONA_SCRIPT_LENGTHS.join(', ')}`,
         })
         .default('concise'),
+    ),
+    identMode: z.preprocess(
+      personaNullToUndefined,
+      z.enum(PERSONA_IDENT_MODES, {
+        error: `identMode must be one of: ${PERSONA_IDENT_MODES.join(', ')}`,
+      }).default('improvise'),
+    ),
+    identLines: z.preprocess(
+      personaNullToUndefined,
+      z.array(z.string({ error: 'identLines must contain strings' }), {
+        error: 'identLines must be an array of strings',
+      })
+        .transform(items => items.map(line => line.trim()).filter(Boolean))
+        .refine(items => items.length <= PERSONA_IDENT_LINES_LIMIT,
+          `identLines must be at most ${PERSONA_IDENT_LINES_LIMIT} lines`)
+        .refine(items => items.every(line => line.length <= PERSONA_IDENT_LINE_MAX),
+          `identLines must be at most ${PERSONA_IDENT_LINE_MAX} chars per line`)
+        .default([]),
     ),
     // Absent → false. Present must be a real boolean (unlike a show's `=== true`
     // booleans): the strict path has always refused a non-boolean here.
@@ -555,6 +643,7 @@ export const personaSchema = z
         .transform((v) => v ?? ''),
     ),
     tts: ttsVoiceSlotSchema('tts', { allowInherit: true }),
+    fallbackVoice: personaFallbackVoice,
     // Absent → null ("all skills", the legacy default).
     skills: z.preprocess(
       personaNullToUndefined,
@@ -596,6 +685,8 @@ export const personaSchema = z
       tagline: p.tagline,
       frequency: p.frequency,
       scriptLength: p.scriptLength,
+      identMode: p.identMode,
+      identLines: p.identLines,
       djMode: p.djMode,
       linkStyle: p.linkStyle,
       humour: p.humour,
@@ -605,8 +696,10 @@ export const personaSchema = z
       musicLean: p.musicLean,
       language: p.language,
       voiceStyle: p.voiceStyle,
+      alsoSpeaks: p.alsoSpeaks,
       avatar: p.avatar,
       tts: p.tts,
+      fallbackVoice: p.fallbackVoice,
       skills: p.skills,
       tags: p.tags,
     }),
@@ -648,6 +741,10 @@ export function repairPersonaForLoad(
     voiceStyle: typeof raw.voiceStyle === 'string'
       ? raw.voiceStyle.trim().slice(0, PERSONA_VOICE_STYLE_MAX)
       : undefined,
+    alsoSpeaks:
+      typeof raw.alsoSpeaks === 'string'
+        ? raw.alsoSpeaks.trim().slice(0, PERSONA_LANGUAGE_MAX)
+        : undefined,
     frequency: (PERSONA_FREQUENCIES as readonly string[]).includes(raw.frequency as string)
       ? raw.frequency
       : 'moderate',
@@ -655,6 +752,14 @@ export function repairPersonaForLoad(
       raw.scriptLength as string,
     )
       ? raw.scriptLength
+      : undefined,
+    identMode: (PERSONA_IDENT_MODES as readonly string[]).includes(raw.identMode as string)
+      ? raw.identMode
+      : undefined,
+    identLines: Array.isArray(raw.identLines)
+      ? raw.identLines.filter((line): line is string => typeof line === 'string')
+          .map(line => line.trim().slice(0, PERSONA_IDENT_LINE_MAX)).filter(Boolean)
+          .slice(0, PERSONA_IDENT_LINES_LIMIT)
       : undefined,
     djMode: raw.djMode === true ? true : undefined,
     linkStyle: (PERSONA_LINK_STYLES as readonly string[]).includes(raw.linkStyle as string)
@@ -665,6 +770,7 @@ export function repairPersonaForLoad(
         ? raw.avatar.trim()
         : undefined,
     tts: repairTtsVoiceSlot(raw.tts, { allowInherit: true }),
+    fallbackVoice: repairPersonaFallbackVoice(raw.fallbackVoice),
     // Non-array → undefined → the schema's null default ("all skills"). Renames
     // are applied here, not in the schema: a rename migrates stored data rather
     // than stating a rule a submitted value must satisfy.
@@ -762,8 +868,9 @@ export function repairDjPromptForLoad(
 
 /**
  * Personas that will NOT speak through the station voice `{engine, provider}` —
- * what the admin DJ Brain section warns about and its one-click fix patches to
- * 'inherit'. A persona already on `inherit` is never listed.
+ * what the admin TTS voice page warns about under a DJ Brain studio voice, and
+ * its one-click fix patches to 'inherit'. A persona already on `inherit` is
+ * never listed.
  *
  * `provider` matters: the four cloud providers share one dispatcher but are
  * independent targets, so cloud/openai does not follow an openai-compatible

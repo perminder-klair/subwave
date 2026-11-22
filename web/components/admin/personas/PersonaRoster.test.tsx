@@ -11,6 +11,8 @@ const persona: Persona = {
   tagline: 'After dark',
   frequency: 'moderate',
   scriptLength: 'concise',
+  identMode: 'improvise',
+  identLines: [],
   djMode: false,
   linkStyle: 'natural',
   humour: 5,
@@ -19,6 +21,7 @@ const persona: Persona = {
   soul: 'Calm and observant.',
   musicLean: '',
   language: '',
+  alsoSpeaks: '',
   avatar: '',
   tts: {
     engine: 'piper',
@@ -27,6 +30,7 @@ const persona: Persona = {
     gainDb: 0,
     speed: 1,
   },
+  fallbackVoice: null,
   skills: [],
   tags: ['late-night'],
 };
