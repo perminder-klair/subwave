@@ -287,7 +287,7 @@ export function LlmStep({ w }: { w: WizardController }) {
           <div className="grid gap-0.5">
             <span className={WIZARD_LABEL_CLASS}>No model to run?</span>
             <span className="text-sm text-ink">
-              SUB/WAVE DJ Brain is a hosted brain for this station — one key, from £5/month.{' '}
+              SUB/WAVE DJ Brain is a hosted brain for this station — one key, from $6/month.{' '}
               <a href={DJ_BRAIN_SIGNUP_URL} target="_blank" rel="noreferrer" className="underline">Get a key</a>
               {isDjBrain ? ', then paste it below.' : '.'}
             </span>
