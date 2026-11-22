@@ -8,11 +8,14 @@ export default function Credit({
   by,
   added,
   modified,
+  linkHandle = true,
   className,
 }: {
   by?: string;
   added?: string;
   modified?: string;
+  /** False when `by` may be a plain name rather than a GitHub login (/apps). */
+  linkHandle?: boolean;
   className?: string;
 }) {
   const who = handle(by);
@@ -23,7 +26,7 @@ export default function Credit({
       {who && (
         <span>
           by{' '}
-          {isGithubHandle(who) ? (
+          {linkHandle && isGithubHandle(who) ? (
             <a href={`https://github.com/${who}`} target="_blank" rel="noreferrer" className={s.creditLink}>
               @{who}
             </a>

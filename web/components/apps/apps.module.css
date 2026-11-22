@@ -1,0 +1,365 @@
+/* /apps — the Receivers. A band switch of push keys across the top (the type
+   filter), then each app as a set on the shop shelf: a model strip, a screen or
+   a speaker grille, and its spec. Theme tokens only, so every station theme and
+   dark mode carry through; nothing here moves except a hover lift, which
+   prefers-reduced-motion: reduce drops. */
+
+/* ---- Band switch -------------------------------------------------------- */
+
+.band {
+    display: flex;
+    align-items: stretch;
+    margin: 0 0 clamp(28px, 4vw, 44px);
+    border: 2px solid var(--ink);
+    background: var(--ink);
+    min-width: 0;
+}
+.bandTag {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    padding: 6px 14px;
+    background: var(--accent);
+    color: var(--bg);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+}
+/* The 1px gaps let the ink frame show through as the lines between keys. */
+.bandKeys {
+    flex: 1 1 auto;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1px;
+    min-width: 0;
+}
+.key {
+    flex: 1 1 96px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    padding: 10px 14px 12px;
+    border: 0;
+    background: var(--bg);
+    color: var(--muted);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    text-align: left;
+    cursor: pointer;
+    /* A raised key: a lip along the bottom edge. */
+    box-shadow: inset 0 -4px 0 var(--separator-strong);
+    transition:
+        color 120ms ease,
+        box-shadow 120ms ease,
+        padding 120ms ease;
+}
+.key:hover {
+    color: var(--ink);
+}
+.key:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -4px;
+}
+/* Pressed in: the lip moves to the top and the contents drop with it. */
+.key[aria-pressed='true'] {
+    padding: 13px 14px 9px;
+    background: var(--surface);
+    color: var(--ink);
+    box-shadow: inset 0 4px 0 var(--ink);
+}
+.keyLabel {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+}
+.lamp {
+    flex: none;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--separator-strong);
+}
+.key[aria-pressed='true'] .lamp {
+    background: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 25%, transparent);
+}
+.keyCount {
+    font-family: var(--font-display);
+    font-size: 24px;
+    font-weight: 900;
+    letter-spacing: -0.02em;
+    line-height: 1;
+    color: var(--ink);
+}
+@media (max-width: 720px) {
+    .band {
+        flex-direction: column;
+    }
+    .key {
+        flex-basis: 30%;
+    }
+}
+
+/* AppTypeFilter sets data-filter on the wrapper and the server-rendered cards
+   carry data-type. One rule per type, because CSS cannot compare two
+   attributes. */
+.filterWrap[data-filter='mobile'] .card:not([data-type='mobile']),
+.filterWrap[data-filter='web'] .card:not([data-type='web']),
+.filterWrap[data-filter='desktop'] .card:not([data-type='desktop']),
+.filterWrap[data-filter='terminal'] .card:not([data-type='terminal']),
+.filterWrap[data-filter='bot'] .card:not([data-type='bot']),
+.filterWrap[data-filter='skin'] .card:not([data-type='skin']),
+.filterWrap[data-filter='integration'] .card:not([data-type='integration']) {
+    display: none;
+}
+
+/* ---- The shelf ---------------------------------------------------------- */
+
+.grid {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+    gap: clamp(24px, 3vw, 40px);
+}
+.card {
+    --card-pad: clamp(16px, 2vw, 22px);
+    display: flex;
+    flex-direction: column;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    box-shadow:
+        0 1px 0 var(--separator-strong),
+        0 14px 24px -18px color-mix(in oklab, var(--ink) 45%, transparent);
+    min-width: 0;
+    scroll-margin-top: 24px;
+    transition:
+        transform 200ms ease,
+        box-shadow 200ms ease;
+}
+.card:hover,
+.card:focus-within,
+.card:target {
+    transform: translate(-3px, -3px);
+    box-shadow: 8px 8px 0 var(--accent);
+}
+.cardStrip {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    padding: 12px var(--card-pad) 8px;
+    border-bottom: 2px solid var(--accent);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+.badge {
+    padding: 2px 7px;
+    background: var(--ink);
+    color: var(--bg);
+    letter-spacing: 0.16em;
+}
+
+/* Fixed ratio so a shelf of cards keeps a straight line whatever the submitter
+   uploaded, and a slow or dead image host can't reflow the grid. */
+.plate {
+    position: relative;
+    aspect-ratio: 16 / 10;
+    overflow: hidden;
+    border-bottom: 1px solid var(--line);
+    background: var(--separator-strong);
+}
+.plateImg {
+    object-fit: cover;
+}
+/* No screenshot: the set's speaker grille, with its icon (or a tuning knob) as
+   the badge in the middle. */
+.grille {
+    display: grid;
+    place-items: center;
+    background-color: var(--bg);
+    background-image: radial-gradient(
+        circle at center,
+        color-mix(in oklab, var(--ink) 50%, transparent) 1.3px,
+        transparent 1.8px
+    );
+    background-size: 9px 9px;
+    background-position: center;
+}
+.grilleBadge {
+    display: block;
+    width: 84px;
+    height: 84px;
+    object-fit: cover;
+    background: var(--surface);
+    border: 2px solid var(--ink);
+    box-shadow: 6px 6px 0 var(--accent);
+}
+.knob {
+    display: block;
+    width: 84px;
+    height: 84px;
+    border-radius: 50%;
+    background: var(--surface);
+    box-shadow: 0 0 0 8px var(--bg);
+}
+
+.body {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 16px var(--card-pad) 18px;
+    min-width: 0;
+}
+.head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+}
+.icon {
+    flex: none;
+    width: 44px;
+    height: 44px;
+    object-fit: cover;
+    border: 1px solid var(--ink);
+}
+.name {
+    margin: 0;
+    min-width: 0;
+    font-family: var(--font-display);
+    font-size: clamp(21px, 2.2vw, 27px);
+    font-weight: 900;
+    line-height: 1.02;
+    letter-spacing: -0.01em;
+    overflow-wrap: anywhere;
+}
+.nameLink {
+    color: inherit;
+    text-decoration: none;
+    transition: color 120ms;
+}
+.nameLink:hover,
+.nameLink:focus-visible {
+    color: var(--accent);
+    text-decoration: underline;
+    text-decoration-thickness: 2px;
+    text-underline-offset: 3px;
+}
+
+.runs {
+    margin: 0;
+}
+.runs dt {
+    margin: 0 0 6px;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+.runs dd {
+    margin: 0;
+}
+.chips {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.chip {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border: 1px solid var(--ink);
+    border-radius: 999px;
+}
+
+/* Pinned to the bottom, so the links line up along a row of uneven cards. */
+.foot {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    margin-top: auto;
+    padding-top: 4px;
+}
+.links {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 18px;
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+}
+.get {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    background: var(--ink);
+    color: var(--bg);
+    font-weight: 700;
+    text-decoration: none;
+    box-shadow: 3px 3px 0 var(--accent);
+    transition:
+        transform 120ms ease,
+        box-shadow 120ms ease;
+}
+.get:hover,
+.get:focus-visible {
+    transform: translate(-2px, -2px);
+    box-shadow: 5px 5px 0 var(--accent);
+}
+.source {
+    color: var(--muted);
+}
+.source:hover,
+.source:focus-visible {
+    color: var(--ink);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+.credit {
+    padding-top: 12px;
+    border-top: 1px dashed var(--separator-strong);
+}
+
+/* ---- Small print -------------------------------------------------------- */
+
+.fine {
+    margin: clamp(24px, 4vw, 40px) 0 0;
+    max-width: 78ch;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--muted);
+}
+.fine + .fine {
+    margin-top: 10px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .card,
+    .key,
+    .get {
+        transition: none;
+    }
+}
