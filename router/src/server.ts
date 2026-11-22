@@ -56,7 +56,7 @@ async function serveRest(req: express.Request, res: express.Response, endpoint: 
   const src = getSource();
   if (authErr) return respondError(req, res, src?.name, authErr.code, authErr.message, binary ? 401 : 200);
   if (!src) {
-    const reason = configError() ?? 'no music source is selected — choose one in Admin → Settings → Music source';
+    const reason = configError() ?? 'no music source is selected — choose one in Admin → Music sources';
     return respondError(req, res, undefined, 0, reason, binary ? 503 : 200);
   }
   const handler = handlers[endpoint];

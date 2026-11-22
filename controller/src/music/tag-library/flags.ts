@@ -8,7 +8,7 @@ import * as embeddings from '../embeddings.js';
 import { adoptAndPrune } from '../id-rotation.js';
 import { albumEraKey, applyWalkForcedYear, eraWalkFields, libraryOwnerContext, liveEraOverrides, type EraOverride, type EraOverrideLookup } from '../era-review.js';
 import { loadSecretsIntoEnv } from '../../setup/secrets.js';
-import { loadNavidromeConfig } from '../../setup/config.js';
+import { loadMaintenanceConnection } from '../../setup/config.js';
 import { reportProgress, reportCatalogueReady } from '../tagger-progress.js';
 import { logEvent } from './log.js';
 import { changedAfterMeasure, decideReplacedClear } from '../replaced-file-policy.js';
@@ -312,7 +312,7 @@ export async function applyWizardOverlay() {
     console.error('[secrets] load failed:', err.message);
   }
   try {
-    await loadNavidromeConfig();
+    await loadMaintenanceConnection();
   } catch (err: any) {
     console.error('[setup-config] load failed:', err.message);
   }

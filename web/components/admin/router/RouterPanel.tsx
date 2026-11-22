@@ -1,97 +1,42 @@
 'use client';
 
-// Admin → Music router: the SUB/WAVE music router's control center. Source
+// Admin → Music sources → Monitor: the SUB/WAVE music router's control center. Source
 // channels (every plugin, its health, counts, latency and capabilities), the
 // Signal path monitor (the station's live Subsonic traffic and which source
 // answered it), and the service matrix (which endpoints each source backs).
 //
-// Read-only on purpose. Choosing what serves is Settings → Music source, whose
+// Read-only on purpose. Choosing what serves is the Sources tab, whose
 // save validates the draft, writes the router's config and re-links the
 // library when track ids change — a second switch here would skip all three.
 
 import { useMemo, useState } from 'react';
-import Link from 'next/link';
-import { Radio, RefreshCw } from 'lucide-react';
-import { adminJson, useAdminMutation, useAdminQuery } from '../../../lib/admin-query';
+import { Radio } from 'lucide-react';
+import { adminJson, useAdminQuery } from '../../../lib/admin-query';
 import { useAdminAuth } from '../../../lib/adminAuth';
-import { errorMessage, notify } from '../../../lib/notify';
-import { cn } from '../../../lib/cn';
-import { buttonVariants } from '../../ui/button';
+import { errorMessage } from '../../../lib/notify';
 import { V3Alert } from '../../ui/alert';
-import { Btn } from '../ui';
 import type { RouterActivity } from '../../../lib/schemas.generated';
-import { MUSIC_SOURCE_KEY } from '../settings/MusicSourceSection';
+import { MUSIC_SOURCE_KEY, ROUTER_ACTIVITY_KEY } from '../sources/queries';
 import { buildChannels, type RouterView } from './model';
 import { ServiceMatrix } from './ServiceMatrix';
 import { SignalPath } from './SignalPath';
 import { SourceChannels } from './SourceChannels';
+import { RackPanel } from './Rack';
 import s from './router.module.css';
 
-/** The live feed, polled only while this page is open. Nests under the music-source family. */
-export const ROUTER_ACTIVITY_KEY = [...MUSIC_SOURCE_KEY, 'activity'] as const;
-
 const ACTIVITY_POLL_MS = 1_500;
-// Health asks every serving backend for its library counts, so it is not polled hard.
-const HEALTH_POLL_MS = 30_000;
-
-function Screws() {
-  return (
-    <>
-      <span className={s.screw} data-at="tl" aria-hidden="true" />
-      <span className={s.screw} data-at="tr" aria-hidden="true" />
-    </>
-  );
-}
-
-function RackPanel({
-  title,
-  description,
-  action,
-  flush,
-  children,
-}: {
-  title: string;
-  description?: string;
-  action?: React.ReactNode;
-  flush?: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className={s.rack} aria-label={title}>
-      <Screws />
-      <div className={s.rackHeader}>
-        <div className="min-w-0">
-          <h2>{title}</h2>
-          {description && <p>{description}</p>}
-        </div>
-        {action && <div className={s.rackActions}>{action}</div>}
-      </div>
-      <div className={flush ? s.rackBodyFlush : s.rackBody}>{children}</div>
-    </section>
-  );
-}
-
-function summaryLine(view: RouterView): string {
-  const r = view.router;
-  if (!r) return 'ESTABLISHING LINK…';
-  const parts =
-    view.mode === 'router'
-      ? ['MODE ROUTER', `SERVING ${r.serving ? r.serving.name.toUpperCase() : 'NOTHING'}`]
-      : ['MODE DIRECT NAVIDROME', 'ROUTER IDLE'];
-  parts.push(`ROUTER v${r.router.version}`, `PLUGIN API v${r.router.apiVersion}`, `${r.plugins.length} PLUGINS`, `${r.endpoints.length} ENDPOINTS`);
-  return parts.join(' / ');
-}
 
 export default function RouterPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
   const enabled = hydrated && !needsAuth;
   const [paused, setPaused] = useState(false);
 
+  // The page header (MusicSourcesPanel) owns this resource's polling and the
+  // re-check / rescan keys; the Monitor reads the same cache entry.
   const statusQuery = useAdminQuery<RouterView>({
     key: MUSIC_SOURCE_KEY,
     adminFetch,
     enabled,
-    refetchInterval: () => HEALTH_POLL_MS,
     request: (fetcher, signal) => adminJson<RouterView>(fetcher, '/settings/music-source', undefined, signal),
   });
   const view = statusQuery.data;
@@ -106,57 +51,14 @@ export default function RouterPanel() {
     request: (fetcher, signal) => adminJson<RouterActivity>(fetcher, '/settings/music-source/activity', undefined, signal),
   });
 
-  const rescan = useAdminMutation<unknown, void>({
-    adminFetch,
-    request: (_vars, fetcher) => adminJson(fetcher, '/settings/music-source/rescan', { method: 'POST' }),
-    onDone: async (_data, _vars, client) => {
-      await client.invalidateQueries({ queryKey: MUSIC_SOURCE_KEY, exact: true });
-      notify.ok('Plugins rescanned');
-    },
-  });
 
   const channels = useMemo(() => (view ? buildChannels(view) : []), [view]);
   const backends = channels.filter((c) => c.kind === 'source');
 
-  const lamp = statusQuery.isError || view?.routerError || view?.router?.configError ? 'error' : view?.mode === 'navidrome' ? 'idle' : 'ok';
   const statusError = statusQuery.isError ? errorMessage(statusQuery.error) : null;
 
   return (
     <div className={s.console}>
-      <header className={s.faceplate}>
-        <Screws />
-        <span className={s.screw} data-at="bl" aria-hidden="true" />
-        <span className={s.screw} data-at="br" aria-hidden="true" />
-        <div className={s.brand}>
-          <span className={s.powerLamp} data-state={lamp} aria-hidden="true" />
-          <div>
-            <h1>SUB/WAVE ROUTER</h1>
-            <p>Music sources / live diagnostics</p>
-          </div>
-        </div>
-        <div className={s.readout} aria-live="polite" title={view ? summaryLine(view) : undefined}>
-          {view ? summaryLine(view) : statusError ? 'NO LINK TO THE CONTROLLER' : 'ESTABLISHING LINK…'}
-        </div>
-        {view?.mode === 'navidrome' && (
-          <p className={s.runtimeNote}>
-            Station plays Navidrome directly
-            <br />
-            router idles until selected
-          </p>
-        )}
-        <div className={s.faceplateActions}>
-          <Btn sm onClick={() => void statusQuery.refetch()} disabled={statusQuery.isFetching}>
-            <RefreshCw aria-hidden="true" className={cn(statusQuery.isFetching && 'animate-spin')} />
-            Re-check health
-          </Btn>
-          <Btn sm onClick={() => rescan.mutate()} disabled={rescan.isPending || !routerUp}>
-            {rescan.isPending ? 'Rescanning…' : 'Rescan plugins'}
-          </Btn>
-          <Link href="/admin/settings?section=music" className={buttonVariants({ variant: 'solid', size: 'sm' })}>
-            Change source
-          </Link>
-        </div>
-      </header>
 
       {statusError && (
         <V3Alert tone="error" title="could not load the router status">{statusError}</V3Alert>

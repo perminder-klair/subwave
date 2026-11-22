@@ -1,7 +1,7 @@
 {
   "name": "navidrome",
   "label": "Navidrome",
-  "description": "Navidrome or another Subsonic-compatible server. A station on Navidrome alone connects to it directly; use this to merge it with another source.",
+  "description": "Navidrome or another Subsonic-compatible server — the station's default source. Its address and login are the station's Navidrome connection.",
   "version": "1.0.0",
   "apiVersion": 1,
   "idPrefix": "nd",

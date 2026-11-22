@@ -118,6 +118,10 @@ process.env.STATE_DIR = state;
 process.env.NAVIDROME_URL = origin;
 process.env.NAVIDROME_USER = 'fixture';
 process.env.NAVIDROME_PASS = 'fixture';
+// Direct Navidrome mode: this file tests the replaced-file signal, not the
+// music router (#692), and its failed-ping case must not leave the walk on a
+// router that is not running here.
+writeFileSync(join(state, 'setup-config.json'), JSON.stringify({ music: { mode: 'navidrome' } }));
 
 const preload = join(state, 'network.mjs');
 writeFileSync(preload, `

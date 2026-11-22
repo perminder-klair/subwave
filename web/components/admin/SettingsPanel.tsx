@@ -52,7 +52,6 @@ import { LibrarySection } from './settings/LibrarySection';
 import { StationSection } from './settings/StationSection';
 import { ThemeSection } from './settings/ThemeSection';
 import { ListenersSection } from './settings/ListenersSection';
-import { MusicSourceSection } from './settings/MusicSourceSection';
 import { MusicSelectionSection } from './settings/MusicSelectionSection';
 import {
   useLlmSwapMutation,
@@ -200,6 +199,11 @@ export default function SettingsPanel({ hosted = false }: { hosted?: boolean }) 
     // hosted station has no LLM page, so the link falls through to Station.
     const RENAMED: Record<string, SectionId> = { danger: 'broadcast', likes: 'listeners', scrobble: 'listeners', orphans: 'stems', brain: 'llm' };
     const s = requested && RENAMED[requested] ? RENAMED[requested] : requested;
+    // Music source moved to its own page (#692).
+    if (s === 'music') {
+      router.replace('/admin/sources?tab=sources');
+      return;
+    }
     if (s && sections.some(x => x.id === s)) setActiveSection(s as SectionId);
   }, [router, searchParams, sections]);
 
@@ -625,9 +629,6 @@ export default function SettingsPanel({ hosted = false }: { hosted?: boolean }) 
                 data={data} form={form} setForm={updateForm} busy={busy}
                 saveSettings={saveSettings} fieldErrors={fieldErrors}
               />
-            )}
-            {activeSection === 'music' && (
-              <MusicSourceSection data={data} adminFetch={adminFetch} refresh={refresh} />
             )}
             {activeSection === 'theme' && (
               <ThemeSection

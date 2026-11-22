@@ -18,6 +18,7 @@ const jellyfin: MusicPluginInfo = {
   envLocked: [],
   error: null,
   capabilities: null,
+  devOnly: false,
   config: [
     { key: 'url', label: 'Server URL', type: 'url', required: true },
     { key: 'apiKey', label: 'API key', type: 'secret', required: true },
@@ -89,4 +90,15 @@ test('the id-change warning follows the manifest marks', () => {
   const view = { mode: 'router' as const, merge: false, sources: [{ plugin: 'plex', config: { url: 'http://px', sonicSimilarity: true }, secretsSet: ['token'] }] };
   assert.equal(changesTrackIds(view, 'router', [{ ...view.sources[0]!, config: { url: 'http://px', sonicSimilarity: false } }], [plex]), false, 'a toggle');
   assert.equal(changesTrackIds(view, 'router', [{ ...view.sources[0]!, config: { url: 'http://px2', sonicSimilarity: true } }], [plex]), true, 'a new server');
+});
+
+test('the Navidrome source plays the station connection, so the draft asks nothing of it', () => {
+  const navidrome = { ...jellyfin, name: 'navidrome', label: 'Navidrome', config: [{ key: 'url', label: 'Server URL', type: 'url' as const, required: true }] };
+  assert.deepEqual(missingFields({ plugin: 'navidrome', config: {}, secretsSet: [] }, navidrome), []);
+});
+
+test('the default and direct Navidrome are the same library; another source is not', () => {
+  const dflt: SavedSelectionView = { mode: 'router', merge: false, sources: [{ plugin: 'navidrome', config: {}, rawIds: true, secretsSet: [] }] };
+  assert.equal(changesTrackIds(dflt, 'navidrome', [], [jellyfin]), false, 'going direct keeps every id');
+  assert.equal(changesTrackIds(dflt, 'router', [{ plugin: 'jellyfin', config: { url: 'http://jf' }, secretsSet: [] }], [jellyfin]), true);
 });

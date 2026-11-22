@@ -1,6 +1,6 @@
 # Writing a music-source plugin
 
-SUB/WAVE plays from Navidrome directly, or from anything the **music router** can reach: Jellyfin, Plex, Navidrome, a demo library, and any plugin you install. A plugin is one folder with a manifest and a JavaScript module. This page is the whole contract.
+SUB/WAVE plays from whatever the **music router** can reach: Navidrome (the default), Jellyfin, Plex, and any plugin you install. A plugin is one folder with a manifest and a JavaScript module. This page is the whole contract.
 
 A complete, working example lives in [`docs/examples/sources/folder`](./examples/sources/folder) — a music folder on disk, in about 200 lines with no dependencies. Read it alongside this page.
 
@@ -12,7 +12,7 @@ my-source/
   index.mjs             # export default (ctx) => ({ ...ops })
 ```
 
-Install it by copying the folder to `state/router/plugins/my-source/` and pressing **Rescan plugins** in Admin → Settings → Music source. It then appears in the source picker, with a settings form drawn from your manifest.
+Install it by copying the folder to `state/router/plugins/my-source/` and pressing **Rescan plugins** in Admin → Music sources → Plugins. It then appears in the source picker on the Sources tab, with a settings form drawn from your manifest.
 
 > **Plugins are code.** They run inside the router with network access. Install only plugins you have read and trust. The router only sees `state/router/`, not the rest of the station's state, but a plugin can still reach anything the router can reach on the network.
 
@@ -43,6 +43,7 @@ Install it by copying the folder to `state/router/plugins/my-source/` and pressi
 | `idPrefix` | `^[a-z][a-z0-9]{1,5}$`. Unique. Your ids are published as `<idPrefix>-<native id>`. |
 | `entry` | Relative path inside the folder. Defaults to `index.mjs`. |
 | `config[]` | The settings form. `type` is `url`, `string`, `secret`, `number`, `boolean` or `select` (`select` needs `options: [{ value, label }]`). `secret` values are write-only in the UI. `env` names a variable that overrides the field and locks it in the form. Give the server address the `url` type: a stored secret is reused only while every `url` field is unchanged, so it is never sent to a new host. `affectsIds: true` marks a setting that changes the ids you publish (a server address, a library section); `affectsIds: false` one that does not (a display toggle). Changing a marked setting makes the station re-link its library (tags, likes, the blocklist) by metadata; mark at least one field either way, or every non-secret field counts. |
+| `devOnly` | Optional, `true` for a plugin meant for development and tests (the built-in demo library, `mock`). The router loads, lists and serves it like any other and reports the flag; the station hides it from operators. |
 
 ## The module
 
@@ -65,6 +66,8 @@ The default export is a factory the router calls with a context whenever the ope
 | `dataDir` | A writable folder only you use (`state/router/data/<name>`). |
 
 Keep the factory cheap: no network calls in it. Build state lazily on first use, and implement `close()` if you start timers.
+
+The one exception is an optional op that only some of your backends support. The router reads a source's capabilities off the object your factory returns, so the factory may be `async` and ask the backend once, then leave the op out on a no — the built-in `navidrome` source does this for `sonicSimilar`, asking the server whether it advertises the `sonicSimilarity` extension. Bound that call well inside the router's 15-second limit on construction, and treat any failure as a no: a factory that throws or runs out of time is a failed selection, and the station keeps its previous source. The answer holds until the source is next built (a settings save, **Rescan plugins**, a router restart).
 
 ### Two rules that make plugins simple
 
@@ -109,6 +112,7 @@ Leave any of these out and the station degrades instead of failing — the admin
 | `artists()` | the artist list (episode shows, artist spotlights) |
 | `artistInfo(id, count)` | bios, similar artists, tags |
 | `similarSongs(id, count)` | the "more like this" picker signal; `id` may be a song or an artist |
+| `sonicSimilar(id, count)` | audio-based neighbours of a song, most similar first: the OpenSubsonic `sonicSimilarity` extension (`getSonicSimilarTracks`). A separate picker signal from `similarSongs`, so never answer one from the other; implement it only when your backend measures sound. The router synthesises the per-match similarity score from the order. |
 | `topSongs(artistName, count)` | an artist's most-played tracks |
 | `lyrics(id)` | `{ lines }`, `null` for "no lyrics", `undefined` for "no such song" |
 | `starred()` / `starredSongs()` / `star(ids)` / `unstar(ids)` | favourites both ways |
@@ -116,7 +120,7 @@ Leave any of these out and the station degrades instead of failing — the admin
 | `scrobble(id, { submission, time })` | play counts on your backend |
 | `scanStatus()` | `{ scanning }` — the station holds library pruning while your backend rescans |
 | `stats()` | library counts, and the router's health probe |
-| `capabilities.sonicSimilarity` | advertise the OpenSubsonic `sonicSimilarity` extension (served by `similarSongs`) |
+| `capabilities.sonicSimilarity` | the older way to advertise `sonicSimilarity`, still honoured: with no `sonicSimilar` op, `true` serves the extension from `similarSongs`. For a plugin whose only similarity is audio-based; ignored when `sonicSimilar` is present. |
 
 ## Test it
 

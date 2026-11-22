@@ -96,12 +96,13 @@ function patchSettingsStation(dir: string, name: string): void {
 }
 
 // A station is configured once it has music to play: a complete Navidrome
-// connection, or a music-router selection with a source (#692).
+// connection, or a music-router selection with a source — whose default, the
+// station's own Navidrome, needs that connection too (#692).
 function stationHasNavidrome(dir: string): boolean {
   try {
     const sc = JSON.parse(readFileSync(join(dir, 'setup-config.json'), 'utf8'));
     const selection = readSelection(sc);
-    return selection.mode === 'router' ? routerSelectionComplete(selection) : hasNavidrome(sc?.navidrome);
+    return selection.mode === 'router' ? routerSelectionComplete(selection, hasNavidrome(sc?.navidrome)) : hasNavidrome(sc?.navidrome);
   } catch {
     return false;
   }

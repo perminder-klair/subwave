@@ -24,6 +24,10 @@ export interface RouterView {
   sources: SavedSource[];
   router: RouterStatus | null;
   routerError: string | null;
+  /** The router is down and the station plays its Navidrome directly. */
+  failover?: { active: boolean };
+  /** The station's Navidrome connection: what the navidrome source plays (it has no settings of its own). */
+  navidrome?: { url: string; user: string; passSet: boolean; env: { url: boolean; user: boolean; pass: boolean } };
 }
 
 export interface Stats {
@@ -86,8 +90,18 @@ export interface Channel {
 
 const SEGMENTS = 12;
 
-function settingsOf(plugin: MusicPluginInfo | undefined, saved: SavedSource | undefined): ChannelSetting[] {
+function stationNavidromeSettings(nv: NonNullable<RouterView['navidrome']>): ChannelSetting[] {
+  const show = (env: boolean, value: string) => (env ? 'from env' : value || 'unset');
+  return [
+    { key: 'url', label: 'Server URL', value: show(nv.env.url, nv.url) },
+    { key: 'user', label: 'Username', value: show(nv.env.user, nv.user) },
+    { key: 'password', label: 'Password', value: show(nv.env.pass, nv.passSet ? '•••••• set' : '') },
+  ];
+}
+
+function settingsOf(plugin: MusicPluginInfo | undefined, saved: SavedSource | undefined, view?: RouterView): ChannelSetting[] {
   if (!plugin) return [];
+  if (plugin.name === 'navidrome' && view?.navidrome) return stationNavidromeSettings(view.navidrome);
   return plugin.config.map((field) => {
     let value: string;
     if (plugin.envLocked.includes(field.key)) value = 'from env';
@@ -151,7 +165,7 @@ export function buildChannels(view: RouterView): Channel[] {
       capabilities: a.capabilities,
       detail: a.health.error || (a.health.state === 'healthy' ? 'connected' : a.health.state),
       alert: a.health.state !== 'healthy',
-      settings: settingsOf(plugin, saved),
+      settings: settingsOf(plugin, saved, view),
     };
   });
 
@@ -178,7 +192,7 @@ export function buildChannels(view: RouterView): Channel[] {
       capabilities: p.capabilities,
       detail: p.error || p.description || 'standing by',
       alert: Boolean(p.error),
-      settings: settingsOf(p, view.sources.find((s) => s.plugin === p.name)),
+      settings: settingsOf(p, view.sources.find((s) => s.plugin === p.name), view),
     }));
 
   if (!merged || !status.serving) return [...onAir, ...standby];
@@ -311,4 +325,53 @@ export function backendNote(
   if (channel.lamp === 'broken') return { text: 'Plugin did not load', used: false, failed: false };
   if (channel.onAir) return { text: 'Serving · no call in this request', used: false, failed: false };
   return { text: 'Standby', used: false, failed: false };
+}
+
+// --- the page header's status strip ----------------------------------------------
+
+export interface StatusCell {
+  label: string;
+  value: string;
+  /** Lights the value: ok green, warn amber, bad red. */
+  tone?: 'ok' | 'warn' | 'bad';
+}
+
+/**
+ * What the router is doing, one reading per cell, for the Music sources header.
+ * Direct mode and the failover light the MODE cell rather than adding notes; a
+ * FAULTS cell appears only when a plugin failed to load.
+ */
+export function statusCells(view: RouterView | undefined, error: string | null): StatusCell[] {
+  if (!view) return [{ label: 'Link', value: error ? 'NO LINK TO THE CONTROLLER' : 'ESTABLISHING…', tone: error ? 'bad' : undefined }];
+  const r = view.router;
+  const failover = view.mode === 'router' && Boolean(view.failover?.active);
+  const mode: StatusCell =
+    view.mode !== 'router'
+      ? { label: 'Mode', value: 'DIRECT', tone: 'warn' }
+      : failover
+        ? { label: 'Mode', value: 'FAILOVER', tone: 'bad' }
+        : { label: 'Mode', value: 'ROUTER', tone: 'ok' };
+  const serving: StatusCell =
+    view.mode !== 'router' || failover
+      ? { label: 'Serving', value: 'NAVIDROME DIRECT', tone: failover ? 'bad' : 'warn' }
+      : r?.serving
+        ? { label: 'Serving', value: r.serving.name.replace(/\+/g, ' + ').toUpperCase() }
+        : { label: 'Serving', value: 'NOTHING', tone: 'bad' };
+  if (!r) return [mode, serving, { label: 'Router', value: 'UNREACHABLE', tone: 'bad' }];
+  const faults = r.plugins.filter((p) => p.error).length;
+  return [
+    mode,
+    serving,
+    { label: 'Router', value: `v${r.router.version} · API v${r.router.apiVersion}` },
+    { label: 'Plugins', value: String(r.plugins.length) },
+    { label: 'Endpoints', value: String(r.endpoints.length) },
+    ...(faults ? [{ label: 'Faults', value: String(faults), tone: 'bad' as const }] : []),
+  ];
+}
+
+/** The status lamp: red on any fault, outage or failover; amber when the router is bypassed. */
+export function statusLamp(view: RouterView | undefined, error: string | null): 'ok' | 'idle' | 'error' {
+  if (error || !view || view.routerError || view.router?.configError || view.failover?.active) return 'error';
+  if (view.router?.plugins.some((p) => p.error)) return 'error';
+  return view.mode === 'navidrome' ? 'idle' : 'ok';
 }
