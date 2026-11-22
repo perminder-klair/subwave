@@ -11,6 +11,7 @@ import type { StationLocale } from '../../../lib/types';
 import { cn } from '../../../lib/cn';
 import { useZodForm, applyServerFieldErrors } from '@/lib/form';
 import { SwitchField, TextField, TextareaField } from '@/lib/form-fields';
+import { FieldLabel } from '@/components/ui/field';
 import { Card, Btn, Pill, Seg } from '../ui';
 import { SlotMenu } from '../schedule/bits';
 import { useShowPlaylistsQuery } from '../shows/queries';
@@ -91,6 +92,7 @@ export function SteerCard({ tz, locale }: { tz?: string; locale?: StationLocale 
   const until = form.watch('until');
   const promptValue = form.watch('prompt') || '';
   const promptLength = promptValue.length;
+  const hasPlaylist = !!form.watch('playlistId');
   const inputs: SteerStartInputs = {
     // `minutes` is the coerced field's raw input: only a number sizes anything.
     playlistId: form.watch('playlistId'), prompt: promptValue, until,
@@ -118,6 +120,10 @@ export function SteerCard({ tz, locale }: { tz?: string; locale?: StationLocale 
   }, []);
 
   const live = steerActiveAt(steer, now);
+  // When this steer would end, for the readout beside "For how long".
+  const endsAt = until === 'fixed'
+    ? (typeof minutes === 'number' && minutes >= STEER_MIN_MINUTES && minutes <= STEER_MAX_MINUTES ? now + minutes * 60_000 : null)
+    : untilSchedule ? windowQuery.data?.expiresAt ?? null : null;
 
   const startMutation = useAdminMutation<StartResult, SteerVars>({
     adminFetch,
@@ -249,7 +255,7 @@ export function SteerCard({ tz, locale }: { tz?: string; locale?: StationLocale 
           </div>
           {queued.length > 0 && (
             <div className="grid gap-0.5 text-[11px] text-ink">
-              <span className="text-[10px] text-muted">opening tracks still to play, no model call needed for them</span>
+              <span className="text-[10px] text-muted">opening tracks to come</span>
               {queued.map(t => (
                 <span key={t.id} className="truncate">
                   {t.title} <span className="text-muted">— {t.artist}</span>
@@ -260,8 +266,8 @@ export function SteerCard({ tz, locale }: { tz?: string; locale?: StationLocale 
           {budgetMode !== 'normal' && (
             <div className="text-[10px] text-muted">
               {budgetMode === 'hard'
-                ? 'the daily token cap is reached — its opening tracks still play, then picks pause and the station coasts on the auto-playlist'
-                : 'the token budget is in its saving tier — the steer only re-orders the tracks already in reach'}
+                ? 'token cap reached: opening tracks still play, then the station coasts'
+                : 'saving tokens: the steer only reorders tracks already in reach'}
             </div>
           )}
           <Btn sm className="w-full" disabled={busy} onClick={clear}>
@@ -269,111 +275,126 @@ export function SteerCard({ tz, locale }: { tz?: string; locale?: StationLocale 
           </Btn>
         </div>
       ) : (
-        <div className="@container grid gap-4">
-          <div className="grid gap-2">
-            <span className="text-sm font-medium">Playlist</span>
-            <Controller
-              control={form.control}
-              name="playlistId"
-              render={({ field }) => (
-                <SlotMenu<string | null>
-                  ariaLabel="Choose a playlist to play exclusively"
-                  className="min-h-9 w-full min-w-0 justify-between text-[12px]"
-                  label={(
-                    <span className="min-w-0 flex-1 truncate text-left">
-                      {playlistName(field.value) ?? (playlistsQuery.isError ? 'playlists unavailable' : 'No playlist — steer by direction only')}
-                    </span>
-                  )}
-                  options={[
-                    { key: null, label: 'No playlist' },
-                    ...playlists.map(p => ({ key: p.id, label: p.songCount != null ? `${p.name} · ${p.songCount}` : p.name })),
-                  ]}
-                  onSelect={key => field.onChange(key)}
-                />
-              )}
-            />
-            <span className="text-[10px] text-muted">
-              with a playlist, only its tracks play: none repeats until all have aired, then it starts over
-            </span>
-          </div>
-          <div className="grid gap-1">
-            <TextareaField
-              control={form.control}
-              name="prompt"
-              label="Direction (optional with a playlist)"
-              rows={3}
-              maxLength={STEER_PROMPT_MAX}
-              placeholder="more upbeat 2020s pop, and keep the talk short"
-            />
-            <div className="flex justify-between gap-3 text-[10px] text-muted">
-              <span>leans picks within your library and what the host says — it cannot add music</span>
-              <span className="mono-num whitespace-nowrap">{promptLength} / {STEER_PROMPT_MAX}</span>
-            </div>
-          </div>
-          <div className="grid items-end gap-3 @min-[420px]:grid-cols-[minmax(0,1fr)_8rem]">
-            <div className="grid min-w-0 gap-2">
-              <span className="text-sm font-medium">For how long</span>
+        <div className="@container grid gap-5">
+          <div className="grid gap-3">
+            <div className="grid gap-1.5">
+              <FieldLabel>Playlist</FieldLabel>
               <Controller
                 control={form.control}
-                name="until"
+                name="playlistId"
                 render={({ field }) => (
-                  <Seg
-                    aria-label="Steer duration"
-                    value={field.value === 'once' ? ONCE_SEG : field.value === 'schedule-change' ? SCHEDULE_SEG : String(minutes ?? '')}
+                  <SlotMenu<string | null>
+                    ariaLabel="Choose a playlist to play exclusively"
+                    className="min-h-9 w-full min-w-0 justify-between text-[12px]"
+                    label={(
+                      <span className="min-w-0 flex-1 truncate text-left">
+                        {playlistName(field.value) ?? (playlistsQuery.isError ? 'playlists unavailable' : 'No playlist — steer by direction only')}
+                      </span>
+                    )}
                     options={[
-                      { id: ONCE_SEG, label: 'once', title: 'Queue one track and store no steer' },
-                      ...PRESETS.map(m => ({ id: String(m), label: m < 60 ? `${m}m` : `${m / 60}h` })),
-                      { id: SCHEDULE_SEG, label: 'til change', title: 'End when the weekly schedule moves on' },
+                      { key: null, label: 'No playlist' },
+                      ...playlists.map(p => ({ key: p.id, label: p.songCount != null ? `${p.name} · ${p.songCount}` : p.name })),
                     ]}
-                    onChange={id => {
-                      if (id === ONCE_SEG || id === SCHEDULE_SEG) {
-                        field.onChange(id === ONCE_SEG ? 'once' : 'schedule-change');
-                        form.setValue('minutes', undefined, { shouldValidate: true });
-                        return;
-                      }
-                      field.onChange('fixed');
-                      form.setValue('minutes', Number(id), { shouldValidate: true });
-                    }}
+                    onSelect={key => field.onChange(key)}
                   />
                 )}
               />
+              <span className="text-[10px] text-muted">
+                plays only this list, no repeats until it runs through
+              </span>
             </div>
-            {until === 'fixed' && (
-              <TextField
+            <div className="grid gap-1">
+              <TextareaField
                 control={form.control}
-                name="minutes"
-                label="Steer minutes"
-                numeric
-                className="min-w-0"
-                min={STEER_MIN_MINUTES}
-                max={STEER_MAX_MINUTES}
+                name="prompt"
+                label={hasPlaylist ? 'Direction (optional)' : 'Direction'}
+                rows={2}
+                maxLength={STEER_PROMPT_MAX}
+                placeholder="more upbeat 2020s pop, and keep the talk short"
               />
-            )}
-          </div>
-          {untilSchedule && (
-            <div className="mono-num text-[10px] text-muted">
-              {windowQuery.isError
-                ? 'could not read the schedule — the end is worked out again when you start'
-                : windowQuery.data
-                  ? `ends ${fmtClock(windowQuery.data.expiresAt, tz, locale)} · ${windowQuery.data.minutes} min`
-                  : 'reading the schedule…'}
+              <div className="flex justify-between gap-3 text-[10px] text-muted">
+                <span>nudges picks and talk; can't add music</span>
+                <span className="mono-num whitespace-nowrap">{promptLength} / {STEER_PROMPT_MAX}</span>
+              </div>
             </div>
-          )}
-          <SwitchField
-            control={form.control}
-            name="startNow"
-            label="Start now"
-            description="also drop the track the DJ has already queued, instead of waiting for it to play"
-          />
-          <SwitchField
-            control={form.control}
-            name="introduce"
-            label="Introduce on air"
-            description="one host link before the first track that says where the music is heading, in the host's own words, and trails what follows (an announce-only host just names the track). The opening tracks otherwise play back to back with no links"
-          />
+          </div>
+          <div className="grid gap-1.5">
+            <div className="flex items-end justify-between gap-3">
+              <FieldLabel>For how long</FieldLabel>
+              <span className="mono-num flex items-baseline gap-1.5 text-[var(--accent)]" aria-live="polite">
+                {until === 'once'
+                  ? <span className="text-[12px] font-bold tracking-[0.12em] uppercase">one track</span>
+                  : endsAt != null
+                    ? <><span className="text-[10px] text-muted">until</span><span className="text-[22px] leading-none font-bold">{fmtClock(endsAt, tz, locale)}</span></>
+                    : <span className="text-[12px] text-muted">—</span>}
+              </span>
+            </div>
+            <Controller
+              control={form.control}
+              name="until"
+              render={({ field }) => (
+                <Seg
+                  aria-label="Steer duration"
+                  fill="grid-cols-3 @min-[440px]:grid-cols-6"
+                  value={field.value === 'once' ? ONCE_SEG : field.value === 'schedule-change' ? SCHEDULE_SEG : String(minutes ?? '')}
+                  options={[
+                    { id: ONCE_SEG, label: 'once', title: 'Queue one track and store no steer' },
+                    ...PRESETS.map(m => ({ id: String(m), label: m < 60 ? `${m}m` : `${m / 60}h` })),
+                    { id: SCHEDULE_SEG, label: 'next show', title: 'Until the weekly schedule moves to the next show' },
+                  ]}
+                  onChange={id => {
+                    if (id === ONCE_SEG || id === SCHEDULE_SEG) {
+                      field.onChange(id === ONCE_SEG ? 'once' : 'schedule-change');
+                      form.setValue('minutes', undefined, { shouldValidate: true });
+                      return;
+                    }
+                    field.onChange('fixed');
+                    form.setValue('minutes', Number(id), { shouldValidate: true });
+                  }}
+                />
+              )}
+            />
+            {until === 'fixed' && (
+              <div className="flex items-center gap-2 text-[10px] text-muted">
+                <span>or exactly</span>
+                <TextField
+                  control={form.control}
+                  name="minutes"
+                  label="Minutes"
+                  numeric
+                  className="w-20 min-w-0 [&_[data-slot=field-label]]:sr-only"
+                  min={STEER_MIN_MINUTES}
+                  max={STEER_MAX_MINUTES}
+                />
+                <span>min</span>
+              </div>
+            )}
+            {untilSchedule && (
+              <span className="text-[10px] text-muted">
+                {windowQuery.isError
+                  ? 'schedule unavailable; the end is set when you start'
+                  : windowQuery.data ? `until the next show · ${windowQuery.data.minutes} min` : 'reading the schedule…'}
+              </span>
+            )}
+            {until === 'once' && <span className="text-[10px] text-muted">no steer kept</span>}
+          </div>
+          <div className="grid gap-3 @min-[480px]:grid-cols-2 [&_[data-slot=field-description]]:text-[11px] [&_[data-slot=field-description]]:leading-snug">
+            <SwitchField
+              control={form.control}
+              name="startNow"
+              label="Start now"
+              description="skip the track already queued"
+            />
+            <SwitchField
+              control={form.control}
+              name="introduce"
+              label="Introduce on air"
+              description="the host flags the change before the first track"
+            />
+          </div>
           {preview && preview.picks.length > 0 && (
             <div className={cn('grid gap-0.5 border px-2.5 py-2 text-[11px]', shown === 'stale' ? 'border-ink/15 text-muted line-through' : 'border-ink/30 text-ink')}>
-              <span className="text-[10px] text-muted no-underline">what this steer opens with, not the whole queue</span>
+              <span className="text-[10px] text-muted no-underline">opening tracks</span>
               {preview.picks.map((t, i) => (
                 <span key={t.id} className={cn('truncate', shown === 'valid' && i >= preview.fit && 'text-muted')}>
                   <span className="mono-num text-muted">{i + 1}.</span> {t.title} <span className="text-muted">— {t.artist}</span>
@@ -382,12 +403,13 @@ export function SteerCard({ tz, locale }: { tz?: string; locale?: StationLocale 
               {shown === 'valid' && preview.fit < preview.picks.length && (
                 <span className="text-[10px] text-muted">
                   {preview.picks.length - preview.fit === 1
-                    ? 'the last would start after the steer ends, so it is not queued'
-                    : `the last ${preview.picks.length - preview.fit} would start after the steer ends, so they are not queued`}
+                    ? 'the last runs past the end, so it is dropped'
+                    : `the last ${preview.picks.length - preview.fit} run past the end, so they are dropped`}
                 </span>
               )}
             </div>
           )}
+          <div className="grid gap-2 border-t border-ink/15 pt-3">
           <div className="text-[11px] text-ink">{startSentence(preview, inputs, now)}</div>
           <div className="grid grid-cols-2 gap-2">
             <Btn
@@ -407,7 +429,8 @@ export function SteerCard({ tz, locale }: { tz?: string; locale?: StationLocale 
             </Btn>
           </div>
           <div className="text-[10px] text-muted">
-            the schedule is not changed · starting it cancels a takeover · listeners see ordinary picks
+            schedule untouched · ends any takeover
+          </div>
           </div>
         </div>
       )}

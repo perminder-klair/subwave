@@ -13,39 +13,39 @@ const oncePreview: SteerPreview = { key: previewKeyOf(once), size: previewSizeKe
 test('with a preview for what is in the form, Start plays exactly those and says no model call is needed', () => {
   assert.equal(previewState(preview, inputs, now), 'valid');
   assert.equal(startSentence(preview, inputs, now),
-    'Start plays these 3 tracks first. No model call is needed for them; picking continues after.');
+    'Opens with these 3. No model call.');
 });
 
 test('when the steer has time for only some of the list, Start says it plays those', () => {
   assert.equal(startSentence({ ...preview, fit: 2 }, inputs, now),
-    'Start plays the first 2 of these, the ones that start before the steer ends. No model call is needed for them; picking continues after.');
+    'Opens with the first 2; the rest would start after it ends. No model call.');
 });
 
 test('a new length keeps the remembered tracks but sizes them again, with no model call', () => {
   for (const changed of [{ ...inputs, minutes: 15 }, { ...inputs, until: 'schedule-change' as const, minutes: undefined }]) {
     assert.equal(previewState(preview, changed, now), 'resized');
-    assert.match(startSentence(preview, changed, now), /^Start plays as many of these as start before the steer ends at this length, with no model call\./);
+    assert.match(startSentence(preview, changed, now), /^Opens with as many of these as fit the new length\. No model call\./);
   }
 });
 
 test('without a preview, Start says it will work the list out itself with one model call', () => {
   assert.equal(previewState(null, inputs, now), 'none');
-  assert.match(startSentence(null, inputs, now), /works out up to 5 opening tracks with one model call and plays the ones that start before the steer ends/);
+  assert.match(startSentence(null, inputs, now), /^Picks up to 5 opening tracks \(one model call\)/);
 });
 
 test('a single track says what start now does to the DJ\'s queued picks, and that no steer is stored', () => {
-  assert.equal(startSentence(oncePreview, once, now), 'Start queues this track. No model call is needed for it, and no steer is stored.');
+  assert.equal(startSentence(oncePreview, once, now), 'Queues this track. No model call.');
   const onceNow = { ...once, startNow: true };
   assert.equal(startSentence({ ...oncePreview, key: previewKeyOf(onceNow) }, onceNow, now),
-    'Start queues this track to play next, in place of the DJ\'s queued picks. No model call is needed for it, and no steer is stored.');
-  assert.equal(startSentence(null, once, now), 'Start works out one track with one model call and queues it. No steer is stored.');
+    'Queues this track next. No model call.');
+  assert.equal(startSentence(null, once, now), 'Picks one track (one model call).');
   assert.equal(startSentence(null, { ...once, startNow: true }, now),
-    'Start works out one track with one model call and queues it to play next, in place of the DJ\'s queued picks. No steer is stored.');
+    'Picks one track next (one model call).');
   assert.doesNotMatch(startSentence(null, { ...once, startNow: true }, now), /Nothing else changes/);
 });
 
 test('a preview for another playlist or direction, or one the controller has forgotten, is called out of date', () => {
-  const stale = 'These tracks are out of date; Start will work out a new list.';
+  const stale = 'Out of date. Start picks a fresh list.';
   assert.equal(startSentence(preview, { ...inputs, prompt: 'something calm' }, now), stale);
   assert.equal(startSentence(preview, { ...inputs, playlistId: 'pl-2' }, now), stale);
   // "Start now" changes the track the list follows, so it is another list.
