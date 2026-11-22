@@ -1,0 +1,394 @@
+/* /personas — the Green Room. Backstage passes, a daily headliner poster and a
+   contact-sheet lineup. Theme tokens only; motion under no-preference only. */
+
+/* ---- Headliner ---------------------------------------------------------- */
+
+.spotlight {
+    display: grid;
+    grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+    gap: clamp(20px, 4vw, 56px);
+    align-items: center;
+    margin: 0 0 clamp(28px, 4vw, 44px);
+    padding: clamp(20px, 3vw, 32px) 0;
+    border-top: 3px double var(--ink);
+    border-bottom: 3px double var(--ink);
+}
+@media (max-width: 720px) {
+    .spotlight {
+        grid-template-columns: minmax(0, 1fr);
+    }
+    /* Leave room for the offset shadow inside the 16px gutter. */
+    .spotlight .spotFaceWrap {
+        width: calc(100% - 12px);
+        justify-self: start;
+    }
+}
+.spotFaceWrap {
+    position: relative;
+    max-width: 380px;
+    width: 100%;
+    justify-self: center;
+}
+.spotFace {
+    display: block;
+    width: 100%;
+    aspect-ratio: 1;
+    border: 2px solid var(--ink);
+    box-shadow: 12px 12px 0 var(--accent);
+}
+.spotOnAir {
+    position: absolute;
+    left: -8px;
+    bottom: 18px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background: var(--ink);
+    color: var(--bg);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+}
+.spotBody {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    min-width: 0;
+}
+.spotName {
+    margin: 0;
+    font-family: var(--font-display);
+    font-size: clamp(36px, 6vw, 76px);
+    font-weight: 900;
+    line-height: 0.9;
+    letter-spacing: -0.02em;
+    overflow-wrap: anywhere;
+}
+.spotTagline {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--accent);
+}
+.spotQuote {
+    position: relative;
+    margin: 4px 0;
+    padding-left: clamp(28px, 4vw, 48px);
+}
+.spotQuote::before {
+    content: '\201C';
+    position: absolute;
+    left: -4px;
+    top: -18px;
+    font-family: var(--font-display);
+    font-size: clamp(64px, 9vw, 110px);
+    line-height: 1;
+    color: var(--accent);
+}
+.spotQuote p {
+    margin: 0;
+    font-family: var(--font-display);
+    font-size: clamp(18px, 2.1vw, 26px);
+    font-weight: 600;
+    font-style: italic;
+    line-height: 1.3;
+}
+.spotLink {
+    align-self: flex-start;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--accent);
+}
+
+/* ---- Lineup contact sheet ---------------------------------------------- */
+
+.lineup {
+    margin: 0 0 clamp(32px, 5vw, 52px);
+}
+.lineupLabel {
+    margin: 0 0 10px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+.lineupList {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
+    gap: 6px;
+}
+.lineupItem {
+    position: relative;
+    display: block;
+    text-decoration: none;
+    color: inherit;
+    outline-offset: 2px;
+}
+.lineupFace {
+    display: block;
+    width: 100%;
+    aspect-ratio: 1;
+    border: 1px solid var(--separator-strong);
+    filter: grayscale(1);
+    transition: filter 160ms ease, transform 160ms ease, border-color 160ms ease;
+}
+.lineupName {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    padding: 2px 3px;
+    background: var(--ink);
+    color: var(--bg);
+    font-family: var(--font-mono);
+    font-size: 8px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    opacity: 0;
+    transition: opacity 160ms ease;
+}
+.lineupItem:hover .lineupFace,
+.lineupItem:focus-visible .lineupFace {
+    filter: none;
+    transform: translateY(-3px) rotate(-2deg);
+    border-color: var(--ink);
+}
+.lineupItem:hover .lineupName,
+.lineupItem:focus-visible .lineupName {
+    opacity: 1;
+}
+@media (hover: none) {
+    .lineupFace {
+        filter: none;
+    }
+}
+
+/* ---- Backstage passes --------------------------------------------------- */
+
+.grid {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
+    gap: clamp(20px, 3vw, 36px);
+    align-items: start;
+}
+.pass {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 30px clamp(16px, 2vw, 22px) 0;
+    border: 2px solid var(--ink);
+    background: var(--surface);
+    min-width: 0;
+    scroll-margin-top: 24px;
+    transition: transform 180ms ease, box-shadow 180ms ease;
+}
+.pass:hover {
+    transform: translateY(-3px);
+    box-shadow: 6px 6px 0 var(--ink);
+}
+.pass:target {
+    box-shadow: 8px 8px 0 var(--accent);
+}
+/* The lanyard slot. */
+.punch {
+    position: absolute;
+    top: 10px;
+    left: 50%;
+    width: 44px;
+    height: 9px;
+    margin-left: -22px;
+    border-radius: 6px;
+    background: var(--bg);
+    border: 1px solid var(--ink);
+}
+.passStrip {
+    display: flex;
+    justify-content: space-between;
+    margin: 0 calc(-1 * clamp(16px, 2vw, 22px));
+    padding: 6px clamp(16px, 2vw, 22px);
+    background: var(--accent);
+    color: var(--bg);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+}
+.passHead {
+    display: grid;
+    grid-template-columns: 88px minmax(0, 1fr);
+    gap: 14px;
+    align-items: center;
+}
+.face {
+    display: block;
+    width: 88px;
+    height: 88px;
+    border: 1px solid var(--ink);
+}
+.passId {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+}
+.name {
+    margin: 0;
+    font-family: var(--font-display);
+    font-size: clamp(21px, 2.2vw, 27px);
+    font-weight: 900;
+    line-height: 1;
+    letter-spacing: -0.01em;
+    overflow-wrap: anywhere;
+}
+.tagline {
+    margin: 0;
+    font-size: 13px;
+    font-style: italic;
+    line-height: 1.35;
+    color: var(--muted);
+}
+.meters {
+    display: grid;
+    gap: 6px;
+    margin: 0;
+    padding: 12px 0;
+    border-top: 1px solid var(--separator-strong);
+    border-bottom: 1px solid var(--separator-strong);
+}
+.specs {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px 14px;
+}
+.specs li {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+.specKey {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+.specVal {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+.scriptBar {
+    display: inline-block;
+    width: 22px;
+    height: 6px;
+    background: var(--separator-strong);
+}
+.scriptBar > span {
+    display: block;
+    height: 100%;
+    width: 50%;
+    background: var(--accent);
+}
+.scriptBar[data-level='1'] > span {
+    width: 25%;
+}
+.scriptBar[data-level='3'] > span {
+    width: 75%;
+}
+.scriptBar[data-level='4'] > span {
+    width: 100%;
+}
+.soul {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.soulLabel {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--accent);
+}
+/* The perforated tear-off stub. */
+.stub {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 4px calc(-1 * clamp(16px, 2vw, 22px)) 0;
+    padding: 14px clamp(16px, 2vw, 22px) 14px;
+    border-top: 2px dashed var(--line);
+    position: relative;
+}
+.stub::before,
+.stub::after {
+    content: '';
+    position: absolute;
+    top: -9px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--bg);
+    border: 2px solid var(--ink);
+}
+.stub::before {
+    left: -9px;
+    clip-path: inset(0 0 0 50%);
+}
+.stub::after {
+    right: -9px;
+    clip-path: inset(0 50% 0 0);
+}
+.barcode {
+    flex: none;
+    width: 84px;
+    height: 24px;
+    color: var(--ink);
+    opacity: 0.85;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .pass,
+    .lineupFace,
+    .lineupName {
+        transition: none;
+    }
+    .pass:hover {
+        transform: none;
+    }
+    .lineupItem:hover .lineupFace,
+    .lineupItem:focus-visible .lineupFace {
+        transform: none;
+    }
+}
