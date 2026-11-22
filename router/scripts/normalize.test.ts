@@ -99,3 +99,56 @@ test('lyrics distinguish unknown song (undefined) from no lyrics (null)', () => 
   assert.equal(normLyrics({ lines: [] }), null);
   assert.deepEqual(normLyrics({ lines: ['a', '', 'b'] }), { displayArtist: '', displayTitle: '', lines: ['a', 'b'] });
 });
+
+test('explicitStatus passes through as the source said it, and absent stays absent', () => {
+  const of = (v: unknown) => normSong({ id: 'x', title: 'X', explicitStatus: v }, codec, warn)!;
+  assert.equal(of('explicit').explicitStatus, 'explicit');
+  assert.equal(of('clean').explicitStatus, 'clean');
+  // '' is the server's answer "read, untagged"; the controller judges a song that carries it.
+  assert.equal(of('').explicitStatus, '');
+  for (const junk of [undefined, null, 'EXPLICIT', 'e', 1, true]) {
+    assert.equal('explicitStatus' in of(junk), false, `${String(junk)} is not a tag`);
+  }
+});
+
+test('file format fields are kept only when positive', () => {
+  const s = normSong({ id: 'f', title: 'F', samplingRate: 96000, bitDepth: '24', channelCount: 2 }, codec, warn)!;
+  assert.equal(s.samplingRate, 96000);
+  assert.equal(s.bitDepth, 24);
+  assert.equal(s.channelCount, 2);
+  // Navidrome reports bitDepth 0 for a lossy file: no file is "0-bit".
+  const lossy = normSong({ id: 'l', title: 'L', samplingRate: 44100, bitDepth: 0, channelCount: -1 }, codec, warn)!;
+  assert.equal(lossy.samplingRate, 44100);
+  assert.equal('bitDepth' in lossy, false);
+  assert.equal('channelCount' in lossy, false);
+});
+
+// The controller reads these off a Subsonic song (music/subsonic.ts and its
+// callers). The router copies a fixed list of fields, so a field the controller
+// starts reading is dropped silently behind the router unless it is added to
+// normSong — and here. Each entry names its reader.
+const CONTROLLER_SONG_FIELDS: Record<string, string> = {
+  title: 'everywhere', album: 'everywhere', artist: 'everywhere', duration: 'picker, mix',
+  track: 'library walk', discNumber: 'library walk', year: 'library walk', genres: 'library walk',
+  artists: 'blocklist, credits', albumArtists: 'library walk', size: 'replaced-file signal',
+  suffix: 'file-format.ts', bitRate: 'file-format.ts', path: 'navidrome-players real path',
+  created: 'library walk', musicBrainzId: 'enrichment', replayGain: 'mix levelling',
+  explicitStatus: 'explicit-policy.ts (clean shows)',
+  samplingRate: 'file-format.ts', bitDepth: 'file-format.ts', channelCount: 'file-format.ts',
+};
+
+test('a full Navidrome song keeps every field the controller reads', () => {
+  const navidromeChild = {
+    id: 'nd1', title: 'Full', album: 'Al', albumId: 'al1', artist: 'Ar', artistId: 'ar1',
+    artists: [{ id: 'ar1', name: 'Ar' }], albumArtists: [{ id: 'ar1', name: 'Ar' }],
+    track: 3, discNumber: 2, year: 1999, genres: [{ name: 'Rock' }], size: 1234, contentType: 'audio/flac',
+    suffix: 'flac', duration: 200, bitRate: 1411, path: 'Ar/Al/03 Full.flac', created: '2024-01-01T00:00:00Z',
+    musicBrainzId: '0f8a4d3b-6f1c-4b0e-9d7e-2a1b3c4d5e6f', replayGain: { trackGain: -6.5, trackPeak: 0.98 },
+    explicitStatus: 'explicit', samplingRate: 96000, bitDepth: 24, channelCount: 2,
+  };
+  const s = normSong(navidromeChild, codec, warn)! as unknown as Record<string, unknown>;
+  for (const [field, reader] of Object.entries(CONTROLLER_SONG_FIELDS)) {
+    assert.ok(s[field] !== undefined && s[field] !== '' && s[field] !== 0 || field === 'explicitStatus' && s[field] === '',
+      `${field} (read by ${reader}) did not survive the router`);
+  }
+});
