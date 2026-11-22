@@ -20,7 +20,7 @@ import { ModelCombobox } from '../llm/ModelCombobox';
 import { LLM_ENV_VARS, groupProviders, llmProviderLabel } from '../llm/providerMeta';
 import { Advanced } from './section-chrome';
 import { ContextSizing } from './ContextSizing';
-import { DjBrainFields, savedBrainState } from './DjBrainFields';
+import { DjBrainFields, brainVoiceKeyOnFile, savedBrainState } from './DjBrainFields';
 import {
   DJ_BRAIN_BASE_URL, DJ_BRAIN_CHAT_MODEL, brainVoiceWirable, djBrainSettingsPatch,
   isBrainRoute, isBrainVoice, isDjBrainUrl, sameBaseUrl, type DjBrainCheckResult,
@@ -470,6 +470,10 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
       if (prev) setForm(f => ({ ...f, llm: { ...f.llm, ...prev.llm }, embedding: prev.embedding }));
       ownRoute.current = null;
     }
+    // A key typed for one source is never the other's: the brain would refuse
+    // another server's key, and a brain key must not reach another server. The
+    // provider-change effect misses this when both sides are openai-compatible.
+    setCompatKeyInput('');
     setBrainCheck(null);
     setSource(next === 'brain' ? 'brain' : 'own');
   };
@@ -495,10 +499,12 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
     setBrainCheck(await checkBrain());
     setBrainTesting(false);
   };
+  // Read from the SAVED voice, not the form: an unsaved edit on TTS voice is
+  // not what the station speaks with.
+  const brainVoiceWiredToUrl = isBrainVoice(brainSaved.cloud, formCompatUrl);
   const brainVoiceInputs = {
     token: compatKeyInput,
-    voiceKeyOnFile: brainSaved.voiceKeyOnFile,
-    voiceWiredToBrain: isBrainVoice(form.tts.cloud, formCompatUrl),
+    brainVoiceKeyOnFile: brainVoiceKeyOnFile(data.values, formCompatUrl),
   };
 
   const primaryKeyVar = LLM_ENV_VARS[form.llm.provider];
@@ -656,12 +662,12 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         baseUrl: formCompatUrl,
         token: compatKeyInput,
         // A voice already on the brain keeps the model and voice chosen for it.
-        ...(brainVoiceInputs.voiceWiredToBrain
+        ...(brainVoiceWiredToUrl
           ? { voiceModel: form.tts.cloud.model, voiceName: form.tts.cloud.voice }
           : {}),
         voice: brainVoiceWirable({ planHasVoice: check.voice, ...brainVoiceInputs }),
         stationEngine: brainSaved.stationEngine,
-        voiceWiredToBrain: brainVoiceInputs.voiceWiredToBrain,
+        voiceWiredToBrain: brainVoiceWiredToUrl,
       }).tts;
     }
     await saveSettings({

@@ -14,8 +14,10 @@ test('a studio key wires the voice and takes the default piper engine', () => {
   assert.equal(p.tts?.defaultEngine, 'cloud');
   assert.deepEqual(p.tts?.cloud, {
     enabled: true, provider: 'openai-compatible', baseUrl: DJ_BRAIN_BASE_URL,
-    model: 'dj-brain-voice', voice: '', sendSpeed: true, apiKey: 'k',
+    model: 'dj-brain-voice', voice: '', sendSpeed: true, compatApiKey: 'k',
   });
+  // The legacy slot loses to a stale compat key, so the voice never writes it.
+  assert.equal('apiKey' in (p.tts?.cloud ?? {}), false);
 });
 
 test('a deliberate engine choice is never taken over', () => {
@@ -28,6 +30,7 @@ test('a blank token keeps the key on file', () => {
   const p = djBrainSettingsPatch({ baseUrl: DJ_BRAIN_BASE_URL, token: '  ', voice: true, stationEngine: 'cloud' });
   assert.equal('apiKey' in p.llm, false);
   assert.equal(p.tts && 'apiKey' in p.tts.cloud, false);
+  assert.equal(p.tts && 'compatApiKey' in p.tts.cloud, false);
 });
 
 test('isDjBrainUrl ignores a trailing slash and whitespace', () => {
@@ -65,10 +68,11 @@ test('the cloud voice is the brain\'s only at the brain\'s URL', () => {
 });
 
 test('the voice is wired only when its key slot can be filled', () => {
-  const base = { planHasVoice: true, token: '', voiceKeyOnFile: false, voiceWiredToBrain: false };
+  const base = { planHasVoice: true, token: '', brainVoiceKeyOnFile: false };
+  // A key on file for another voice server (OpenAI, a local compat TTS) is
+  // not the brain's, so a blank Save wires nothing.
   assert.equal(brainVoiceWirable(base), false);
   assert.equal(brainVoiceWirable({ ...base, token: ' k ' }), true);
-  assert.equal(brainVoiceWirable({ ...base, voiceKeyOnFile: true }), true);
-  assert.equal(brainVoiceWirable({ ...base, voiceWiredToBrain: true }), true);
-  assert.equal(brainVoiceWirable({ ...base, planHasVoice: false, token: 'k', voiceKeyOnFile: true }), false);
+  assert.equal(brainVoiceWirable({ ...base, brainVoiceKeyOnFile: true }), true);
+  assert.equal(brainVoiceWirable({ ...base, planHasVoice: false, token: 'k', brainVoiceKeyOnFile: true }), false);
 });

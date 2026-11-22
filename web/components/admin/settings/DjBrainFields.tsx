@@ -26,8 +26,9 @@ import { settingsHref } from './settings-link';
 export function savedBrainState(values: SettingsData['values']) {
   const v = (values ?? {}) as {
     llm?: { provider?: string; model?: string; baseUrl?: string; providerBaseUrls?: Record<string, string> };
-    tts?: { defaultEngine?: string; cloud?: { enabled?: boolean; provider?: string; baseUrl?: string; apiKey?: string } };
+    tts?: { defaultEngine?: string; cloud?: { enabled?: boolean; provider?: string; baseUrl?: string; compatApiKey?: string } };
   };
+  const cloud = v.tts?.cloud ?? {};
   // Stored providerBaseUrls win; the legacy single baseUrl belongs to the
   // provider it was saved with (form-state.ts seeds the form the same way).
   const urls = v.llm?.providerBaseUrls;
@@ -40,11 +41,24 @@ export function savedBrainState(values: SettingsData['values']) {
     brainUrl,
     // A brain-only key switches the cloud voice off but leaves it pointing at
     // the brain, so the address alone would still read as wired.
-    voiceWired: routed && v.tts?.cloud?.enabled !== false && isBrainVoice(v.tts?.cloud ?? {}, brainUrl),
-    // Redaction sentinel from getRedacted(): 'set' = a key is on file.
-    voiceKeyOnFile: v.tts?.cloud?.apiKey === 'set',
+    voiceWired: routed && cloud.enabled !== false && isBrainVoice(cloud, brainUrl),
+    // The cloud voice still runs on a brain even when the LLM moved off it
+    // (the operator picked their own provider and left the voice alone).
+    voiceOnBrain: cloud.enabled !== false
+      && (isBrainVoice(cloud, brainUrl) || isBrainVoice(cloud, DJ_BRAIN_BASE_URL)),
+    cloud,
     stationEngine: String(v.tts?.defaultEngine ?? 'piper'),
   };
+}
+
+/**
+ * The saved cloud voice points at `brainUrl` and holds a key in the compat
+ * slot, the one an openai-compatible voice reads (redaction sentinel 'set').
+ * A key for any other voice server is not the brain's, so it never counts.
+ */
+export function brainVoiceKeyOnFile(values: SettingsData['values'], brainUrl: string): boolean {
+  const { cloud } = savedBrainState(values);
+  return isBrainVoice(cloud, brainUrl) && cloud.compatApiKey === 'set';
 }
 
 const TONES = {
@@ -191,7 +205,19 @@ interface DjBrainVoiceNoteProps {
  */
 export function DjBrainVoiceNote({ data, busy, saveSettings, refresh }: DjBrainVoiceNoteProps) {
   const saved = savedBrainState(data.values);
-  if (!saved.routed) return null;
+  if (!saved.routed) {
+    // The LLM moved to another provider but the voice was left on the brain:
+    // it still speaks with the key saved for it, so say so rather than hide.
+    if (!saved.voiceOnBrain) return null;
+    return (
+      <div className="field-hint">
+        The cloud voice still runs on the DJ Brain studio voice, with the key saved
+        for it, although your LLM now uses{' '}
+        <Link href={settingsHref('llm')} className="underline">your own provider</Link>.
+        Pick another engine below to stop using it.
+      </div>
+    );
+  }
 
   if (!saved.voiceWired) {
     return (

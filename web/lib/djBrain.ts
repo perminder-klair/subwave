@@ -51,18 +51,20 @@ export function isBrainVoice(cloud: { provider?: string; baseUrl?: string }, bra
 
 /**
  * Whether a Save may wire the studio voice. The plan must include it, and the
- * voice needs the key in its own slot: typed this run, already on file, or the
- * voice already pointing at this brain. A blank key on a plan that gained the
- * voice later wires nothing, rather than a cloud voice with no key.
+ * voice needs a key in its own slot (`tts.cloud.compatApiKey`): typed this
+ * run, or already saved for a voice that points at this brain. A key on file
+ * for another voice server does not count, since the brain would refuse it.
+ * A blank key on a plan that gained the voice later wires nothing, rather
+ * than a cloud voice with no key.
  */
 export function brainVoiceWirable(input: {
   planHasVoice: boolean;
   token: string;
-  voiceKeyOnFile: boolean;
-  voiceWiredToBrain: boolean;
+  /** The cloud voice points at this brain and its compat key slot holds a key. */
+  brainVoiceKeyOnFile: boolean;
 }): boolean {
   if (!input.planHasVoice) return false;
-  return !!input.token.trim() || input.voiceKeyOnFile || input.voiceWiredToBrain;
+  return !!input.token.trim() || input.brainVoiceKeyOnFile;
 }
 
 export interface DjBrainPatchInput {
@@ -129,7 +131,10 @@ export function djBrainSettingsPatch(input: DjBrainPatchInput) {
         // The brain's voice honours native `speed`, so skip the local atempo
         // stretch (#942).
         sendSpeed: true,
-        ...key,
+        // The compat voice reads its own slot first (cloud-speech.ts
+        // sharedCloudApiKeyForRequest), so the legacy `apiKey` slot would lose
+        // to a key left there by an earlier compatible voice server.
+        ...(token ? { compatApiKey: token } : {}),
       },
     },
   };
