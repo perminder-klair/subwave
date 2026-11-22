@@ -25,6 +25,7 @@ import {
 import { SkinSelectionProvider, type SkinSelection } from '@/components/skins/SkinContext';
 import type { SkinComponent } from '@/components/skins/types';
 import { PlayerCoreProvider, usePlayerAudio, usePlayerFeed } from './PlayerCore';
+import { SkipCheat } from './SkipCheat';
 import { StationPasswordGate, useStationAuth } from './StationGate';
 
 export interface PlayerShellProps {
@@ -206,6 +207,8 @@ function ShellChrome({ skin, contained }: { skin?: SkinComponent; contained: boo
               </Suspense>
             </div>
             <StationPasswordGate phase={auth.phase} unlock={auth.unlock} savedRejected={auth.savedRejected} solid={false} />
+            {/* The admin's skip cheat code; never a listener skip (SkipCheat.tsx). */}
+            <SkipCheat disabled={contained || locked} />
           </>
         )}
       </div>
