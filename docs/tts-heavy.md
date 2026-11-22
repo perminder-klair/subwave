@@ -653,12 +653,22 @@ of its training audio is copyrighted
 [#21](https://github.com/CPJKU/beat_this/issues/21)). That is why it stays
 opt-in, and why it will be looked at again before it is ever on by default.
 
+Two things change besides the cue bars. A track whose opening or ending has
+no steady beat (ambient, spoken, beatless) now gets no bar grid there, so it
+stops being offered for a stem blend on that side instead of blending on a
+guessed grid. And the stem blend's tempo check still uses librosa's BPM, which
+is sometimes half or double the real tempo, so a few pairs it lets through or
+holds back won't change.
+
 Tracks analysed before you turned it on keep their old grid until they are
-analysed again. To redo just the grids (head and tail windows, no CLAP or
-Demucs):
+analysed again (a replaced file, or an analysis reset). There's no need to
+re-grid the whole library: more beat-grid work is planned to share a single
+refresh, and a library-wide pass now would have to be repeated then. To try it
+on a few tracks you know, redo just their grids (head and tail windows, no CLAP
+or Demucs):
 
 ```bash
-docker compose exec controller npx tsx src/music/analyze-library.ts --facets head,tail --where all
+docker compose exec controller npx tsx src/music/analyze-library.ts --facets head,tail --ids <id>,<id>
 ```
 
 A local-venv backend needs `onnxruntime==1.27.0` installed and
