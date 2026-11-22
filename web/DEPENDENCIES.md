@@ -29,11 +29,16 @@ package and retains its existing marker metadata. Piri's land boundary calculati
 produces 3,447 dots at the configured density, compared with the old package's
 3,454 dots.
 
-After this update, `npm audit --omit=dev` reports no vulnerabilities. The full
-audit reports five high-severity entries from one unpatched `braces` dependency
-in Next's ESLint tooling. npm proposes downgrading `eslint-config-next` to 14 to
-avoid it; keep the lint config aligned with Next 16 and recheck upstream releases
-instead. The advisory is [GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm).
+The November 2026 security update (#2387) moves Next.js, `@next/third-parties`
+and `eslint-config-next` to 16.4.6 for seven moderate Next advisories, and Zod
+to 4.6.7 in both the web and the controller (GHSA-mrhx-c7xc-m3w5). Refreshing
+the lockfiles also picks up patched transitive releases, including `undici`
+7.30.2 and `dompurify` 3.4.18. After this update, `npm audit` reports no
+vulnerabilities in either package, dev dependencies included. That clears the
+`braces` entry ([GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm))
+from Next's ESLint tooling that the previous update left in place. If an audit
+ever proposes downgrading `eslint-config-next` to clear an advisory, keep it
+aligned with Next and wait for an upstream release instead.
 
 Run `npm run lint`, `npm test`, and `npm run build` after dependency changes.
 For Zod changes, run the controller's checks and regenerate the schema mirror too.
