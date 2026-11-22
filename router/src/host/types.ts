@@ -44,6 +44,10 @@ export interface SubSong {
   type: 'music';
   musicBrainzId?: string;
   replayGain?: ReplayGain;
+  explicitStatus?: 'explicit' | 'clean' | '';
+  samplingRate?: number;
+  bitDepth?: number;
+  channelCount?: number;
 }
 
 export interface SubAlbum {

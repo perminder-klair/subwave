@@ -71,6 +71,11 @@ function num(v: unknown, fallback = 0): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function positive(v: unknown): number | undefined {
+  const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() ? Number(v) : NaN;
+  return Number.isFinite(n) && n > 0 ? Math.round(n) : undefined;
+}
+
 function int(v: unknown, fallback = 0): number {
   return Math.round(num(v, fallback));
 }
@@ -180,6 +185,15 @@ export function normSong(raw: unknown, codec: IdCodec, warn: Warn): SubSong | un
   if (mb) song.musicBrainzId = mb;
   const gain = replayGain(r.replayGain);
   if (gain) song.replayGain = gain;
+  // Absent stays absent: the controller reads a missing explicitStatus as "the
+  // server did not say" (keep the stored tag), and '' as "read, untagged".
+  const explicit = r.explicitStatus;
+  if (explicit === 'explicit' || explicit === 'clean' || explicit === '') song.explicitStatus = explicit;
+  // A file property, so unknown is absent, never 0 (Navidrome reports bitDepth 0 for lossy files).
+  for (const k of ['samplingRate', 'bitDepth', 'channelCount'] as const) {
+    const n = positive(r[k]);
+    if (n) song[k] = n;
+  }
   return song;
 }
 

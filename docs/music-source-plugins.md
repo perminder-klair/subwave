@@ -72,7 +72,7 @@ The one exception is an optional op that only some of your backends support. The
 ### Two rules that make plugins simple
 
 1. **Use your backend's own ids.** Return them as they are; the router namespaces everything you emit and strips the prefix from everything it hands you. Ids must be **stable across restarts** — the station stores them in its library database, likes, blocklist and stem cache. Derive them from the backend (or, like the folder example, from something on disk), never generate them per run.
-2. **Return loose objects.** Only `id` and the name/title are required. Leave out anything you do not know — the router fills neutral defaults (year 0, no genres, no ReplayGain). Never invent a measurement: a `replayGain` of 0 dB reads as "measured, needs no change".
+2. **Return loose objects.** Only `id` and the name/title are required. Leave out anything you do not know — the router fills neutral defaults (year 0, no genres, no ReplayGain). Never invent a measurement: a `replayGain` of 0 dB reads as "measured, needs no change". The same goes for `explicitStatus` (send `'explicit'`, `'clean'`, or `''` for a file you read and found untagged; leave it out if your backend does not read the tag, since a clean show only holds back `'explicit'`) and for the file's `samplingRate`, `bitDepth` and `channelCount` (leave them out when unknown, never 0).
 
 ### Required ops
 

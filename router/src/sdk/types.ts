@@ -116,6 +116,16 @@ export interface Song {
   musicBrainzId?: string;
   /** Only when measured — never invent 0 dB, which reads as "measured, no change needed". */
   replayGain?: ReplayGain;
+  /**
+   * The file's parental-advisory tag (OpenSubsonic): 'explicit', 'clean', or ''
+   * for a file the backend read and found untagged. Leave it out when the
+   * backend does not read the tag: a clean show holds back only 'explicit'.
+   */
+  explicitStatus?: 'explicit' | 'clean' | '';
+  /** The stored file's sample rate in Hz, bit depth and channels. Leave out when unknown — never 0. */
+  samplingRate?: number;
+  bitDepth?: number;
+  channelCount?: number;
 }
 
 export interface Album {
