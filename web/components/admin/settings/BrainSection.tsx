@@ -9,6 +9,10 @@ import { adminResponse } from '../../../lib/admin-query';
 import { Card, Btn } from '../ui';
 import { PERSONA_TTS_INHERIT, personasPinningOtherEngine } from '../../../lib/schemas.generated';
 import {
+  DJ_BRAIN_BASE_URL, DJ_BRAIN_CHAT_MODEL, DJ_BRAIN_VOICE_MODEL, DJ_BRAIN_SIGNUP_URL,
+  brainMayTakeEngine, djBrainSettingsPatch, sameBaseUrl, type DjBrainCheckResult,
+} from '../../../lib/djBrain';
+import {
   SectionHeader, SaveBar, KeyTestResult,
   type SectionProps,
 } from './shared';
@@ -18,10 +22,12 @@ interface BrainSectionProps extends SectionProps {
   refresh: () => void;
 }
 
-// One-field setup for the hosted "DJ Brain": one OpenAI-compatible base URL +
-// token, wired into BOTH settings.llm (provider 'openai-compatible') and
-// settings.tts.cloud in one Save. A convenience wrapper over the LLM provider
-// and TTS voice sections.
+// One-key setup for the hosted "DJ Brain": one OpenAI-compatible base URL +
+// token, wired into settings.llm (provider 'openai-compatible') and, when the
+// key's plan includes the studio voice, settings.tts.cloud, in one Save. The
+// brain says which plan it is (POST /settings/dj-brain/check); the patch is
+// lib/djBrain.ts, shared with the onboarding wizard. A convenience wrapper over
+// the LLM provider and TTS voice sections.
 export function BrainSection({ data, form, saveSettings, adminFetch, refresh, busy }: BrainSectionProps) {
   // Prefill only when both blocks already point at an openai-compatible
   // endpoint, else the fields show an unrelated model id.
@@ -30,14 +36,14 @@ export function BrainSection({ data, form, saveSettings, adminFetch, refresh, bu
   // One base URL per provider; the compat entry is the one shared with the voice.
   const llmCompatBaseUrl = form.llm.providerBaseUrls?.['openai-compatible'] ?? '';
   const [baseUrl, setBaseUrl] = useState(
-    llmCompat ? llmCompatBaseUrl : (ttsCompat ? form.tts.cloud.baseUrl : ''),
+    (llmCompat ? llmCompatBaseUrl : (ttsCompat ? form.tts.cloud.baseUrl : '')) || DJ_BRAIN_BASE_URL,
   );
   const [token, setToken] = useState('');
   const [chatModel, setChatModel] = useState(llmCompat ? form.llm.model : '');
   const [voiceModel, setVoiceModel] = useState(ttsCompat ? form.tts.cloud.model : '');
   const [voiceName, setVoiceName] = useState(ttsCompat ? form.tts.cloud.voice : '');
 
-  const [test, setTest] = useState<{ ok: boolean; message: string; latencyMs: number } | null>(null);
+  const [test, setTest] = useState<DjBrainCheckResult | null>(null);
   const [testing, setTesting] = useState(false);
 
   // These fields are local state, not FormState, so the panel's form-vs-baseline
@@ -73,7 +79,7 @@ export function BrainSection({ data, form, saveSettings, adminFetch, refresh, bu
     (((data.values ?? {}) as { tts?: { defaultEngine?: unknown } }).tts ?? {})
       .defaultEngine ?? 'piper',
   );
-  const engineIsDeliberate = stationEngine !== 'piper' && stationEngine !== 'cloud';
+  const engineIsDeliberate = !brainMayTakeEngine(stationEngine);
 
   // Point the station's default engine at the cloud voice, on its own.
   const useCloudEngine = async () => {
@@ -101,79 +107,71 @@ export function BrainSection({ data, form, saveSettings, adminFetch, refresh, bu
   const llmKeyOnFile = llmKeys['openai-compatible'] === 'set';
   const ttsCloud = (values.tts as { cloud?: { apiKey?: unknown } } | undefined)?.cloud;
   const ttsKeyOnFile = ttsCloud?.apiKey === 'set';
-  const keysOnFile = llmKeyOnFile && ttsKeyOnFile;
-  // Three states, not two: name the half that is missing, keep red for neither.
-  const keyState: 'both' | 'partial' | 'none' =
-    keysOnFile ? 'both' : (llmKeyOnFile || ttsKeyOnFile) ? 'partial' : 'none';
-  const missingHalf = llmKeyOnFile ? 'voice (Cloud TTS)' : 'brain (LLM)';
+  const keysOnFile = llmKeyOnFile;
+  // The brain half is the one every plan needs; the voice half is wired only
+  // on a plan with the studio voice, so brain-only is a complete setup.
+  const keyState: 'both' | 'brain' | 'none' =
+    llmKeyOnFile && ttsKeyOnFile ? 'both' : llmKeyOnFile ? 'brain' : 'none';
   const KEY_TONE = {
     both: { border: 'border-[var(--accent)]', dot: 'bg-[var(--accent)]', text: 'text-[color:var(--accent)]' },
-    partial: { border: 'border-[var(--warn,var(--accent))]', dot: 'bg-[var(--warn,var(--accent))]', text: 'text-[color:var(--warn,var(--accent))]' },
+    brain: { border: 'border-[var(--warn,var(--accent))]', dot: 'bg-[var(--warn,var(--accent))]', text: 'text-[color:var(--warn,var(--accent))]' },
     none: { border: 'border-[var(--danger)]', dot: 'bg-[var(--danger)]', text: 'text-[var(--danger)]' },
   }[keyState];
   const keyTitle = {
-    both: 'DJ Brain token on file',
-    partial: `DJ Brain token on file for the ${llmKeyOnFile ? 'brain' : 'voice'} only`,
-    none: 'DJ Brain token not set',
+    both: 'DJ Brain key on file: brain and studio voice',
+    brain: 'DJ Brain key on file: brain',
+    none: 'DJ Brain key not set',
   }[keyState];
   const keyBlurb = {
-    both: 'Both the brain and the voice have a token saved. Leave the field blank to keep it.',
-    partial: `The ${llmKeyOnFile ? 'brain (LLM)' : 'voice (Cloud TTS)'} has a token saved; the ${missingHalf} does not. Paste it above and Save to wire both.`,
-    none: 'No token saved yet for the brain or the voice. Paste it above and Save.',
+    both: 'The brain and the studio voice are wired. Leave the field blank to keep the key.',
+    brain: 'The brain is wired and the station speaks with its own voice. On Brain Studio, Save again and the studio voice is wired too.',
+    none: 'No key saved yet. Paste it above and Save.',
   }[keyState];
 
-  // Reuse POST /settings/llm/probe-compat to verify URL + token + model.
-  const testConnection = async () => {
-    if (!baseUrl.trim()) { setTest({ ok: false, message: 'Enter a Base URL first', latencyMs: 0 }); return; }
-    if (!chatModel.trim()) { setTest({ ok: false, message: 'Enter a Chat model first', latencyMs: 0 }); return; }
-    setTesting(true);
-    setTest(null);
+  // Ask the brain what this key includes (POST /settings/dj-brain/check).
+  const checkKey = async (): Promise<DjBrainCheckResult> => {
+    if (!baseUrl.trim()) return { ok: false, voice: false, message: 'Enter a Base URL first', latencyMs: 0 };
     try {
-      const r = await adminResponse(adminFetch, '/settings/llm/probe-compat', {
+      const r = await adminResponse(adminFetch, '/settings/dj-brain/check', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ apiKey: token.trim(), baseUrl: baseUrl.trim(), model: chatModel.trim() }),
+        body: JSON.stringify({ apiKey: token.trim(), baseUrl: baseUrl.trim() }),
       });
-      setTest(await r.json() as { ok: boolean; message: string; latencyMs: number });
+      return await r.json() as DjBrainCheckResult;
     } catch (e) {
-      setTest({ ok: false, message: e instanceof Error ? e.message : String(e), latencyMs: 0 });
-    } finally {
-      setTesting(false);
+      return { ok: false, voice: false, message: e instanceof Error ? e.message : String(e), latencyMs: 0 };
     }
   };
 
+  const testConnection = async () => {
+    setTesting(true);
+    setTest(null);
+    setTest(await checkKey());
+    setTesting(false);
+  };
+
   const save = async () => {
+    // The plan decides whether the voice is wired, so a save the brain can't
+    // vouch for stops here rather than guessing.
+    const check = await checkKey();
+    setTest(check);
+    if (!check.ok) return;
     const url = baseUrl.trim();
-    // Fall back to the hosted model ids on a blank field: the compat blocks
-    // reject an empty model id.
-    const chat = chatModel.trim() || 'dj-brain';
-    const voiceM = voiceModel.trim() || 'dj-brain-voice';
+    const chat = chatModel.trim() || DJ_BRAIN_CHAT_MODEL;
+    const voiceM = voiceModel.trim() || DJ_BRAIN_VOICE_MODEL;
     const voiceV = voiceName.trim();
-    const typedToken = token.trim();
-    await saveSettings({
-      llm: {
-        provider: 'openai-compatible',
-        baseUrl: url,
-        model: chat,
-        // Only send the key when typed; an absent apiKey leaves the stored one.
-        ...(typedToken ? { apiKey: typedToken } : {}),
-      },
-      tts: {
-        // Without this the cloud block is configured but never reached, since
-        // defaultEngine stays piper. Withheld on a deliberate engine choice.
-        ...(engineIsDeliberate ? {} : { defaultEngine: 'cloud' }),
-        cloud: {
-          enabled: true,
-          provider: 'openai-compatible',
-          baseUrl: url,
-          model: voiceM,
-          voice: voiceV,
-          // Voice honours native `speed`, so skip the local atempo stretch (#942).
-          sendSpeed: true,
-          ...(typedToken ? { apiKey: typedToken } : {}),
-        },
-      },
-    });
+    await saveSettings(djBrainSettingsPatch({
+      baseUrl: url,
+      token,
+      chatModel: chat,
+      voiceModel: voiceM,
+      voiceName: voiceV,
+      voice: check.voice,
+      stationEngine,
+      // The cloud voice is this brain's when it points at the URL being saved
+      // (the hosted brain, or one an operator runs elsewhere).
+      voiceWiredToBrain: ttsCompat && sameBaseUrl(form.tts.cloud.baseUrl || '', url),
+    }));
     initial.current = { baseUrl: url, chatModel: chat, voiceModel: voiceM, voiceName: voiceV };
     setBaseUrl(url);
     setChatModel(chat);
@@ -187,9 +185,12 @@ export function BrainSection({ data, form, saveSettings, adminFetch, refresh, bu
     <>
       <SectionHeader
         eyebrow="dj brain"
-        title="One URL and one token wire the DJ's brain and its voice."
-        sub="The hosted DJ Brain fronts the chat LLM and the cloud TTS voice behind a single OpenAI-compatible proxy. Paste its base URL and access token once — Save configures both the LLM provider and Cloud TTS in one go. You can still fine-tune each under LLM provider and TTS voice."
+        title="One key wires the DJ's brain, and its voice on Brain Studio."
+        sub="SUB/WAVE DJ Brain runs the language model for your station, and on Brain Studio the studio voice too. Paste your key and Save: the station asks the brain which plan the key is on and wires the LLM provider, plus Cloud TTS when the plan has a voice. You can still fine-tune each under LLM provider and TTS voice."
       />
+      <p className="mb-4 text-[12px] text-muted">
+        No key yet? <a href={DJ_BRAIN_SIGNUP_URL} target="_blank" rel="noreferrer" className="underline">Get one at my.getsubwave.com/brain</a>.
+      </p>
 
       <Card title="DJ Brain endpoint" sub="shared by the brain (LLM) + voice (TTS)">
         <div className="grid gap-[18px]">
@@ -198,7 +199,7 @@ export function BrainSection({ data, form, saveSettings, adminFetch, refresh, bu
             <Input
               value={baseUrl}
               onChange={(e: ChangeEvent<HTMLInputElement>) => setBaseUrl(e.target.value)}
-              placeholder="https://my.getsubwave.com/v1"
+              placeholder={DJ_BRAIN_BASE_URL}
               className="max-w-[360px]"
             />
             <div className="field-hint">
@@ -222,9 +223,9 @@ export function BrainSection({ data, form, saveSettings, adminFetch, refresh, bu
               </Btn>
             </div>
             <div className="field-hint">
-              The access token for your DJ Brain. Saved to <code>settings.json</code>
-              {' '}for both the LLM and the voice. Leave blank to keep the token
-              already on file.
+              The key from my.getsubwave.com/brain. Saved to <code>settings.json</code>
+              {' '}for the LLM, and for the voice on Brain Studio. Leave blank to
+              keep the key already on file.
             </div>
           </div>
           {test && <KeyTestResult result={test} />}
@@ -252,8 +253,8 @@ export function BrainSection({ data, form, saveSettings, adminFetch, refresh, bu
               className="max-w-[360px]"
             />
             <div className="field-hint">
-              The model id that renders the DJ&apos;s speech. Defaults to{' '}
-              <code>dj-brain-voice</code> if left blank.
+              The model id that renders the DJ&apos;s speech, used only on Brain
+              Studio. Defaults to <code>dj-brain-voice</code> if left blank.
             </div>
           </div>
 
@@ -332,7 +333,7 @@ export function BrainSection({ data, form, saveSettings, adminFetch, refresh, bu
       </Card>
 
       <SaveBar
-        note="Wires both settings.llm and settings.tts.cloud. Applies to the next LLM call and the next spoken line, no restart."
+        note="Wires settings.llm, and settings.tts.cloud on Brain Studio. Applies to the next LLM call and the next spoken line, no restart."
         busy={busy}
         onSave={save}
         saveLabel="Save DJ Brain"

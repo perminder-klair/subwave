@@ -173,6 +173,12 @@ export default function AdminSettings() {
             skills gather their facts, and the on-air cues around a show change.
           </li>
           <li>
+            <strong>DJ Brain</strong> — paste a SUB/WAVE DJ Brain key and Save. The
+            station asks the brain which plan the key is on and wires the LLM provider,
+            plus the studio voice on Brain Studio. Hidden on a hosted station, which is
+            already wired.
+          </li>
+          <li>
             <strong>LLM provider</strong> — where the model runs and which model writes
             the DJ's words. See{' '}
             <Link href="/manual/llm" className="bs-link">Models &amp; Tokens</Link>.
