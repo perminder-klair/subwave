@@ -6,6 +6,12 @@
 import { readFile } from 'node:fs/promises';
 import { STATE_DIR } from '../config.js';
 import * as settings from '../settings.js';
+import * as beds from '../broadcast/beds.js';
+import { bedFits, entryCrossSecFor, thresholdLinkBedSec } from '../broadcast/bed-policy.js';
+import * as jingles from '../broadcast/jingles.js';
+import { jingleRotateOwner } from '../broadcast/jingle-rotate.js';
+import { jingleListSwap } from '../broadcast/liquidsoap-control.js';
+import { allowedForShow } from '../broadcast/show-allowlist.js';
 import { getSetupStatus } from '../setup/firstRun.js';
 import type { Finding, FixAction } from './types.js';
 import { dirSize, fmtBytes } from './util.js';
@@ -21,13 +27,94 @@ export async function checkContent(): Promise<Finding[]> {
     fix: { id: 'refresh-playlist', label: 'Refresh playlist' },
   }));
 
-  // jingles.m3u — station idents.
-  out.push(await m3uFinding(`${STATE_DIR}/jingles.m3u`, {
+  // jingles.m3u — station idents, as the on-air show's list leaves them.
+  out.push(await jinglesFinding());
+
+  out.push(...await showListFindings());
+  out.push(...await mixerJingleSwapFindings());
+  return out;
+}
+
+// A show's jingle list reaches the mixer's own rotate through jingles.m3u, and
+// lands at the next stinger only on a mixer that replaces its playlist between
+// stingers (#2367). An older broadcast image still reloads in place, so the list
+// starts one stinger late, with nothing else to show for it. Asked only when it
+// matters: the mixer counts the rotate and some show lists jingles. Only the
+// mixer's own "unknown command" warns; an unreachable mixer is another check's.
+async function mixerJingleSwapFindings(): Promise<Finding[]> {
+  const s = settings.get();
+  const listing = (s.shows || []).filter(sh => sh.allowedJingles?.length).length;
+  if (!listing || jingleRotateOwner(s) !== 'mixer') return [];
+  if (await jingleListSwap() !== 'no') return [];
+  return [{
+    label: 'mixer jingles',
+    status: 'warn',
+    detail: `${listing} show(s) list jingles, but the running mixer is older than this controller: a show's list starts one stinger late`,
+    hint: 'Update the broadcast container to this release (rebuild or pull its image; in dev, restart it) so the list applies from the first stinger.',
+  }];
+}
+
+// jingles.m3u holds the ON-AIR show's jingle list (#2367), so an empty or short
+// file is not always an empty library: "generate the defaults" is the hint only
+// when the library itself is empty. A list that leaves nothing names the show's
+// list instead; showListFindings below names every such show.
+async function jinglesFinding(): Promise<Finding> {
+  const found = await m3uFinding(`${STATE_DIR}/jingles.m3u`, {
     label: 'jingles',
     emptyHint: 'No station idents yet. Generate the defaults to get jingles between tracks.',
     fix: { id: 'generate-jingles', label: 'Generate jingles' },
-  }));
+  });
+  const view = await jingles.playlistView();
+  if (!view.filtered || !view.library || found.detail === 'missing') return found;
+  if (!view.playlist) {
+    return {
+      label: 'jingles',
+      status: 'warn',
+      detail: `none of ${view.library}: the on-air show lists no jingle in the library, so its stingers are skipped`,
+      hint: "Edit the show's Imaging section: re-pick from the library or clear the list.",
+    };
+  }
+  return { label: 'jingles', status: 'ok', detail: `${view.playlist} of ${view.library} (the on-air show's list)` };
+}
 
+// Per-show imaging allowlists (#1875, #1188): a list whose entries were all
+// deleted skips that show's jingle slots or beds (broadcast/show-allowlist.ts).
+// Both rotates honour a show's jingle list: the controller's draws through it,
+// and the mixer's draws from jingles.m3u, which holds the on-air show's (#2367). A bed list whose
+// beds all exist but are too short airs links dry just the same, because the
+// list filters before pickBed's length check (#2367). "Too short" is judged
+// against a link at the bed threshold over the station's crossfade, through
+// bed-policy's own rules: the shortest link that beds on an unmeasured track.
+async function showListFindings(): Promise<Finding[]> {
+  const s = settings.get();
+  const shows = s.shows || [];
+  if (!shows.some(sh => sh.allowedJingles?.length || sh.allowedBeds?.length)) return [];
+  const out: Finding[] = [];
+  const jingleNames = (await jingles.list()).map(j => j.filename);
+  const bedCatalog = await beds.catalog();
+  const linkBedSec = s.beds ? thresholdLinkBedSec(s.beds, entryCrossSecFor(s.crossfadeDuration)) : 0;
+  const stationFits = bedCatalog.some(b => bedFits(b, linkBedSec));
+  const hint = "Edit the show's Imaging section: re-pick from the library or clear the list.";
+  for (const sh of shows) {
+    if (sh.allowedJingles?.length && !allowedForShow(jingleNames, sh.allowedJingles, n => n).length) {
+      out.push({ label: 'show lists', status: 'warn', detail: `"${sh.name}": no listed jingle exists — its automatic jingle slots are skipped`, hint });
+    }
+    if (s.beds?.enabled && sh.allowedBeds?.length) {
+      const listed = allowedForShow(bedCatalog, sh.allowedBeds, b => b.name);
+      if (!listed.length) {
+        out.push({ label: 'show lists', status: 'warn', detail: `"${sh.name}": no listed bed exists — its links air without a bed`, hint });
+      } else if (!listed.some(b => bedFits(b, linkBedSec))) {
+        out.push({
+          label: 'show lists',
+          status: 'warn',
+          detail: `"${sh.name}": no listed bed is ${linkBedSec}s or longer — a ${s.beds.thresholdSec}s link airs without a bed`,
+          hint: stationFits
+            ? "The library has longer beds this show doesn't list. Edit the show's Imaging section to add one, or clear the list."
+            : `No bed in the library is long enough either. Upload one of ${linkBedSec}s or longer.`,
+        });
+      }
+    }
+  }
   return out;
 }
 

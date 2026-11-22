@@ -1,0 +1,366 @@
+/* Shared furniture for the public community pages (/community, /skills,
+   /personas, /shows): the poster hero with its count stamp, the clip-out
+   submission slip, the install steps, LED meters and the provenance line.
+   Theme tokens only, so every station theme and dark mode carry through. Motion
+   layers on under prefers-reduced-motion: no-preference; html.lite kills it. */
+
+/* ---- Poster hero -------------------------------------------------------- */
+
+.hero {
+    position: relative;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: clamp(20px, 4vw, 56px);
+    padding: clamp(28px, 6vw, 64px) 0 clamp(24px, 4vw, 40px);
+}
+@media (max-width: 720px) {
+    .hero {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+.heroText {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-width: 0;
+}
+.heroTitle {
+    margin: 0;
+    font-family: var(--font-display);
+    font-size: clamp(40px, 7vw, 92px);
+    line-height: 0.86;
+    letter-spacing: -0.02em;
+    font-weight: 900;
+    text-transform: uppercase;
+    /* Never split a word mid-letter; the phone size below keeps each line whole. */
+    overflow-wrap: break-word;
+}
+/* The second word is set in outline: a hollow, letterpress-proof look. */
+.heroOutline {
+    display: block;
+    color: transparent;
+    -webkit-text-stroke: max(1.5px, 0.018em) var(--ink);
+}
+.heroAccent {
+    color: var(--accent);
+}
+.heroLede {
+    margin: 0;
+    font-size: clamp(15px, 1.35vw, 18px);
+    line-height: 1.6;
+    color: var(--muted);
+    max-width: 62ch;
+}
+
+/* The count, as a rubber stamp. */
+.stamp {
+    --stamp-size: clamp(140px, 17vw, 200px);
+    width: var(--stamp-size);
+    height: var(--stamp-size);
+    border-radius: 50%;
+    border: 3px solid var(--accent);
+    outline: 1px solid var(--accent);
+    outline-offset: -10px;
+    color: var(--accent);
+    display: grid;
+    place-content: center;
+    text-align: center;
+    gap: 2px;
+    transform: rotate(-9deg);
+    justify-self: center;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    font-size: 10px;
+    mix-blend-mode: multiply;
+}
+:global([data-theme='dark']) .stamp {
+    mix-blend-mode: normal;
+}
+@media (prefers-color-scheme: dark) {
+    :global(:root:not([data-theme='light'])) .stamp {
+        mix-blend-mode: normal;
+    }
+}
+.stampNum {
+    font-family: var(--font-display);
+    font-size: clamp(48px, 6vw, 72px);
+    font-weight: 900;
+    letter-spacing: -0.03em;
+    line-height: 0.9;
+}
+.stampSkeleton {
+    opacity: 0.35;
+    border-style: dashed;
+}
+@media (max-width: 720px) {
+    /* Small and in flow under the lede, so the headline keeps the full width. */
+    .stamp {
+        --stamp-size: 112px;
+        justify-self: start;
+        font-size: 8px;
+        outline-offset: -7px;
+    }
+    .stampNum {
+        font-size: 38px;
+    }
+    .heroTitle {
+        font-size: clamp(30px, 9.5vw, 64px);
+    }
+}
+@media (prefers-reduced-motion: no-preference) {
+    .stamp {
+        animation: stamp-in 520ms cubic-bezier(0.2, 1.6, 0.4, 1) both;
+    }
+}
+@keyframes stamp-in {
+    from {
+        transform: rotate(-24deg) scale(1.6);
+        opacity: 0;
+    }
+}
+
+/* ---- Submission slip ---------------------------------------------------- */
+
+.slip {
+    position: relative;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px 24px;
+    margin: 0 0 clamp(32px, 5vw, 56px);
+    padding: 20px clamp(16px, 3vw, 28px);
+    border: 2px dashed var(--line);
+    background: var(--surface);
+}
+.slipScissors {
+    position: absolute;
+    top: -13px;
+    left: 18px;
+    padding: 0 6px;
+    background: var(--bg);
+    font-size: 18px;
+    line-height: 1;
+    color: var(--muted);
+}
+.slipCopy {
+    margin: 0;
+    flex: 1 1 260px;
+    font-family: var(--font-display);
+    font-size: clamp(19px, 2.2vw, 26px);
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    line-height: 1.15;
+}
+.slipActions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 18px;
+}
+.slipPrimary {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px;
+    background: var(--ink);
+    color: var(--bg);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    text-decoration: none;
+    box-shadow: 4px 4px 0 var(--accent);
+    transition: transform 120ms ease, box-shadow 120ms ease;
+}
+.slipPrimary:hover,
+.slipPrimary:focus-visible {
+    transform: translate(-2px, -2px);
+    box-shadow: 6px 6px 0 var(--accent);
+}
+.slipSecondary {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+
+/* ---- Install steps ------------------------------------------------------ */
+
+.steps {
+    list-style: none;
+    margin: clamp(40px, 6vw, 72px) 0 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    border-top: 3px double var(--ink);
+    border-bottom: 1px solid var(--ink);
+    counter-reset: step;
+}
+.step {
+    counter-increment: step;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 18px clamp(12px, 2vw, 20px) 20px;
+    border-left: 1px solid var(--separator-strong);
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--muted);
+}
+.step:first-child {
+    border-left: 0;
+    padding-left: 0;
+}
+@media (max-width: 480px) {
+    .step {
+        border-left: 0;
+        padding-left: 0;
+        border-top: 1px solid var(--separator-strong);
+    }
+    .step:first-child {
+        border-top: 0;
+    }
+}
+.step::before {
+    content: counter(step, decimal-leading-zero);
+    font-family: var(--font-display);
+    font-size: 34px;
+    font-weight: 900;
+    line-height: 1;
+    color: var(--accent);
+}
+.step strong {
+    color: var(--ink);
+}
+
+/* ---- Provenance line ---------------------------------------------------- */
+
+.credit {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 12px;
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+.credit > span + span::before {
+    content: '·';
+    margin-right: 12px;
+    opacity: 0.6;
+}
+.creditLink {
+    font-weight: 700;
+    color: var(--accent);
+    text-decoration: underline;
+    text-decoration-thickness: 1.5px;
+    text-underline-offset: 2px;
+}
+
+/* ---- Meters ------------------------------------------------------------- */
+
+.meters {
+    display: grid;
+    gap: 6px;
+    margin: 0;
+}
+.meterRow {
+    display: grid;
+    grid-template-columns: 88px minmax(0, 1fr);
+    align-items: center;
+    gap: 10px;
+}
+.meterLabel {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+.meterValue {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    min-width: 0;
+}
+.led {
+    display: grid;
+    grid-template-columns: repeat(10, minmax(0, 1fr));
+    gap: 2px;
+    flex: 1 1 auto;
+    max-width: 150px;
+    height: 9px;
+}
+.ledSeg {
+    background: var(--separator-strong);
+}
+.ledSeg[data-on] {
+    background: var(--ink);
+}
+.ledSeg[data-on][data-hot] {
+    background: var(--accent);
+}
+.led[data-neutral] .ledSeg {
+    background: transparent;
+    border: 1px dashed var(--separator-strong);
+}
+.meterNum {
+    flex: none;
+    min-width: 44px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink);
+}
+
+.signal {
+    display: inline-flex;
+    align-items: flex-end;
+    gap: 2px;
+    width: 18px;
+    height: 12px;
+    vertical-align: -1px;
+}
+.signalBar {
+    flex: 1;
+    background: var(--separator-strong);
+}
+.signalBar:nth-child(1) {
+    height: 25%;
+}
+.signalBar:nth-child(2) {
+    height: 50%;
+}
+.signalBar:nth-child(3) {
+    height: 75%;
+}
+.signalBar:nth-child(4) {
+    height: 100%;
+}
+.signalBar[data-on] {
+    background: var(--accent);
+}
+
+/* ---- Empty state -------------------------------------------------------- */
+
+.empty {
+    margin: 0;
+    padding: clamp(28px, 5vw, 48px);
+    border: 1px solid var(--separator-strong);
+    text-align: center;
+    font-size: 15px;
+    line-height: 1.6;
+    color: var(--muted);
+}
+.empty a {
+    color: var(--accent);
+    font-weight: 700;
+}

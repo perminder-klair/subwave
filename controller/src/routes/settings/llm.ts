@@ -21,6 +21,7 @@ import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createDeepSeek } from '@ai-sdk/deepseek';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { fetchWithTimeout } from '../../util/fetch-timeout.js';
+import { checkDjBrain } from '../../llm/dj-brain.js';
 import { elevenLabsTtsModelIds, probeFishKey } from '../../llm/speech.js';
 import { elevenLabsKey } from '../../audio/elevenlabs.js';
 
@@ -458,6 +459,22 @@ router.post('/settings/llm/probe-compat', requireAdmin, async (req, res) => {
   } catch (err: unknown) {
     res.json({ ok: false, message: briefLlmError(err), latencyMs: Date.now() - t0 });
   }
+});
+
+// What a DJ Brain key includes (brain only, or brain + studio voice), so the
+// one-key setup wires the voice only for a plan that has one. A blank key reads
+// the openai-compatible key on file. Always 200s; never saves.
+router.post('/settings/dj-brain/check', requireAdmin, async (req, res) => {
+  const { apiKey, baseUrl } = req.body || {};
+  if (!baseUrl || typeof baseUrl !== 'string' || !baseUrl.trim()) {
+    return res.status(400).json({ ok: false, voice: false, message: 'baseUrl is required', latencyMs: 0 });
+  }
+  let key = typeof apiKey === 'string' ? apiKey.trim() : '';
+  if (!key) {
+    await settings.load();
+    key = settings.llmKeyFor('openai-compatible');
+  }
+  res.json(await checkDjBrain(baseUrl, key));
 });
 
 // Providers whose model API returns one mixed chat+embedding list with no type

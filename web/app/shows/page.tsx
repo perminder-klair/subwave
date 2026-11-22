@@ -1,7 +1,15 @@
 import { Suspense } from 'react';
-import { AnimatedLink } from '@/components/ui/animated-link';
-import CommunityShowCard from '@/components/shows/CommunityShowCard';
-import { CatalogGridSkeleton, CatalogStatSkeleton } from '@/components/ui/catalog-skeleton';
+import CommunityShowCard, { ShowDial, dialFrequencies } from '@/components/shows/CommunityShowCard';
+import s from '@/components/shows/shows.module.css';
+import { CatalogGridSkeleton } from '@/components/ui/catalog-skeleton';
+import {
+  CountStamp,
+  CountStampSkeleton,
+  EmptyCatalog,
+  InstallSteps,
+  PosterHero,
+  SubmitSlip,
+} from '@/components/community/Furniture';
 import { fetchCommunityShows, type CommunityShow } from '@/lib/communityShows';
 import { pageMeta } from '@/lib/seo';
 import { showSubmitUrl } from '@/lib/repo';
@@ -27,85 +35,80 @@ const DOCS_URL = 'https://github.com/perminder-klair/subwave/blob/main/docs/comm
 // many boundaries read it. Framework-level fetch memoisation can't help here:
 // fetchCommunityShows opts out with `cache: 'no-store'`.
 
-async function ShowsStat({ shows }: { shows: Promise<CommunityShow[]> }) {
-  const count = (await shows).length;
-  if (count === 0) return null;
-  return (
-    <p className="bs-stat-strip">
-      <span>
-        <strong>{count}</strong> {count === 1 ? 'show' : 'shows'} in the catalog
-      </span>
-    </p>
-  );
+async function ShowsStamp({ shows }: { shows: Promise<CommunityShow[]> }) {
+  return <CountStamp count={(await shows).length} noun="show" />;
 }
 
-async function ShowsGrid({ shows }: { shows: Promise<CommunityShow[]> }) {
+async function ShowsGuide({ shows }: { shows: Promise<CommunityShow[]> }) {
   const list = await shows;
   if (list.length === 0) {
-    return (
-      <p className="bs-news-empty">
-        Nothing in the show catalog yet, or this station hasn&rsquo;t caught up with it. Be the
-        first to{' '}
-        <AnimatedLink href={SUBMIT_URL} className="bs-link">
-          share a show
-        </AnimatedLink>
-        .
-      </p>
-    );
+    return <EmptyCatalog what="show" submitUrl={SUBMIT_URL} cta="share a show" />;
   }
+  const freqs = dialFrequencies(list.length);
   return (
-    <ul className="bs-stations-grid">
-      {list.map((s) => (
-        <CommunityShowCard key={s.slug} show={s} />
-      ))}
-    </ul>
+    <>
+      <ShowDial shows={list} freqs={freqs} />
+      <ul className={s.listings}>
+        {list.map((sh, i) => (
+          <CommunityShowCard key={sh.slug} show={sh} freq={freqs[i] ?? 98} />
+        ))}
+      </ul>
+    </>
   );
 }
 
 export default function CommunityShowsIndex() {
   // Started, not awaited: keeping this component synchronous is what lets the
-  // hero, CTA and closing note flush while the catalog streams in behind the
+  // hero, slip and steps flush while the catalog streams in behind the
   // boundaries. fetchCommunityShows resolves to [] on any failure, so holding
   // the promise unawaited can't produce an unhandled rejection.
   const shows = fetchCommunityShows();
 
   return (
     <article>
-      <header className="bs-news-hero">
-        <p className="bs-eyebrow">THE PROGRAMME GUIDE</p>
-        <h1>Community Shows.</h1>
-        <p>
-          A show is a slot on the grid: a topic brief for the DJ, plus the music filters that
-          decide what plays under it. Produced mode airs it as a full episode, with an intro
-          at the top, a feature every hour and a sign-off at the end. Banter puts guest
-          co-hosts on the mic together. Every one below came from another operator, and they
-          ship with every station.
-        </p>
-      </header>
+      <PosterHero
+        eyebrow="The Programme Guide"
+        title="Community"
+        outline="Shows"
+        lede={
+          <>
+            A show is a slot on the grid: a topic brief for the DJ, plus the music filters that
+            decide what plays under it. Produced mode airs it as a full episode, with an intro
+            at the top, a feature every hour and a sign-off at the end. Banter puts guest
+            co-hosts on the mic together. Spin the dial: every show on it came from another
+            operator.
+          </>
+        }
+        stamp={
+          <Suspense fallback={<CountStampSkeleton />}>
+            <ShowsStamp shows={shows} />
+          </Suspense>
+        }
+      />
 
-      <Suspense fallback={<CatalogStatSkeleton />}>
-        <ShowsStat shows={shows} />
-      </Suspense>
-
-      <div className="bs-station-cta">
-        <p className="bs-station-cta-copy">Built a show that works? Add it to the guide.</p>
-        <AnimatedLink href={SUBMIT_URL} variant="arrow" className="bs-station-cta-link">
-          Share a show
-        </AnimatedLink>
-        <AnimatedLink href={DOCS_URL} className="bs-station-cta-help">
-          How it works
-        </AnimatedLink>
-      </div>
+      <SubmitSlip
+        copy="Built a show that works? Get it in the listings."
+        submitUrl={SUBMIT_URL}
+        submitLabel="Share a show"
+        helpUrl={DOCS_URL}
+        helpLabel="How it works"
+      />
 
       <Suspense fallback={<CatalogGridSkeleton />}>
-        <ShowsGrid shows={shows} />
+        <ShowsGuide shows={shows} />
       </Suspense>
 
-      <p className="bs-stations-report">
-        To install, open <strong>Shows → Community</strong> in your station&rsquo;s admin and hit{' '}
-        <strong>Install</strong>. Every show lands unscheduled, so you pick the persona who
-        hosts it and the hours it runs.
-      </p>
+      <InstallSteps
+        steps={[
+          <>
+            Open <strong>Shows → Community</strong> in your station&rsquo;s admin.
+          </>,
+          <>
+            Hit <strong>Install</strong>. Every show lands <strong>unscheduled</strong>.
+          </>,
+          <>Pick the persona who hosts it and the hours it runs, and it&rsquo;s on the grid.</>,
+        ]}
+      />
     </article>
   );
 }

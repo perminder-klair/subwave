@@ -15,6 +15,7 @@ import styles from './Unit.module.css';
 import { usePlayerFeed } from '@/components/player/PlayerCore';
 import { useStationClient } from '@/lib/stationClient';
 import { cn } from '@/lib/cn';
+import { showBlurb } from '@/lib/showBlurb';
 import { REQUEST_NAME_MAX } from '@/lib/schemas.generated';
 import { normalizeStationLocale, zonedDayHour } from '@/lib/format';
 import type { SchedulePayload, ScheduleShow, StationLocale } from '@/lib/types';
@@ -129,7 +130,9 @@ function fmtHour(h: number, locale: StationLocale): string {
 
 export function TimelineWindow({ onClose }: { onClose: () => void }) {
   const client = useStationClient();
-  const { activeShow, timezone, locale } = usePlayerFeed();
+  // Station zone, never the listener's clock choice: the grid's cells are
+  // station hours (lib/clockZone.ts).
+  const { activeShow, stationTimezone, locale } = usePlayerFeed();
   const [data, setData] = useState<SchedulePayload | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [sel, setSel] = useState<number | null>(null);
@@ -151,7 +154,7 @@ export function TimelineWindow({ onClose }: { onClose: () => void }) {
     };
   }, [client]);
 
-  const tz = data?.timezone ?? timezone;
+  const tz = data?.timezone ?? stationTimezone;
   const stationLocale = normalizeStationLocale(data?.locale ?? locale);
   const { dow: today, hour: nowHour } = zonedDayHour(now, tz ?? null);
 
@@ -289,7 +292,7 @@ export function TimelineWindow({ onClose }: { onClose: () => void }) {
           </div>
           <div className="font-display text-[17px] leading-[1.45] text-[#b8b1a4] italic">
             {selected?.show
-              ? selected.show.topic ||
+              ? showBlurb(selected.show) ||
                 'No episode notes — the booth plays it by ear.'
               : 'No host this block — the station picks on its own from the time of day, the weather, and whatever the calendar suggests.'}
           </div>

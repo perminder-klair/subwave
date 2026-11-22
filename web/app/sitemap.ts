@@ -1,5 +1,5 @@
 import type { MetadataRoute } from 'next';
-import { SITE_URL, IS_OFFICIAL_SITE } from '@/lib/site';
+import { SITE_URL, IS_OFFICIAL_SITE, IS_OFFICIAL_HOST } from '@/lib/site';
 import { getAllNews } from '@/lib/news';
 
 // Served by Next at /sitemap.xml. Public, indexable routes only: /admin/*,
@@ -8,6 +8,7 @@ const ROUTES = [
   '/',
   '/listen',
   '/landing',
+  '/community',
   '/stations',
   '/apps',
   '/personas',
@@ -41,6 +42,7 @@ const ROUTES = [
   '/setup/unraid',
   '/setup/updates',
   '/news',
+  '/cloud',
   '/privacy',
   '/terms',
 ];
@@ -58,7 +60,9 @@ export const dynamic = 'force-dynamic';
 
 export default function sitemap(): MetadataRoute.Sitemap {
   const now = new Date();
-  const routes = IS_OFFICIAL_SITE ? ROUTES : ROUTES.filter((r) => STATION_ROUTES.has(r));
+  // /cloud 404s off the project's own host, which SUBWAVE_INDEX_ALL does not make.
+  const routes = (IS_OFFICIAL_SITE ? ROUTES : ROUTES.filter((r) => STATION_ROUTES.has(r)))
+    .filter((r) => r !== '/cloud' || IS_OFFICIAL_HOST);
   // Dispatches are shared content — official sitemap only, same reasoning as
   // STATION_ROUTES above.
   const news = IS_OFFICIAL_SITE ? getAllNews() : [];

@@ -245,10 +245,12 @@ export default function PersonasPanel() {
     const newId = clientMintId();
     appendPersonaField({
       id: newId, name: 'New persona', tagline: '',
-      frequency: 'moderate', scriptLength: 'concise', djMode: false, linkStyle: 'natural',
+      frequency: 'moderate', scriptLength: 'concise', identMode: 'improvise', identLines: [],
+      djMode: false, linkStyle: 'natural',
       humour: DIAL_NEUTRAL, localColour: DIAL_NEUTRAL, warmth: DIAL_NEUTRAL, soul: '', musicLean: '',
       language: '',
       voiceStyle: '',
+      alsoSpeaks: '',
       avatar: '',
       tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bf_isabella', gainDb: 0, speed: 1 },
       fallbackVoice: null,
@@ -527,6 +529,8 @@ export default function PersonasPanel() {
             tagline: p.tagline.trim(),
             frequency: p.frequency,
             scriptLength: p.scriptLength,
+            identMode: p.identMode,
+            identLines: p.identLines.map(line => line.trim()).filter(Boolean),
             djMode: p.djMode,
             linkStyle: p.linkStyle,
             humour: p.humour,
@@ -536,6 +540,7 @@ export default function PersonasPanel() {
             musicLean: p.musicLean.trim(),
             language: p.language.trim(),
             voiceStyle: p.voiceStyle?.trim() || '',
+            alsoSpeaks: p.alsoSpeaks.trim(),
             avatar: p.avatar || '',
             tts: {
               engine: p.tts.engine,

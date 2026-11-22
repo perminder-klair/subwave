@@ -993,6 +993,11 @@ export const PERSONA_SCRIPT_LENGTHS = [
   'storyteller',
 ] as const;
 
+// Station IDs can use operator-written lines instead of improvising.
+export const PERSONA_IDENT_MODES = ['improvise', 'verbatim'] as const;
+export const PERSONA_IDENT_LINES_LIMIT = 20;
+export const PERSONA_IDENT_LINE_MAX = 300;
+
 // 'natural' (default) is the ordinary between-track link; 'announce' is exactly
 // "This is <artist>." Absent/invalid → 'natural', so an upgrade is unchanged.
 export const PERSONA_LINK_STYLES = [
@@ -1397,6 +1402,8 @@ export interface PersonaParsed {
   tagline: string;
   frequency: string;
   scriptLength: string;
+  identMode: 'improvise' | 'verbatim';
+  identLines: string[];
   djMode: boolean;
   linkStyle: string;
   humour: number;
@@ -1406,6 +1413,7 @@ export interface PersonaParsed {
   musicLean: string;
   language: string;
   voiceStyle: string;
+  alsoSpeaks: string;
   avatar: string;
   tts: TtsVoiceSlot;
   fallbackVoice: PersonaFallbackVoice | null;
@@ -1478,6 +1486,16 @@ export const personaSchema = z
         .max(PERSONA_VOICE_STYLE_MAX, `voiceStyle must be 0-${PERSONA_VOICE_STYLE_MAX} chars`)
         .default(''),
     ),
+    // Languages a multilingual DJ mixes INTO `language`, comma-separated.
+    // '' = one language. Read only by settings/persona.ts personaLanguages.
+    alsoSpeaks: z.preprocess(
+      personaNullToUndefined,
+      z
+        .string({ error: 'alsoSpeaks must be a string' })
+        .trim()
+        .max(PERSONA_LANGUAGE_MAX, `alsoSpeaks must be 0-${PERSONA_LANGUAGE_MAX} chars`)
+        .default(''),
+    ),
     frequency: z.enum(PERSONA_FREQUENCIES, {
       error: `frequency must be one of: ${PERSONA_FREQUENCIES.join(', ')}`,
     }),
@@ -1488,6 +1506,24 @@ export const personaSchema = z
           error: `scriptLength must be one of: ${PERSONA_SCRIPT_LENGTHS.join(', ')}`,
         })
         .default('concise'),
+    ),
+    identMode: z.preprocess(
+      personaNullToUndefined,
+      z.enum(PERSONA_IDENT_MODES, {
+        error: `identMode must be one of: ${PERSONA_IDENT_MODES.join(', ')}`,
+      }).default('improvise'),
+    ),
+    identLines: z.preprocess(
+      personaNullToUndefined,
+      z.array(z.string({ error: 'identLines must contain strings' }), {
+        error: 'identLines must be an array of strings',
+      })
+        .transform(items => items.map(line => line.trim()).filter(Boolean))
+        .refine(items => items.length <= PERSONA_IDENT_LINES_LIMIT,
+          `identLines must be at most ${PERSONA_IDENT_LINES_LIMIT} lines`)
+        .refine(items => items.every(line => line.length <= PERSONA_IDENT_LINE_MAX),
+          `identLines must be at most ${PERSONA_IDENT_LINE_MAX} chars per line`)
+        .default([]),
     ),
     // Absent → false. Present must be a real boolean (unlike a show's `=== true`
     // booleans): the strict path has always refused a non-boolean here.
@@ -1569,6 +1605,8 @@ export const personaSchema = z
       tagline: p.tagline,
       frequency: p.frequency,
       scriptLength: p.scriptLength,
+      identMode: p.identMode,
+      identLines: p.identLines,
       djMode: p.djMode,
       linkStyle: p.linkStyle,
       humour: p.humour,
@@ -1578,6 +1616,7 @@ export const personaSchema = z
       musicLean: p.musicLean,
       language: p.language,
       voiceStyle: p.voiceStyle,
+      alsoSpeaks: p.alsoSpeaks,
       avatar: p.avatar,
       tts: p.tts,
       fallbackVoice: p.fallbackVoice,
@@ -1622,6 +1661,10 @@ export function repairPersonaForLoad(
     voiceStyle: typeof raw.voiceStyle === 'string'
       ? raw.voiceStyle.trim().slice(0, PERSONA_VOICE_STYLE_MAX)
       : undefined,
+    alsoSpeaks:
+      typeof raw.alsoSpeaks === 'string'
+        ? raw.alsoSpeaks.trim().slice(0, PERSONA_LANGUAGE_MAX)
+        : undefined,
     frequency: (PERSONA_FREQUENCIES as readonly string[]).includes(raw.frequency as string)
       ? raw.frequency
       : 'moderate',
@@ -1629,6 +1672,14 @@ export function repairPersonaForLoad(
       raw.scriptLength as string,
     )
       ? raw.scriptLength
+      : undefined,
+    identMode: (PERSONA_IDENT_MODES as readonly string[]).includes(raw.identMode as string)
+      ? raw.identMode
+      : undefined,
+    identLines: Array.isArray(raw.identLines)
+      ? raw.identLines.filter((line): line is string => typeof line === 'string')
+          .map(line => line.trim().slice(0, PERSONA_IDENT_LINE_MAX)).filter(Boolean)
+          .slice(0, PERSONA_IDENT_LINES_LIMIT)
       : undefined,
     djMode: raw.djMode === true ? true : undefined,
     linkStyle: (PERSONA_LINK_STYLES as readonly string[]).includes(raw.linkStyle as string)
@@ -1737,8 +1788,9 @@ export function repairDjPromptForLoad(
 
 /**
  * Personas that will NOT speak through the station voice `{engine, provider}` —
- * what the admin DJ Brain section warns about and its one-click fix patches to
- * 'inherit'. A persona already on `inherit` is never listed.
+ * what the admin TTS voice page warns about under a DJ Brain studio voice, and
+ * its one-click fix patches to 'inherit'. A persona already on `inherit` is
+ * never listed.
  *
  * `provider` matters: the four cloud providers share one dispatcher but are
  * independent targets, so cloud/openai does not follow an openai-compatible
@@ -4523,6 +4575,105 @@ export const SETTINGS_FESTIVAL_DESCRIPTION_MAX = 200;
 // ceiling is deliberately low: past a fortnight a "festival window" is just a
 // season, which is what moodSchedule is for.
 export const SETTINGS_FESTIVAL_WINDOW_DAYS_MAX = 14;
+// A festival with an end date (#2112) runs month/day through endMonth/endDay
+// inclusive, wrapping past New Year when the end falls earlier in the year,
+// and windowDays does not apply to it. The cap is higher than the window's
+// because operators asked for their own start and stop dates around a season
+// (a family's Christmas from late November into January), but it still stops
+// a festival from standing in for moodSchedule all year: while one is active
+// its mood outranks weather and time of day in dominantMood.
+export const SETTINGS_FESTIVAL_RANGE_DAYS_MAX = 60;
+
+// Feb has 29 so a range is measured on the longest calendar it can span.
+const FESTIVAL_DAYS_IN_MONTH = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+function festivalDayOfYear(month: number, day: number): number {
+  let n = day;
+  for (let i = 0; i < month - 1; i++) n += FESTIVAL_DAYS_IN_MONTH[i] ?? 31;
+  return n;
+}
+
+function festivalMonthDayOk(month: unknown, day: unknown): boolean {
+  return Number.isInteger(month)
+    && (month as number) >= 1 && (month as number) <= 12
+    && Number.isInteger(day)
+    && (day as number) >= 1
+    && (day as number) <= (FESTIVAL_DAYS_IN_MONTH[(month as number) - 1] ?? 31);
+}
+
+/** Days a start/end pair covers, both ends counted. An end before the start wraps the year. */
+export function festivalRangeDays(
+  month: number, day: number, endMonth: number, endDay: number,
+): number {
+  const span = festivalDayOfYear(endMonth, endDay) - festivalDayOfYear(month, day);
+  return (span < 0 ? span + 366 : span) + 1;
+}
+
+/**
+ * A festival's end date, or null when it is a single day (± window). The one
+ * read of endMonth/endDay for every caller: a half-set, malformed or
+ * over-long end, which only a hand-edited settings.json can hold, reads as
+ * absent, so that festival keeps today's single-day behaviour.
+ */
+export function festivalEnd(f: {
+  month?: unknown; day?: unknown; endMonth?: unknown; endDay?: unknown;
+}): { month: number; day: number } | null {
+  if (f.endMonth == null || f.endDay == null) return null;
+  const month = Number(f.month);
+  const day = Number(f.day);
+  const endMonth = Number(f.endMonth);
+  const endDay = Number(f.endDay);
+  if (!festivalMonthDayOk(month, day) || !festivalMonthDayOk(endMonth, endDay)) return null;
+  if (festivalRangeDays(month, day, endMonth, endDay) > SETTINGS_FESTIVAL_RANGE_DAYS_MAX) return null;
+  return { month: endMonth, day: endDay };
+}
+
+const FESTIVAL_DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Is the festival on, on this calendar date (the station's local date)? The
+ * one rule for the controller (getFestivalContext) and the admin panel's
+ * "now" badge.
+ *
+ * A single-day festival compares real dates, so its window spans month and
+ * year boundaries, and a Feb 29 date rolls to Mar 1 in a common year
+ * (Date.UTC). A ranged one compares month/day keys like the blocklist's
+ * seasonal window: a Feb 29 start begins Mar 1 in a common year, and a Feb 29
+ * end ends on Feb 28. A range of one day is that single day, window ignored.
+ */
+export function festivalActiveOn(
+  f: { month: number; day: number; windowDays?: number; endMonth?: unknown; endDay?: unknown },
+  today: { year: number; month: number; day: number },
+): boolean {
+  const end = festivalEnd(f);
+  if (end) {
+    const k = today.month * 100 + today.day;
+    const from = f.month * 100 + f.day;
+    const to = end.month * 100 + end.day;
+    // A one-day range is that day with no window, judged below like any
+    // single day: a Feb 29 → Feb 29 range would otherwise start Mar 1 and end
+    // Feb 28, and never be on in a common year.
+    if (from !== to) return from <= to ? k >= from && k <= to : k >= from || k <= to;
+  }
+  const window = end ? 0 : f.windowDays || 0;
+  const t = Date.UTC(today.year, today.month - 1, today.day);
+  // Adjacent years cover a window reaching across Dec 31 / Jan 1.
+  for (const yy of [today.year - 1, today.year, today.year + 1]) {
+    if (Math.abs(Date.UTC(yy, f.month - 1, f.day) - t) <= window * FESTIVAL_DAY_MS) return true;
+  }
+  return false;
+}
+
+export type SettingsFestival = {
+  month: number;
+  day: number;
+  name: string;
+  mood: string;
+  description: string;
+  windowDays: number;
+  endMonth?: number;
+  endDay?: number;
+};
 
 export function festivalsSchema(ctx: SettingsMoodContext) {
   const names = ctx.moodNames ? new Set(ctx.moodNames) : null;
@@ -4595,11 +4746,44 @@ export function festivalsSchema(ctx: SettingsMoodContext) {
             `festivals[${i}].windowDays must be an integer 0-${SETTINGS_FESTIVAL_WINDOW_DAYS_MAX}`,
             'windowDays',
           );
+          return;
+        }
+        // Optional end date (#2112): both or neither. null/undefined is
+        // "no end", so a festival saved before this field is unchanged.
+        const hasEndMonth = f.endMonth != null;
+        const hasEndDay = f.endDay != null;
+        if (!hasEndMonth && !hasEndDay) return;
+        if (!hasEndMonth || !hasEndDay) {
+          add(
+            `festivals[${i}] needs both endMonth and endDay, or neither`,
+            hasEndMonth ? 'endDay' : 'endMonth',
+          );
+          return;
+        }
+        const endMonth = Number(f.endMonth);
+        if (!Number.isInteger(endMonth) || endMonth < 1 || endMonth > 12) {
+          add(`festivals[${i}].endMonth must be an integer 1-12`, 'endMonth');
+          return;
+        }
+        const endDaysInMonth = FESTIVAL_DAYS_IN_MONTH[endMonth - 1] ?? 31;
+        const endDay = Number(f.endDay);
+        if (!Number.isInteger(endDay) || endDay < 1 || endDay > endDaysInMonth) {
+          add(
+            `festivals[${i}].endDay must be an integer 1-${endDaysInMonth} for month ${endMonth}`,
+            'endDay',
+          );
+          return;
+        }
+        if (festivalRangeDays(month, day, endMonth, endDay) > SETTINGS_FESTIVAL_RANGE_DAYS_MAX) {
+          add(
+            `festivals[${i}] may run at most ${SETTINGS_FESTIVAL_RANGE_DAYS_MAX} days, start and end included`,
+            'endDay',
+          );
         }
       });
     })
     .transform((raw) =>
-      (raw as Array<Record<string, unknown>>).map((f) => ({
+      (raw as Array<Record<string, unknown>>).map((f): SettingsFestival => ({
         month: Number(f.month),
         day: Number(f.day),
         name: String(f.name ?? '').trim(),
@@ -4609,6 +4793,11 @@ export function festivalsSchema(ctx: SettingsMoodContext) {
             ? f.description.trim().slice(0, SETTINGS_FESTIVAL_DESCRIPTION_MAX)
             : '',
         windowDays: Number(f.windowDays ?? 0),
+        // Present only on a ranged festival, so a single-day one saves
+        // exactly the shape it always has.
+        ...(f.endMonth != null && f.endDay != null
+          ? { endMonth: Number(f.endMonth), endDay: Number(f.endDay) }
+          : {}),
       })),
     );
 }
@@ -4885,9 +5074,15 @@ export const SHOW_ID_RE = /^[a-z0-9_]{3,32}$/;
 export const SHOWS_LIMIT = 64;
 export const SHOW_NAME_MAX = 60;
 export const SHOW_TOPIC_MAX = 2000;
+// Listener-facing blurb (#2358): plain text, the show's twin of a persona's
+// tagline. `topic` stays the DJ's brief; this one never reaches a prompt.
+export const SHOW_DESCRIPTION_MAX = 300;
 export const GUESTS_PER_SHOW = 3;
 export const PLAYLISTS_PER_SHOW = 10;
 export const EXCLUDED_PLAYLISTS_PER_SHOW = 10;
+// Per-show jingle filenames / bed names the automatic draws may use (#1875, #1188).
+export const SHOW_IMAGING_ALLOWLIST_MAX = 64;
+const SHOW_IMAGING_ITEM_MAX = 128;
 // Per-attribute ceiling on the multi-value music filters (#929).
 export const SHOW_FILTER_VALUES_MAX = 15;
 export const SHOW_GENRE_MAX = 64;
@@ -5008,6 +5203,13 @@ function showStringList(opts: {
       }),
   );
 }
+
+// Per-show jingle filenames / bed names: same shape on save and on load.
+const IMAGING_ALLOWLIST_REPAIR = { max: SHOW_IMAGING_ALLOWLIST_MAX, itemMax: SHOW_IMAGING_ITEM_MAX };
+const imagingAllowlist = () => showStringList({
+  ...IMAGING_ALLOWLIST_REPAIR,
+  overflowError: `must have at most ${SHOW_IMAGING_ALLOWLIST_MAX} entries`,
+});
 
 // One era-window year bound, shared by showYear and the load path's
 // repairEraWindow. null / '' means "open end"; a numeric string is accepted
@@ -5310,6 +5512,23 @@ function showObjectSchema(ctx: ShowSchemaContext) {
       // a tag is typed by hand and must not vanish on save. The load twin
       // (repairShowTags) drops instead.
       tags: showTags,
+      // Imaging allowlists: jingle filenames and bed names the automatic draws
+      // may use while this show is on air. Empty = every one. Shape-checked
+      // only, like playlistIds: a deleted entry matches nothing at pick time.
+      allowedJingles: imagingAllowlist(),
+      allowedBeds: imagingAllowlist(),
+      // What listeners read on the schedule and the On Now card (#2358). ''
+      // means "not set": listener surfaces fall back to `topic`. Never read by
+      // a model path; `topic` alone is the DJ's brief. Declared last so the
+      // persisted key order is otherwise unchanged.
+      description: z.preprocess(
+        nullToUndefined,
+        z
+          .string()
+          .trim()
+          .max(SHOW_DESCRIPTION_MAX, `description must be 0-${SHOW_DESCRIPTION_MAX} chars`)
+          .default(''),
+      ),
     })
     // Needs two fields at once, so it cannot live on guestPersonaIds.
     .check((c) => {
@@ -5422,6 +5641,11 @@ export function repairShowForLoad(
     id: typeof raw.id === 'string' && SHOW_ID_RE.test(raw.id) ? raw.id : undefined,
     name: typeof raw.name === 'string' ? raw.name.trim().slice(0, SHOW_NAME_MAX) : undefined,
     topic: typeof raw.topic === 'string' ? raw.topic.slice(0, SHOW_TOPIC_MAX) : undefined,
+    // Trimmed before the cut, unlike topic: the schema trims too, so an
+    // untrimmed 300-char cut could still overflow after a leading space.
+    description: typeof raw.description === 'string'
+      ? raw.description.trim().slice(0, SHOW_DESCRIPTION_MAX)
+      : undefined,
     segmentSkill: typeof raw.segmentSkill === 'string' && raw.segmentSkill.trim() !== (typeof raw.preparationSkill === 'string' ? raw.preparationSkill.trim() : '')
       ? raw.segmentSkill.trim().slice(0, SHOW_SEGMENT_SKILL_MAX)
       : undefined,
@@ -5471,6 +5695,8 @@ export function repairShowForLoad(
     excludedPlaylistIds: repairShowStringList(raw.excludedPlaylistIds, {
       max: EXCLUDED_PLAYLISTS_PER_SHOW,
     }),
+    allowedJingles: repairShowStringList(raw.allowedJingles, IMAGING_ALLOWLIST_REPAIR),
+    allowedBeds: repairShowStringList(raw.allowedBeds, IMAGING_ALLOWLIST_REPAIR),
   };
 }
 

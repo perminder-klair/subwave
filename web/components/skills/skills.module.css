@@ -1,0 +1,300 @@
+/* /skills — the Exchange. A market ticker tape and ruled cue cards with a
+   24-hour cooldown dial. Theme tokens only; the tape scrolls only under
+   prefers-reduced-motion: no-preference (html.lite stops it), and at rest it is
+   a sideways-scrollable strip. */
+
+/* ---- Ticker tape -------------------------------------------------------- */
+
+.ticker {
+    display: flex;
+    align-items: stretch;
+    margin: 0 0 clamp(28px, 4vw, 44px);
+    border-top: 2px solid var(--ink);
+    border-bottom: 2px solid var(--ink);
+    background: var(--ink);
+    color: var(--bg);
+    min-width: 0;
+}
+.tickerTag {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 14px;
+    background: var(--accent);
+    color: var(--bg);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.24em;
+}
+.tickerWindow {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+.tickerWindow::-webkit-scrollbar {
+    display: none;
+}
+.tickerTrack {
+    display: flex;
+    width: max-content;
+}
+.tickerRun {
+    display: flex;
+    flex: none;
+}
+/* Without motion the duplicate just doubles the strip; hide it. */
+.tickerRun + .tickerRun {
+    display: none;
+}
+.tick {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 10px 22px;
+    border-right: 1px solid color-mix(in oklab, var(--bg) 25%, transparent);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+.tickSym {
+    font-weight: 700;
+    color: var(--accent);
+}
+.tickName {
+    opacity: 0.9;
+}
+.tickUp {
+    font-weight: 700;
+    color: color-mix(in oklab, var(--accent) 60%, var(--bg));
+}
+@media (prefers-reduced-motion: no-preference) {
+    .tickerWindow {
+        overflow: hidden;
+    }
+    .tickerRun + .tickerRun {
+        display: flex;
+    }
+    .tickerTrack {
+        animation: ticker 48s linear infinite;
+    }
+    .ticker:hover .tickerTrack,
+    .ticker:focus-within .tickerTrack {
+        animation-play-state: paused;
+    }
+}
+@keyframes ticker {
+    to {
+        transform: translateX(-50%);
+    }
+}
+
+/* ---- Cue cards ---------------------------------------------------------- */
+
+.grid {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+    gap: clamp(24px, 3vw, 40px);
+    align-items: start;
+}
+.card {
+    --card-pad: clamp(16px, 2vw, 22px);
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 0 var(--card-pad) 18px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    box-shadow: 0 1px 0 var(--separator-strong), 0 14px 24px -18px color-mix(in oklab, var(--ink) 45%, transparent);
+    min-width: 0;
+    scroll-margin-top: 24px;
+    transition: transform 200ms ease, box-shadow 200ms ease;
+}
+/* A loose pile on the desk: each card sits a touch askew, and straightens when
+   you pick it up. */
+.card:nth-child(3n + 1) {
+    transform: rotate(-0.7deg);
+}
+.card:nth-child(3n + 2) {
+    transform: rotate(0.5deg);
+}
+.card:nth-child(3n) {
+    transform: rotate(-0.25deg);
+}
+.card:hover,
+.card:focus-within,
+.card:target {
+    transform: rotate(0) translateY(-4px);
+    box-shadow: 8px 8px 0 var(--accent);
+}
+/* A strip of tape holding the card down. */
+.card::before {
+    content: '';
+    position: absolute;
+    top: -9px;
+    left: 50%;
+    width: 72px;
+    height: 18px;
+    margin-left: -36px;
+    background: color-mix(in oklab, var(--accent) 22%, transparent);
+    border-left: 1px dashed color-mix(in oklab, var(--accent) 50%, transparent);
+    border-right: 1px dashed color-mix(in oklab, var(--accent) 50%, transparent);
+    transform: rotate(-2deg);
+}
+.cardStrip {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    margin: 0 calc(-1 * var(--card-pad));
+    padding: 14px var(--card-pad) 8px;
+    border-bottom: 2px solid var(--accent);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+.badge {
+    padding: 2px 7px;
+    background: var(--accent);
+    color: var(--bg);
+    letter-spacing: 0.16em;
+}
+.cardHead {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 64px;
+    align-items: center;
+    gap: 14px;
+}
+.name {
+    margin: 0;
+    font-family: var(--font-display);
+    font-size: clamp(21px, 2.2vw, 27px);
+    font-weight: 900;
+    line-height: 1.02;
+    letter-spacing: -0.01em;
+    overflow-wrap: anywhere;
+}
+.dial {
+    position: relative;
+    width: 64px;
+    height: 64px;
+}
+.dial svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+.dialLabel {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+}
+.cadence {
+    margin: -6px 0 0;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+.cadence strong {
+    color: var(--accent);
+}
+/* Ruled index-card paper under the brief, with a margin line. */
+.ruled {
+    position: relative;
+    padding: 2px 0 2px 16px;
+    background-image: repeating-linear-gradient(
+        to bottom,
+        transparent 0,
+        transparent calc(1.6em - 1px),
+        color-mix(in oklab, var(--accent-2) 22%, transparent) calc(1.6em - 1px),
+        color-mix(in oklab, var(--accent-2) 22%, transparent) 1.6em
+    );
+    background-size: 100% 1.6em;
+    font-size: 14px;
+    line-height: 1.6;
+}
+.ruled::before {
+    content: '';
+    position: absolute;
+    top: -4px;
+    bottom: -4px;
+    left: 4px;
+    width: 1px;
+    background: var(--accent);
+    opacity: 0.7;
+}
+.ruled :global(.bs-skill-brief) {
+    color: var(--ink);
+    font-size: 14px;
+    line-height: 1.6;
+}
+.wires {
+    display: grid;
+    gap: 10px;
+    margin: 0;
+}
+.wires dt {
+    margin: 0 0 4px;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+.wires dd {
+    margin: 0;
+}
+.chips {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.chip {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border: 1px solid var(--ink);
+    border-radius: 999px;
+}
+.chip span {
+    color: var(--accent);
+}
+.feed {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    overflow-wrap: anywhere;
+}
+.feed span {
+    color: var(--accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .card {
+        transition: none;
+    }
+}

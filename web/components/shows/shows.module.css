@@ -1,0 +1,479 @@
+/* /shows — the Programme Guide. An FM tuner faceplate across the top, then a
+   printed listings column with a spec sheet per show. Theme tokens only. The
+   needle sweeps only under prefers-reduced-motion: no-preference; html.lite
+   stops it and it rests on the first station. */
+
+/* ---- Tuner -------------------------------------------------------------- */
+
+.tuner {
+    margin: 0 0 clamp(32px, 5vw, 56px);
+    border: 2px solid var(--ink);
+    background: var(--ink);
+    padding: 10px;
+}
+.tunerFace {
+    background: var(--bg);
+    border: 1px solid var(--line);
+    background-image: linear-gradient(
+        to bottom,
+        color-mix(in oklab, var(--accent) 8%, transparent),
+        transparent 40%,
+        transparent 60%,
+        color-mix(in oklab, var(--ink) 6%, transparent)
+    );
+}
+/* On a phone the faceplate keeps its width and scrolls sideways inside itself,
+   so seven stations never pile onto one another; the page never scrolls. */
+.tunerScroll {
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+}
+.tunerInner {
+    position: relative;
+    min-width: 680px;
+    height: 168px;
+    margin: 0 28px;
+}
+.scale {
+    position: absolute;
+    top: 64px;
+    left: 0;
+    right: 0;
+    height: 16px;
+}
+.scale {
+    display: flex;
+    justify-content: space-between;
+}
+/* Zero-width slots on a space-between row, each label centred on its slot. */
+.scale > span {
+    position: relative;
+    width: 0;
+}
+.scale > span > span {
+    position: absolute;
+    left: 0;
+    transform: translateX(-50%);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+}
+.ticks {
+    position: absolute;
+    top: 82px;
+    left: 0;
+    right: 0;
+    height: 22px;
+    background-image:
+        repeating-linear-gradient(to right, var(--ink) 0 1.5px, transparent 1.5px 20%),
+        repeating-linear-gradient(to right, var(--ink) 0 1px, transparent 1px 2%);
+    background-size: 100% 100%, 100% 50%;
+    background-repeat: no-repeat;
+    background-position: 0 0, 0 100%;
+    border-bottom: 1px solid var(--ink);
+    opacity: 0.7;
+}
+.needle {
+    position: absolute;
+    top: 8px;
+    bottom: 8px;
+    left: 5%;
+    width: 3px;
+    margin-left: -1.5px;
+    background: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 18%, transparent);
+}
+@media (prefers-reduced-motion: no-preference) {
+    .needle {
+        animation: needle-sweep 14s ease-in-out infinite alternate;
+    }
+}
+@keyframes needle-sweep {
+    0%,
+    6% {
+        left: 5%;
+    }
+    94%,
+    100% {
+        left: 95%;
+    }
+}
+.stations {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 5%;
+    right: 5%;
+    display: flex;
+    justify-content: space-between;
+}
+.station {
+    position: relative;
+    width: 0;
+    z-index: 1;
+}
+.station:only-child {
+    margin: 0 auto;
+}
+.stationLink {
+    position: absolute;
+    left: 0;
+    transform: translateX(-50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1px;
+    padding: 4px 8px;
+    max-width: 150px;
+    text-align: center;
+    text-decoration: none;
+    color: var(--ink);
+    background: var(--bg);
+    border: 1px solid var(--ink);
+    transition: background 120ms ease, color 120ms ease, transform 120ms ease;
+}
+.stationLink::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    width: 1px;
+    background: var(--ink);
+}
+.station[data-row='a'] .stationLink::after {
+    top: 100%;
+    height: 20px;
+}
+.station[data-row='b'] .stationLink::after {
+    bottom: 100%;
+    height: 8px;
+}
+.station[data-row='a'] .stationLink {
+    top: 6px;
+}
+.station[data-row='b'] .stationLink {
+    top: 112px;
+}
+.stationLink:hover,
+.stationLink:focus-visible {
+    background: var(--accent);
+    color: var(--bg);
+    border-color: var(--accent);
+    transform: translate(-50%, -2px);
+}
+.stationFreq {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    color: var(--accent);
+}
+.stationLink:hover .stationFreq,
+.stationLink:focus-visible .stationFreq {
+    color: inherit;
+}
+.stationName {
+    font-family: var(--font-display);
+    font-size: 13px;
+    font-weight: 800;
+    line-height: 1.05;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 134px;
+}
+.tunerKnobs {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 6px 2px;
+    color: var(--bg);
+}
+.tunerBrand {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    opacity: 0.75;
+    text-align: center;
+}
+.knob {
+    flex: none;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background:
+        repeating-conic-gradient(var(--bg) 0 6deg, transparent 6deg 18deg),
+        var(--line);
+    border: 2px solid var(--bg);
+    opacity: 0.85;
+}
+
+/* ---- Listings ----------------------------------------------------------- */
+
+.listings {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    border-top: 3px double var(--ink);
+}
+.listing {
+    display: grid;
+    grid-template-columns: 132px minmax(0, 1fr) minmax(0, 260px);
+    gap: clamp(16px, 3vw, 36px);
+    padding: clamp(22px, 3vw, 32px) 0;
+    border-bottom: 1px solid var(--ink);
+    scroll-margin-top: 24px;
+}
+.listing:target {
+    background: linear-gradient(to right, var(--accent-soft), transparent 70%);
+}
+@media (max-width: 900px) {
+    .listing {
+        grid-template-columns: 104px minmax(0, 1fr);
+    }
+    .sheet {
+        grid-column: 2;
+    }
+}
+@media (max-width: 560px) {
+    .listing {
+        grid-template-columns: minmax(0, 1fr);
+    }
+    .sheet {
+        grid-column: auto;
+    }
+    .freqCol {
+        flex-direction: row;
+        flex-wrap: wrap;
+        align-items: baseline;
+    }
+}
+.freqCol {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+}
+.freqBand {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.3em;
+    color: var(--muted);
+}
+.freqNum {
+    font-family: var(--font-display);
+    font-size: clamp(34px, 4vw, 48px);
+    font-weight: 900;
+    line-height: 0.9;
+    letter-spacing: -0.03em;
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+}
+.flags {
+    list-style: none;
+    margin: 4px 0 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+.flag,
+.flagSolid {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    padding: 3px 6px;
+    border: 1px solid var(--ink);
+}
+.flagSolid {
+    background: var(--ink);
+    color: var(--bg);
+}
+.body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
+}
+.title {
+    margin: 0;
+    font-family: var(--font-display);
+    font-size: clamp(26px, 3.4vw, 42px);
+    font-weight: 900;
+    line-height: 0.95;
+    letter-spacing: -0.02em;
+    overflow-wrap: anywhere;
+}
+.runOrder {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 8px;
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+.runOrder span[aria-hidden] {
+    color: var(--accent);
+}
+.body :global(.bs-skill-brief) {
+    font-size: 15px;
+    color: var(--ink);
+    opacity: 0.85;
+}
+.filters {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.chips {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.mood,
+.genre {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+}
+.mood {
+    background: var(--accent-soft);
+    color: var(--ink);
+}
+.mood::before {
+    content: '◐ ';
+    color: var(--accent);
+}
+.genre {
+    border: 1px solid var(--separator-strong);
+    color: var(--muted);
+}
+.genre::before {
+    content: '♪ ';
+}
+
+/* ---- Spec sheet --------------------------------------------------------- */
+
+.sheet {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 14px 16px;
+    border: 1px solid var(--separator-strong);
+    background: var(--surface);
+    align-self: start;
+    min-width: 0;
+}
+.spec {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+.specKey {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+.specVal {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+.ruler {
+    position: relative;
+    height: 12px;
+    background-image: repeating-linear-gradient(
+        to right,
+        var(--separator-strong) 0 1px,
+        transparent 1px 12.5%
+    );
+    border-bottom: 1px solid var(--ink);
+}
+.rulerSvg {
+    position: absolute;
+    inset: 2px 0 0;
+    width: 100%;
+    height: calc(100% - 2px);
+    overflow: visible;
+}
+.rulerWindow {
+    fill: var(--accent);
+}
+.rulerAny {
+    position: absolute;
+    inset: 2px 0 0;
+    background: repeating-linear-gradient(
+        45deg,
+        color-mix(in oklab, var(--ink) 18%, transparent) 0 3px,
+        transparent 3px 6px
+    );
+}
+.rulerScale {
+    display: flex;
+    justify-content: space-between;
+    font-family: var(--font-mono);
+    font-size: 8px;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+}
+.energy {
+    display: flex;
+    align-items: flex-end;
+    gap: 4px;
+    height: 22px;
+}
+.energyBar {
+    width: 18px;
+    background: var(--separator-strong);
+}
+.energyBar:nth-child(1) {
+    height: 40%;
+}
+.energyBar:nth-child(2) {
+    height: 70%;
+}
+.energyBar:nth-child(3) {
+    height: 100%;
+}
+.energyBar[data-on] {
+    background: var(--accent);
+}
+.energyBar[data-any] {
+    background: repeating-linear-gradient(
+        45deg,
+        color-mix(in oklab, var(--ink) 25%, transparent) 0 3px,
+        transparent 3px 6px
+    );
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .stationLink {
+        transition: none;
+    }
+    .stationLink:hover,
+    .stationLink:focus-visible {
+        transform: translateX(-50%);
+    }
+}

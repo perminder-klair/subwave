@@ -238,14 +238,39 @@ function frequencyFloorMs(freq: string) {
 // `cap.voice` is the loader's normalizeSkillVoice output, so all three of its
 // fields are set. Co-hosted skills never reach here: each line speaks in its
 // own roster persona's voice. Exported for scripts/skill-voice.test.ts.
+//
+// The speaker's language MIX (`alsoSpeaks`) does not ride along: it was declared
+// for the speaker's own voice, and the pinned one may be an English-only local
+// voice that reads kana as character names. Dropping it here puts tts.speak()'s
+// CJK scrub and single-language cloud hint back on the primary language alone,
+// the same rule a rescue voice gets (audio/tts.ts). The prompt that WRITES the
+// segment follows the same rule (skillWriterFor), so write time and speak time
+// agree: a mix written for a voice that then scrubs it airs with holes.
+// A co-hosted skill never pins: it is written by skills/cohosted.ts and each
+// line airs in its own roster voice, so its `voice` never reaches speech.
+export function skillPinsVoice(cap): boolean {
+  return Boolean(cap?.voice?.engine) && !cap?.cohosts;
+}
+
+const andList = new Intl.ListFormat('en', { type: 'conjunction' });
+
+// The persona a skill's segment prompt is written as: the speaker, minus its
+// language mix when the skill pins a voice. A speaker with no mix comes back
+// as the same object, so every one-language prompt is byte-identical.
+export function skillWriterFor(cap, speaker) {
+  if (!speaker || !skillPinsVoice(cap) || !settings.personaLanguages(speaker).mix.length) return speaker;
+  return { ...speaker, alsoSpeaks: '' };
+}
+
 export function skillVoiceFor(cap, speaker) {
   const v = cap?.voice;
-  if (!v?.engine) return { persona: speaker, overridden: false };
+  if (!skillPinsVoice(cap)) return { persona: speaker, overridden: false };
   const base = speaker || {};
   const baseTts = (base.tts && typeof base.tts === 'object' ? base.tts : {});
   return {
     persona: {
       ...base,
+      alsoSpeaks: '',
       tts: {
         ...baseTts,
         engine: v.engine,
@@ -297,9 +322,20 @@ function availableCapabilities(ctx, now: Date) {
 // tool exploration are conveyed through the AI SDK's own channels (tool and
 // schema field descriptions, the done tool, the buildSituation() user message),
 // same principle as pickSystem.
-export function directorSystem(persona, caps, freq: string, sfxCatalog) {
+export function directorSystem(speaker, caps, freq: string, sfxCatalog) {
   const capList = caps.map((c) => `- ${c.kind}: ${c.desc}`).join('\n');
   const tone = stationTone(freq);
+  // The director writes before it picks a kind, so a pinned skill voice
+  // (skillWriterFor) is settled per tick: every offered kind pinned writes
+  // without the mix; a mix of pinned and unpinned keeps it and names the
+  // pinned kinds as primary-language only. No mix: byte-identical.
+  const { primary, mix } = settings.personaLanguages(speaker);
+  const pinned = mix.length ? caps.filter(skillPinsVoice).map((c) => c.kind) : [];
+  const allPinned = pinned.length > 0 && pinned.length === caps.length;
+  const persona = allPinned && speaker ? { ...speaker, alsoSpeaks: '' } : speaker;
+  const pinnedClause = pinned.length && !allPinned
+    ? `\n\nException: ${andList.format(pinned)} air${pinned.length === 1 ? 's' : ''} in a different voice that reads only ${primary}. If you pick ${pinned.length === 1 ? 'it' : 'one of those'}, write the "text" line entirely in ${primary}, with no other language and no script ${primary} does not use.`
+    : '';
 
   return `${settings.agentPersonaPreamble(persona)}
 ${onAirLocationGrounding()}
@@ -307,7 +343,7 @@ ${onAirLocationGrounding()}
 Your job: decide whether to air ONE between-track segment, or stay silent. You are NOT choosing music. ${tone}
 
 Capabilities available this tick (pick one of these kinds, or stay silent):
-${capList}${sfxBlock(sfxCatalog)}${settings.agentLanguageReminder(persona, 'the "text" line')}`;
+${capList}${sfxBlock(sfxCatalog)}${settings.agentLanguageReminder(persona, 'the "text" line')}${pinnedClause}`;
 }
 
 // 'silent' never reaches the auto tick (the frequency floor blocks it); a
@@ -436,7 +472,8 @@ export function simpleSegmentSchema() {
   }));
 }
 
-export function simpleSystem(persona, cap, freq: string, sfxCatalog) {
+export function simpleSystem(speaker, cap, freq: string, sfxCatalog) {
+  const persona = skillWriterFor(cap, speaker);
   return `${settings.agentPersonaPreamble(persona)}
 ${onAirLocationGrounding()}
 
@@ -703,7 +740,8 @@ function isBareNullSilent(err) {
 
 // Operator-override variant of directorSystem: exactly one capability, and the
 // segment is mandatory unless mayAbstain. Same ultra-minimal treatment.
-export function forcedSystem(persona, cap, sfxCatalog, { mayAbstain = false }: { mayAbstain?: boolean } = {}) {
+export function forcedSystem(speaker, cap, sfxCatalog, { mayAbstain = false }: { mayAbstain?: boolean } = {}) {
+  const persona = skillWriterFor(cap, speaker);
   // The mandatory phrasing is right for a segment written from the moment
   // itself. A grounded skill gets the opposite instruction: "you must produce a
   // line" turned an empty search into a recycled hallucination (#1412), and the

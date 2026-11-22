@@ -79,7 +79,9 @@ export default function AdminSettings() {
           <li>
             <strong>Shows</strong> — a show is a reusable definition: a name, a topic, a
             persona, a mood. Paint shows onto a weekly grid hour by hour; an empty hour
-            means the station runs autonomously for that hour.
+            means the station runs autonomously for that hour. The topic is the DJ's
+            brief; listeners read the show's listener description on the schedule and
+            the On Now card, or the brief when you leave that empty.
           </li>
           <li>
             <strong>Personas</strong> — the roster of DJ identities, one to ten. Each has
@@ -172,7 +174,10 @@ export default function AdminSettings() {
           </li>
           <li>
             <strong>LLM provider</strong> — where the model runs and which model writes
-            the DJ's words. See{' '}
+            the DJ's words. Choose <strong>DJ Brain</strong> as the source to run on the
+            hosted brain: paste your key and Save, and the station asks the brain which
+            plan the key is on and wires the studio voice too on Brain Studio. Hidden on a
+            hosted station, which is already wired. See{' '}
             <Link href="/manual/llm" className="bs-link">Models &amp; Tokens</Link>.
           </li>
           <li>

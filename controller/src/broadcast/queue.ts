@@ -42,6 +42,8 @@ import { jinglePlacement, pickRotateJingle, onJingleRotateOwnerChange } from './
 import { overlayDue, overlayEnabled, overlayOffer, overlayOpening, overlayFits, overlayMixerStatus } from './jingle-overlay.js';
 import * as beds from './beds.js';
 import * as bedPolicy from './bed-policy.js';
+import * as jingleShowSync from './jingle-show-sync.js';
+import { allowedForShow } from './show-allowlist.js';
 import { vocalRunwayMs, segmentFitsRunway } from './vocal-runway.js';
 import * as session from './session.js';
 import type { HostSpeechStamp, TurnMeta } from './session.js';
@@ -477,6 +479,7 @@ class Queue {
   // ID cannot take the song's opening from it (see whileTalkInFlight).
   _talkInFlight = 0;
   _overlayMixerStatus = async () => overlayMixerStatus(await liquidsoapControl.sendCommand('jingle_overlay_status'));
+  _onMusicStartedForJingles = jingleShowSync.onMusicStarted;
   _bedCatalog = beds.catalog;
   _bedGetPath = beds.getPath;
   _writeHandoff = writeHandoff;
@@ -1374,16 +1377,16 @@ class Queue {
       // is held for it in onBedStarted. The predecessor's own crossSec stamp
       // (applyMixTransition's ending-aware canvas) is exactly that length;
       // fall back to the operator's crossfade setting like getAnnotatedUri.
-      // 0 is a legitimate value (a hard-cut station has NO entry canvas), so
-      // guard with isFinite rather than `||` — `|| 10` would turn crossfade 0
-      // into 10s of phantom dead time the listener hears as bare bed.
-      const rawCross = Number(predecessor?.crossSec ?? settings.get()?.crossfadeDuration);
-      const entryCrossSec = Math.min(15, Math.max(0, Number.isFinite(rawCross) ? rawCross : 10));
+      const entryCrossSec = bedPolicy.entryCrossSecFor(predecessor?.crossSec ?? settings.get()?.crossfadeDuration);
 
       const { bedSec, crossSec } = bedPolicy.bedLengthFor(voiceMs, cfg, entryCrossSec);
-      const pick = bedPolicy.pickBed(await this._bedCatalog(), bedSec, this._lastBed, Math.random());
+      const show = session.onAirShow();
+      const allowed = allowedForShow(await this._bedCatalog(), show?.allowedBeds, b => b.name);
+      const pick = bedPolicy.pickBed(allowed, bedSec, this._lastBed, Math.random());
       if (!pick) {
-        this.log('beds', `no bed long enough for a ${bedSec}s link — talking over "${item.track?.title}" instead`);
+        this.log('beds', show?.allowedBeds?.length
+          ? `show "${show.name}" allows no bed long enough for a ${bedSec}s link — talking over "${item.track?.title}" instead`
+          : `no bed long enough for a ${bedSec}s link — talking over "${item.track?.title}" instead`);
         return;
       }
       const path = await this._bedGetPath(pick.name);
@@ -2622,8 +2625,8 @@ class Queue {
   async announce(
     text,
     kind = 'announcement',
-    { persona = null, meta = {}, pauseTalkEligible = false, sfx: selectedSfx = null, hostSpeech = null }:
-      { persona?: Persona | null; meta?: TurnMeta; pauseTalkEligible?: boolean; sfx?: string | null; hostSpeech?: HostSpeechStamp | null } = {},
+    { persona = null, meta = {}, pauseTalkEligible = false, sfx: selectedSfx = null, hostSpeech = null, noClockClaim = false }:
+      { persona?: Persona | null; meta?: TurnMeta; pauseTalkEligible?: boolean; sfx?: string | null; hostSpeech?: HostSpeechStamp | null; noClockClaim?: boolean } = {},
   ): Promise<AnnounceOutcome> {
     // Single-voice paths leak the label too — a styled POST /dj/say came back as
     // "Iris : Bonsoir…" with one persona and one voice (#1707).
@@ -2686,6 +2689,7 @@ class Queue {
           onCompleted: settle,
           notBefore: kind === 'handoff' ? session.handoffBoundaryAt() : null,
           hostSpeech,
+          noClockClaim,
         });
         if (!accepted) settle(false);
         if (accepted && placement === 'pause-talk') void this.drainToLiquidsoap();
@@ -2985,7 +2989,7 @@ class Queue {
   // here. All bookkeeping (djLog → recap/opener anti-repeat, session turn,
   // webhook) happens at AIR time, so the DJ's memory reflects what reached the
   // stream, not what was merely scheduled.
-  async announceAtNextTrack(text, kind = 'announcement', { persona = null, meta = {}, daypart = null, hostSpeech = null }: { persona?: Persona | null; meta?: TurnMeta; daypart?: string | null; hostSpeech?: HostSpeechStamp | null } = {}) {
+  async announceAtNextTrack(text, kind = 'announcement', { persona = null, meta = {}, daypart = null, hostSpeech = null, noClockClaim = false }: { persona?: Persona | null; meta?: TurnMeta; daypart?: string | null; hostSpeech?: HostSpeechStamp | null; noClockClaim?: boolean } = {}) {
     // Scheduled segments reach _speak through here too, so they need the same
     // guard as announce(): a label the model prefixed would otherwise be read
     // aloud. Same speaker resolution, for the same reason.
@@ -2995,22 +2999,23 @@ class Queue {
       kind,
       { verbatim: meta?.verbatim === true },
     );
-    if (!safeText) return;
-    if (hostSpeech && !session.isHostSpeechCurrent(hostSpeech)) return;
+    if (!safeText) return false;
+    if (hostSpeech && !session.isHostSpeechCurrent(hostSpeech)) return false;
     if (suppressScheduledSpeechDuringHandoff(kind, session.handoffInProgress())) {
       this.log('scheduler', `Dropped ${kind} — the show handoff has already claimed this boundary`);
-      return;
+      return false;
     }
     try {
       const wavPath = await this._speak(safeText, { kind, persona });
-      if (hostSpeech && !session.isHostSpeechCurrent(hostSpeech)) return;
+      if (hostSpeech && !session.isHostSpeechCurrent(hostSpeech)) return false;
       if (suppressScheduledSpeechDuringHandoff(kind, session.handoffInProgress())) {
         this.log('scheduler', `Dropped ${kind} — the show handoff completed while it rendered`);
-        return;
+        return false;
       }
-      this.holdForNextTrack(kind, [{ text: safeText, wavPath, persona, meta }], { exchange: false, daypart, hostSpeech });
+      return this.holdForNextTrack(kind, [{ text: safeText, wavPath, persona, meta }], { exchange: false, daypart, hostSpeech, noClockClaim });
     } catch (err) {
       this.log('error', `Deferred announce failed: ${(err as Error).message}`);
+      return false;
     }
   }
 
@@ -3024,8 +3029,9 @@ class Queue {
   // first: a clip that waits across a daypart boundary is dropped at air rather
   // than reading yesterday's part of the day. A caller that already computed
   // the stamp (runStationId, which offers the daypart to the model) passes it;
-  // everything else gets the live one. `null` means the clip made no clock
-  // claim the guard could refuse — that is what stationIdDaypartStamp returns
+  // `noClockClaim` (a verbatim persona ident: operator words, no daypart was
+  // offered) keeps null, and everything else gets the live one. `null` means
+  // the clip made no clock claim the guard could refuse — that is what stationIdDaypartStamp returns
   // with the station clock off, and it fails open on purpose.
   //
   // Replacing an unaired segment is still the rule for the ident path this
@@ -3044,6 +3050,7 @@ class Queue {
     {
       exchange = false,
       daypart,
+      noClockClaim = false,
       pauseTalk = false,
       sfx: selectedSfx = null,
       onCompleted,
@@ -3052,6 +3059,7 @@ class Queue {
     }: {
       exchange?: boolean;
       daypart?: string | null;
+      noClockClaim?: boolean;
       pauseTalk?: boolean;
       sfx?: string | null;
       onCompleted?: (aired: boolean) => void;
@@ -3088,7 +3096,7 @@ class Queue {
     this._pendingVoice = {
       kind,
       clips,
-      daypart: daypart ?? stationIdDaypartStamp(getClockContext().spokenDaypart, speakClockAllowed()),
+      daypart: noClockClaim ? null : daypart ?? stationIdDaypartStamp(getClockContext().spokenDaypart, speakClockAllowed()),
       exchange,
       t: Date.now(),
       pauseTalk,
@@ -3768,12 +3776,16 @@ class Queue {
   // away.
   async playRotateJingle(): Promise<boolean> {
     this._tracksSinceJingle = 0;
+    const library = (await jingles.list()).map(j => j.filename);
+    const show = session.onAirShow();
     const filename = pickRotateJingle(
-      (await jingles.list()).map(j => j.filename),
+      allowedForShow(library, show?.allowedJingles, f => f),
       lastAiredJingleFilename() ?? this._lastRotateJingle,
     );
     if (!filename) {
-      this.log('scheduler', '[jingle] rotate skipped — the jingle library is empty');
+      this.log('scheduler', library.length
+        ? `[jingle] rotate skipped — show "${show?.name}" allows none of the jingles in the library`
+        : '[jingle] rotate skipped — the jingle library is empty');
       return false;
     }
     const res = await this.playJingle(filename, { rotate: true });
@@ -3829,9 +3841,17 @@ class Queue {
     this.persist();
     if (decision !== 'draw') return;
     try {
-      const catalog = await jingles.list();
-      const filename = pickRotateJingle(catalog.map(j => j.filename), lastAiredJingleFilename() ?? this._lastRotateJingle);
-      if (!filename) return;
+      const library = await jingles.list();
+      const show = session.onAirShow();
+      const catalog = allowedForShow(library, show?.allowedJingles, j => j.filename);
+      const filename = pickRotateJingle(
+        catalog.map(j => j.filename),
+        lastAiredJingleFilename() ?? this._lastRotateJingle,
+      );
+      if (!filename) {
+        if (library.length) this.log('scheduler', `[jingle] over-music ID skipped — show "${show?.name}" allows none of the jingles in the library`);
+        return;
+      }
       const path = await jingles.getPath(filename);
       if (!path) return;
       const clipMs = measuredClipDurationMs(path);
@@ -4033,6 +4053,11 @@ class Queue {
       };
       this.log('playing', `${np.title} — ${np.artist}`, { source: 'auto' });
     }
+
+    // The outgoing show's confirmed final track hands the mixer's rotate the
+    // incoming show's jingle list now, before the seam that ends it (#2367).
+    // Ahead of the handoff runner, which first awaits the track's intro.
+    void this._onMusicStartedForJingles(this.current?.track ?? null);
 
     // Every real music start can confirm an overdue handoff, including an
     // untracked auto-playlist fallback. The runner waits for a tracked intro's
@@ -4248,6 +4273,20 @@ class Queue {
     });
   }
 
+  // A pick cycle that arms on the track already on air (no held anchor) has
+  // also passed the music start that hands the mixer's rotate the incoming
+  // show's jingle list (onTrackStarted, #2367), so this hands it over. It runs
+  // straight after the arm, ahead of the boundary plan and the mic-pass render,
+  // which can take much of a short final track: seen live, armed five seconds
+  // into the final track with the pair rendered eighteen seconds later, and the
+  // list changed only at the roll. jingleShowSync re-checks that the record
+  // names the on-air track. Not private: scripts/jingle-show-list.test.ts.
+  confirmOnAirJingleList(armed: boolean, pickAnchorItem: QueueItem | null): boolean {
+    if (!armed || pickAnchorItem) return false;
+    void this._onMusicStartedForJingles(this.current?.track ?? null);
+    return true;
+  }
+
   // A pick cycle that arms the boundary handoff with NO held anchor records the
   // track already on air as the outgoing show's final track
   // (armBoundaryHandoff(pickCtx, this.current.track)). The pair is released by
@@ -4326,6 +4365,7 @@ class Queue {
         const finalTrack = pickAnchorItem?.track ?? this.current?.track ?? null;
         const finalTrackHandoff = handoffAnchorReachesBoundary(forecastNow, leadSec, nextBoundaryAt)
           && session.armBoundaryHandoff(pickCtx, finalTrack);
+        this.confirmOnAirJingleList(finalTrackHandoff, pickAnchorItem);
         if (finalTrackHandoff) {
           try {
             await programme.prepareBoundaryPlan(pickCtx);

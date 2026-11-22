@@ -24,10 +24,10 @@ https://github.com/user-attachments/assets/0a2ba78a-eda3-44c1-adce-bfa78ae992cd
 ## Hosted, or bring your own station
 
 Don't want to run a language model? **[SUB/WAVE DJ Brain](https://my.getsubwave.com/brain)**
-is a metered brain (and optional cloud voice) for the station you already self-host: one
-key, pasted once, from £5/month. **[SUB/WAVE Hosted](https://my.getsubwave.com/)** runs the
-whole station for you at `yourname.getsubwave.com`. Both fund the project; the software
-here stays complete and free either way.
+is a metered brain (and, on Brain Studio, the studio voice) for the station you already
+self-host: paste one key in the setup wizard or Settings → DJ Brain, from $6/month.
+**[SUB/WAVE Hosted](https://my.getsubwave.com/)** runs the whole station for you at
+`yourname.subw.app`. Both fund the project; the software here stays complete and free either way.
 
 ## Live demo
 
@@ -39,6 +39,7 @@ here stays complete and free either way.
 - **Operator manual** — [getsubwave.com/manual](https://www.getsubwave.com/manual)
 - **Community** — [join the Discord](https://discord.gg/vjVbVKnMBa)
 - **Support the project** — [buy me a coffee on Ko-fi](https://ko-fi.com/pklair)
+- **Sponsor** — [Porch Mail](https://www.porch.email/?ref=subwave), a desktop email app from the maker of SUB/WAVE
 
 ## Screenshots
 

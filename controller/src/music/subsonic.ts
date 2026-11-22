@@ -835,7 +835,16 @@ export async function getStructuredLyrics(
 // whether an album is a reissue anthology needs the album record AND its full
 // track list together, which exists only in this loop. era-suspect.ts still
 // owns the judgement; this only feeds it.
-export async function* iterateAllSongs({ requireComplete = false } = {}) {
+// `includeBlocked` is for the music-server COUNT only (library-coverage.ts):
+// what the server holds, never-play list included, so it compares with the
+// library mirror, which keeps blocked rows. The default rejects blocked songs
+// only in a process that has loaded the blocklist (the main one). The tag and
+// analyse walks run in child processes (broadcast/tagger.ts) that never load
+// it, so they DO see blocked songs: that is why blocked rows stay in the
+// mirror and pruneMissingTracks() keeps them (scripts/walk-keeps-blocked-rows
+// .test.ts). Loading the blocklist in a walk child would prune every blocked
+// row on the next run.
+export async function* iterateAllSongs({ requireComplete = false, includeBlocked = false } = {}) {
   let offset = 0;
   const BATCH = 500;
   while (true) {
@@ -850,7 +859,9 @@ export async function* iterateAllSongs({ requireComplete = false } = {}) {
         const isCompilation = typeof r.album?.isCompilation === 'boolean' ? r.album.isCompilation : null;
         const ord = r.album?.originalReleaseDate?.year;
         const originalYear = Number.isFinite(ord) && ord > 0 ? ord : null;
-        const songs = rejectArchive(r.album?.song || []);
+        const songs = includeBlocked
+          ? (r.album?.song || []).filter((s: any) => !isStationArchive(s))
+          : rejectArchive(r.album?.song || []);
         const suspicion = albumEraSuspect({
           isCompilation,
           albumArtist: r.album?.artist ?? album.artist ?? null,

@@ -1,10 +1,17 @@
 'use client';
+import { useId } from 'react';
 import { useController, type Control } from 'react-hook-form';
 import type { PersonasFormValues } from './types';
 import { FREQUENCIES, LINK_STYLES, SCRIPT_LENGTHS, TONE_DIALS, toneBandIndex } from './constants';
 import { Card, Toggle } from '../ui';
 import { SteppedFader } from './SteppedFader';
 import { ToneKnob } from './ToneKnob';
+import { SelectField } from '../../../lib/form-fields';
+import { fieldAria } from '../../../lib/form';
+import { PERSONA_IDENT_LINES_LIMIT, PERSONA_IDENT_LINE_MAX } from '../../../lib/schemas.generated';
+import { Field, FieldLabel, FieldDescription, FieldError } from '../../ui/field';
+import { Textarea } from '../../ui/textarea';
+import { identLinesFromText } from './ident-lines';
 
 interface PersonaBehaviorCardProps {
   index: number;
@@ -14,6 +21,10 @@ interface PersonaBehaviorCardProps {
 export function PersonaBehaviorCard({ index, control }: PersonaBehaviorCardProps) {
   const frequency = useController({ control, name: `personas.${index}.frequency` });
   const scriptLength = useController({ control, name: `personas.${index}.scriptLength` });
+  const identMode = useController({ control, name: `personas.${index}.identMode` });
+  const identLines = useController({ control, name: `personas.${index}.identLines` });
+  const identLinesId = useId();
+  const identAria = fieldAria(identLinesId, identLines.fieldState.error, { hasDescription: true });
   const djMode = useController({ control, name: `personas.${index}.djMode` });
   const linkStyle = useController({ control, name: `personas.${index}.linkStyle` });
   const humour = useController({ control, name: `personas.${index}.humour` });
@@ -40,6 +51,39 @@ export function PersonaBehaviorCard({ index, control }: PersonaBehaviorCardProps
             value={scriptLength.field.value || 'concise'}
             onChange={scriptLength.field.onChange}
           />
+
+          <div className="rule-label">station IDs</div>
+          <SelectField
+            control={control}
+            name={`personas.${index}.identMode`}
+            label="Station ID mode"
+            options={[
+              { value: 'improvise', label: 'Improvise' },
+              { value: 'verbatim', label: 'Read my lines verbatim' },
+            ]}
+            description="Choose how this persona delivers station IDs."
+          />
+          {(identMode.field.value === 'verbatim' || !!identLines.field.value?.length || identAria.invalid) && (
+            <Field data-invalid={identAria.invalid || undefined} className="mt-3">
+              <FieldLabel {...identAria.labelProps}>Station ID lines</FieldLabel>
+              <Textarea
+                {...identAria.controlProps}
+                rows={5}
+                value={(identLines.field.value || []).join('\n')}
+                onChange={event => identLines.field.onChange(identLinesFromText(event.target.value))}
+                onBlur={identLines.field.onBlur}
+                ref={identLines.field.ref}
+              />
+              <FieldDescription {...identAria.descriptionProps}>
+                One complete ID per line. Up to {PERSONA_IDENT_LINES_LIMIT} lines,{' '}
+                {PERSONA_IDENT_LINE_MAX} characters each. Blank lines are ignored when saved.{' '}
+                {identMode.field.value === 'verbatim'
+                  ? 'With no lines, IDs remain improvised.'
+                  : 'These lines are unused in Improvise mode.'}
+              </FieldDescription>
+              <FieldError {...identAria.errorProps} errors={identLines.fieldState.error ? [identLines.fieldState.error] : undefined} />
+            </Field>
+          )}
 
           <div className="rule-label">DJ mode</div>
           <div className="grid grid-cols-[1fr_auto] items-center gap-4">

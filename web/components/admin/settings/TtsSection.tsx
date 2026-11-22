@@ -21,6 +21,7 @@ import {
 import { Card, Btn, Pill, Seg } from '../ui';
 import { Advanced } from './section-chrome';
 import { EngineSelector } from '../tts/EngineSelector';
+import { DjBrainVoiceNote } from './DjBrainFields';
 import { CloudProviderSelector } from '../tts/CloudProviderSelector';
 import { cloudProviderLabel, resolveKeyPresence } from '../tts/cloudProviderMeta';
 import { EngineVoiceFields, ENGINE_UNAVAILABLE } from '../tts/EngineVoiceFields';
@@ -924,6 +925,8 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
             )}
           </NowBanner>
 
+          <DjBrainVoiceNote data={data} busy={busy} saveSettings={saveSettings} refresh={refresh} />
+
           <div className="field">
             <div className="flex items-center gap-2">
               <Label>Engine</Label>
@@ -950,19 +953,6 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
             </div>
           </div>
           </>)}
-
-          <div className="field">
-            <Label {...levellingAria.labelledByProps}>Voice levelling</Label>
-            <Seg
-              {...levellingAria.groupProps}
-              value={form.tts.voiceLevelling ? 'on' : 'off'}
-              options={[{ id: 'off', label: 'Off' }, { id: 'on', label: 'On' }]}
-              onChange={v => setForm(f => ({ ...f, tts: { ...f.tts, voiceLevelling: v === 'on' } }))}
-            />
-            <p {...levellingAria.descriptionProps} className="field-hint">
-              Lifts quiet takes and cuts loud ones toward -18 LUFS.
-            </p>
-          </div>
 
         {!hosted && form.tts.defaultEngine === 'piper' && (
           <>
@@ -1386,8 +1376,9 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
                     className="max-w-[360px]"
                   />
                   <div className="field-hint">
-                    Optional, only if your server requires one (e.g. SUB/WAVE DJ
-                    Brain); most self-hosted servers accept any non-empty key.
+                    Optional, only if your server requires one; most self-hosted
+                    servers accept any non-empty key. The DJ Brain studio voice
+                    gets its key when you save it under LLM provider.
                     Blank keeps the existing key. Saved with these settings, takes
                     effect immediately.
                   </div>
@@ -1648,8 +1639,22 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
         </div>
       </Card>
 
+      <Advanced note={hosted ? 'voice levelling' : 'voice levelling and the rescue voice for a persona whose own engine fails'}>
+      <Card title="Voice levelling" sub="evens out loud and quiet takes">
+        <div className="field">
+          <Label {...levellingAria.labelledByProps}>Voice levelling</Label>
+          <Seg
+            {...levellingAria.groupProps}
+            value={form.tts.voiceLevelling ? 'on' : 'off'}
+            options={[{ id: 'off', label: 'Off' }, { id: 'on', label: 'On' }]}
+            onChange={v => setForm(f => ({ ...f, tts: { ...f.tts, voiceLevelling: v === 'on' } }))}
+          />
+          <p {...levellingAria.descriptionProps} className="field-hint">
+            Lifts quiet takes and cuts loud ones toward -18 LUFS.
+          </p>
+        </div>
+      </Card>
       {!hosted && (
-      <Advanced note="the rescue voice for a persona whose own engine fails">
       <Card
         title="Fallback voice"
         sub="what speaks when a persona's engine fails"
@@ -1712,8 +1717,8 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
           </div>
         )}
       </Card>
-      </Advanced>
       )}
+      </Advanced>
 
       <SaveBar
         note={ttsDirty

@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import Masthead from '@/components/landing/Masthead';
+import Masthead from '@/components/landing/MastheadView';
 import StationFooter from '@/components/landing/StationFooter';
 
 // reset() clears the boundary but does not refetch failed server data. Pair it with

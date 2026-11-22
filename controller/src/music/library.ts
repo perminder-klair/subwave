@@ -237,6 +237,10 @@ export function candidateFilterTracks() {
   return loaded ? db.candidateFilterTracks() : [];
 }
 
+export async function* candidateFilterTrackBatches() {
+  if (loaded) yield* db.candidateFilterTrackBatches();
+}
+
 // One library row in the same slim shape every pool source hands back, so
 // blocklist.matchOf reaches its exact id tiers (get()'s projection carries no
 // ids and parses the heavy acoustic blobs). null when there is no row.

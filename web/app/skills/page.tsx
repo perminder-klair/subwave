@@ -1,7 +1,15 @@
 import { Suspense } from 'react';
-import { AnimatedLink } from '@/components/ui/animated-link';
-import CommunitySkillCard from '@/components/skills/CommunitySkillCard';
-import { CatalogGridSkeleton, CatalogStatSkeleton } from '@/components/ui/catalog-skeleton';
+import CommunitySkillCard, { SkillTicker } from '@/components/skills/CommunitySkillCard';
+import s from '@/components/skills/skills.module.css';
+import { CatalogGridSkeleton } from '@/components/ui/catalog-skeleton';
+import {
+  CountStamp,
+  CountStampSkeleton,
+  EmptyCatalog,
+  InstallSteps,
+  PosterHero,
+  SubmitSlip,
+} from '@/components/community/Furniture';
 import { fetchCommunitySkills, type CommunitySkill } from '@/lib/communitySkills';
 import { skillSubmitUrl } from '@/lib/repo';
 import { pageMeta } from '@/lib/seo';
@@ -26,81 +34,75 @@ const DOCS_URL = `${REPO}/blob/main/docs/custom-skills.md`;
 // Each region reads the one in-flight promise rather than calling the loader
 // itself — see the note in app/shows/page.tsx.
 
-async function SkillsStat({ skills }: { skills: Promise<CommunitySkill[]> }) {
-  const count = (await skills).length;
-  if (count === 0) return null;
-  return (
-    <p className="bs-stat-strip">
-      <span>
-        <strong>{count}</strong> {count === 1 ? 'skill' : 'skills'} in the catalog
-      </span>
-    </p>
-  );
+async function SkillsStamp({ skills }: { skills: Promise<CommunitySkill[]> }) {
+  return <CountStamp count={(await skills).length} noun="skill" />;
 }
 
-async function SkillsGrid({ skills }: { skills: Promise<CommunitySkill[]> }) {
+async function SkillsFloor({ skills }: { skills: Promise<CommunitySkill[]> }) {
   const list = await skills;
   if (list.length === 0) {
-    return (
-      <p className="bs-news-empty">
-        Nothing in the skill catalog yet, or this station hasn&rsquo;t caught up with it. Be the
-        first to{' '}
-        <AnimatedLink href={SUBMIT_URL} className="bs-link">
-          share a skill
-        </AnimatedLink>
-        .
-      </p>
-    );
+    return <EmptyCatalog what="skill" submitUrl={SUBMIT_URL} cta="share a skill" />;
   }
   return (
-    <ul className="bs-stations-grid">
-      {list.map((s) => (
-        <CommunitySkillCard key={s.slug} skill={s} />
-      ))}
-    </ul>
+    <>
+      <SkillTicker skills={list} />
+      <ul className={s.grid}>
+        {list.map((sk, i) => (
+          <CommunitySkillCard key={sk.slug} skill={sk} index={i} />
+        ))}
+      </ul>
+    </>
   );
 }
 
 export default function CommunitySkillsIndex() {
-  // Started, not awaited, so the hero + CTA flush before the controller answers.
+  // Started, not awaited, so the hero + slip flush before the controller answers.
   const skills = fetchCommunitySkills();
 
   return (
     <article>
-      <header className="bs-news-hero">
-        <p className="bs-eyebrow">THE EXCHANGE</p>
-        <h1>Community Skills.</h1>
-        <p>
-          A skill is a segment the DJ can air between tracks. You write a short brief saying
-          what to cover and when to stay quiet; the DJ writes the actual words at air time,
-          around whatever is playing. Every one below came from another operator, and they
-          ship with every station.
-        </p>
-      </header>
+      <PosterHero
+        eyebrow="The Exchange"
+        title="Community"
+        outline="Skills"
+        lede={
+          <>
+            A skill is a segment the DJ can air between tracks. You write a short brief saying
+            what to cover and when to stay quiet; the DJ writes the actual words at air time,
+            around whatever is playing. Every lot on the floor came from another operator, and
+            they ship with every station.
+          </>
+        }
+        stamp={
+          <Suspense fallback={<CountStampSkeleton />}>
+            <SkillsStamp skills={skills} />
+          </Suspense>
+        }
+      />
 
-      <Suspense fallback={<CatalogStatSkeleton />}>
-        <SkillsStat skills={skills} />
-      </Suspense>
-
-      <div className="bs-station-cta">
-        <p className="bs-station-cta-copy">Taught your DJ something good? Send the brief in.</p>
-        <AnimatedLink href={SUBMIT_URL} variant="arrow" className="bs-station-cta-link">
-          Share a skill
-        </AnimatedLink>
-        <AnimatedLink href={DOCS_URL} className="bs-station-cta-help">
-          How it works
-        </AnimatedLink>
-      </div>
+      <SubmitSlip
+        copy="Taught your DJ something good? Put it on the floor."
+        submitUrl={SUBMIT_URL}
+        submitLabel="Share a skill"
+        helpUrl={DOCS_URL}
+        helpLabel="How it works"
+      />
 
       <Suspense fallback={<CatalogGridSkeleton />}>
-        <SkillsGrid skills={skills} />
+        <SkillsFloor skills={skills} />
       </Suspense>
 
-      <p className="bs-stations-report">
-        To install, open <strong>Skills → Community</strong> in your station&rsquo;s admin and
-        hit <strong>Install</strong>. Every skill arrives switched off, so you can read the
-        brief before the DJ ever airs it.
-      </p>
+      <InstallSteps
+        steps={[
+          <>
+            Open <strong>Skills → Community</strong> in your station&rsquo;s admin.
+          </>,
+          <>
+            Hit <strong>Install</strong>. Every skill arrives <strong>switched off</strong>.
+          </>,
+          <>Read the brief, tweak it if you like, then switch it on and let the DJ air it.</>,
+        ]}
+      />
     </article>
   );
 }

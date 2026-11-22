@@ -18,9 +18,15 @@ export const SHOW_ID_RE = /^[a-z0-9_]{3,32}$/;
 export const SHOWS_LIMIT = 64;
 export const SHOW_NAME_MAX = 60;
 export const SHOW_TOPIC_MAX = 2000;
+// Listener-facing blurb (#2358): plain text, the show's twin of a persona's
+// tagline. `topic` stays the DJ's brief; this one never reaches a prompt.
+export const SHOW_DESCRIPTION_MAX = 300;
 export const GUESTS_PER_SHOW = 3;
 export const PLAYLISTS_PER_SHOW = 10;
 export const EXCLUDED_PLAYLISTS_PER_SHOW = 10;
+// Per-show jingle filenames / bed names the automatic draws may use (#1875, #1188).
+export const SHOW_IMAGING_ALLOWLIST_MAX = 64;
+const SHOW_IMAGING_ITEM_MAX = 128;
 // Per-attribute ceiling on the multi-value music filters (#929).
 export const SHOW_FILTER_VALUES_MAX = 15;
 export const SHOW_GENRE_MAX = 64;
@@ -141,6 +147,13 @@ function showStringList(opts: {
       }),
   );
 }
+
+// Per-show jingle filenames / bed names: same shape on save and on load.
+const IMAGING_ALLOWLIST_REPAIR = { max: SHOW_IMAGING_ALLOWLIST_MAX, itemMax: SHOW_IMAGING_ITEM_MAX };
+const imagingAllowlist = () => showStringList({
+  ...IMAGING_ALLOWLIST_REPAIR,
+  overflowError: `must have at most ${SHOW_IMAGING_ALLOWLIST_MAX} entries`,
+});
 
 // One era-window year bound, shared by showYear and the load path's
 // repairEraWindow. null / '' means "open end"; a numeric string is accepted
@@ -443,6 +456,23 @@ function showObjectSchema(ctx: ShowSchemaContext) {
       // a tag is typed by hand and must not vanish on save. The load twin
       // (repairShowTags) drops instead.
       tags: showTags,
+      // Imaging allowlists: jingle filenames and bed names the automatic draws
+      // may use while this show is on air. Empty = every one. Shape-checked
+      // only, like playlistIds: a deleted entry matches nothing at pick time.
+      allowedJingles: imagingAllowlist(),
+      allowedBeds: imagingAllowlist(),
+      // What listeners read on the schedule and the On Now card (#2358). ''
+      // means "not set": listener surfaces fall back to `topic`. Never read by
+      // a model path; `topic` alone is the DJ's brief. Declared last so the
+      // persisted key order is otherwise unchanged.
+      description: z.preprocess(
+        nullToUndefined,
+        z
+          .string()
+          .trim()
+          .max(SHOW_DESCRIPTION_MAX, `description must be 0-${SHOW_DESCRIPTION_MAX} chars`)
+          .default(''),
+      ),
     })
     // Needs two fields at once, so it cannot live on guestPersonaIds.
     .check((c) => {
@@ -555,6 +585,11 @@ export function repairShowForLoad(
     id: typeof raw.id === 'string' && SHOW_ID_RE.test(raw.id) ? raw.id : undefined,
     name: typeof raw.name === 'string' ? raw.name.trim().slice(0, SHOW_NAME_MAX) : undefined,
     topic: typeof raw.topic === 'string' ? raw.topic.slice(0, SHOW_TOPIC_MAX) : undefined,
+    // Trimmed before the cut, unlike topic: the schema trims too, so an
+    // untrimmed 300-char cut could still overflow after a leading space.
+    description: typeof raw.description === 'string'
+      ? raw.description.trim().slice(0, SHOW_DESCRIPTION_MAX)
+      : undefined,
     segmentSkill: typeof raw.segmentSkill === 'string' && raw.segmentSkill.trim() !== (typeof raw.preparationSkill === 'string' ? raw.preparationSkill.trim() : '')
       ? raw.segmentSkill.trim().slice(0, SHOW_SEGMENT_SKILL_MAX)
       : undefined,
@@ -604,5 +639,7 @@ export function repairShowForLoad(
     excludedPlaylistIds: repairShowStringList(raw.excludedPlaylistIds, {
       max: EXCLUDED_PLAYLISTS_PER_SHOW,
     }),
+    allowedJingles: repairShowStringList(raw.allowedJingles, IMAGING_ALLOWLIST_REPAIR),
+    allowedBeds: repairShowStringList(raw.allowedBeds, IMAGING_ALLOWLIST_REPAIR),
   };
 }

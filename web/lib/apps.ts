@@ -133,16 +133,13 @@ export async function getAllApps(): Promise<CommunityApp[]> {
     });
 }
 
-/** Takes an already-loaded list: /apps streams into several Suspense
- *  boundaries, so calling getAllApps() here would refetch the catalog. */
-export function appStats(all: CommunityApp[]): { count: number; types: number } {
-  return { count: all.length, types: new Set(all.map((a) => a.type)).size };
-}
-
-/** The types actually present, in APP_TYPES order. The chips render from this,
- *  not the full vocabulary, so a selection can never produce an empty grid —
- *  which is what lets the filter stay CSS-only. */
-export function presentTypes(all: CommunityApp[]): AppType[] {
-  const seen = new Set(all.map((a) => a.type));
-  return APP_TYPES.filter((t) => seen.has(t));
+/** How many apps each present type holds, in APP_TYPES order. Takes an
+ *  already-loaded list: /apps streams into several Suspense boundaries, so
+ *  calling getAllApps() here would refetch the catalog. The band keys render
+ *  from this, not the full vocabulary, so a selection can never produce an empty
+ *  grid — which is what lets the filter stay CSS-only. */
+export function typeCounts(all: CommunityApp[]): Array<{ type: AppType; count: number }> {
+  const counts = new Map<AppType, number>();
+  for (const a of all) counts.set(a.type, (counts.get(a.type) ?? 0) + 1);
+  return APP_TYPES.filter((t) => counts.has(t)).map((t) => ({ type: t, count: counts.get(t) ?? 0 }));
 }
