@@ -18,13 +18,13 @@ import { generateQueuedRequestIntro } from '../broadcast/request-intro.js';
 import * as webhooks from '../broadcast/webhooks.js';
 import * as settings from '../settings.js';
 import {
-  sanitizeRequestText, stripScriptedOpener, cleanRequesterName, cleanMissedArtist, stillInFlight, screenAck,
+  sanitizeRequestText, stripScriptedOpener, cleanRequesterName, cleanMissedArtist, screenAck,
   isNamedRequester, sorryNoMatch,
 } from '../util/request-guard.js';
+import { clientIp, REQUESTS_DISABLED } from '../middleware/ratelimit.js';
 import {
-  checkRateLimit, checkGlobalRateLimit, commitRateLimit, commitGlobalRateLimit, clientIp,
-  REQUESTS_DISABLED,
-} from '../middleware/ratelimit.js';
+  requests, admitListenerRequest, noteRequestFrom, heldBackForShow, pushListenerRequest, reservedRequesterNames,
+} from '../broadcast/listener-request.js';
 import { validatePublicBody } from '../middleware/validate.js';
 import { listenerRequestSchema } from '../schemas/request.js';
 import { classifyUnsupportedLabels, directRequestUnsupported, isRefusedOutcome, modelFreeRequest, nameSearchTerms, repairRequestMatch, requestArtistMatches, resolveDirectRequest } from '../music/request-match.js';
@@ -35,24 +35,9 @@ import { heldBackFromShow } from '../music/explicit-policy.js';
 
 export const router = express.Router();
 
-// In-memory request ledger, ephemeral by design: a restart drops in-flight
-// requests, and the track is either already queued or it isn't.
-const requests = new Map();
-const REQUEST_TTL_MS = 10 * 60 * 1000;
-
-// settings.requests.onePendingPerIp: an IP's previous request must resolve AND
-// leave the upcoming queue before the next is accepted. pruneRequests() janitors.
-const lastByIp = new Map<string, any>();
-
-function pruneRequests() {
-  const cutoff = Date.now() - REQUEST_TTL_MS;
-  for (const [id, entry] of requests) {
-    if (entry.createdAt < cutoff) requests.delete(id);
-  }
-  for (const [ip, entry] of lastByIp) {
-    if (entry.createdAt < cutoff) lastByIp.delete(ip);
-  }
-}
+// The request ledger, admission gates, per-track refusals and the push are the
+// shared listener-request chokepoint (broadcast/listener-request.ts), which a
+// Hotline Grant goes through too.
 
 // A clean show's rule inside every draw, so a draw lands on what can air and
 // the refusal below is left for an ask with nothing else to offer. Silent:
@@ -188,19 +173,12 @@ function withWaitNotice(ack: string | null | undefined, trackId: string | null |
   return `${ack}${requestWaitClause({ waitSec: queue.airForecastSec(queue.upcoming[idx]), blockLabel })}`;
 }
 
-// A clean show holds a track tagged explicit back from listeners too. The draws
-// already go around one (heldBack), so what reaches this is an ask with nothing
-// else to offer. Checked before the intro is written, and declined by the caller
-// with the same not-found copy as the blocklist, so the reason does not leak. The
-// agent path never gets here: its scope hides these tracks from the model. Judged
-// on the show on air now, and an operator's own push does not come through this
-// route.
-function heldBackForShow(track: any): boolean {
-  const show = settings.resolveActiveShow();
-  if (!heldBackFromShow(track, show)) return false;
-  queue.log('blocked', `${track?.title} — ${track?.artist} (request held back: tagged explicit, clean show "${show?.name}")`);
-  return true;
-}
+// A clean show holds a track tagged explicit back from listeners too
+// (heldBackForShow, the shared chokepoint). The draws already go around one
+// (heldBack), so what reaches it is an ask with nothing else to offer. Checked
+// before the intro is written, and declined with the same not-found copy as the
+// blocklist, so the reason does not leak. The agent path never gets there: its
+// scope hides these tracks from the model.
 
 // A comparison ("something like Michael Jackson", "anything like this",
 // "similar") opens the similar-to-current rung. Never a bare "like": "I'd
@@ -213,15 +191,6 @@ const UNSUPPORTED_REFUSAL = `I couldn't reliably check all the conditions in tha
 // The resolver still verifies its title/artist against the actual catalogue.
 function modelFreeMatch(text: string): Awaited<ReturnType<typeof dj.matchRequest>> {
   return { ...modelFreeRequest(text), literal: true } as Awaited<ReturnType<typeof dj.matchRequest>>;
-}
-
-// Requests accepted but not yet resolved. Their track is not in the upcoming
-// queue until resolveRequest() pushes it, which can take the agent's whole
-// timeout, so the maxPending gate counts them alongside the queued ones.
-function resolvingRequestCount(): number {
-  let n = 0;
-  for (const entry of requests.values()) if (entry.status === 'pending') n++;
-  return n;
 }
 
 async function resolveRequest(entry) {
@@ -297,7 +266,7 @@ async function resolveRequest(entry) {
     if (!pick) {
       return failed(`Couldn't find anything close to "${reference?.track?.title || refArtist}" in the crates.`);
     }
-    if (heldBackForShow(pick)) {
+    if (heldBackForShow(queue, pick)) {
       entry.pick = pick;
       entry.pickSource = `${entry.pickSource}:explicit`;
       return failed(`Couldn't find anything close to "${reference?.track?.title || refArtist}" in the crates.`);
@@ -324,24 +293,22 @@ async function resolveRequest(entry) {
       queue.log('request-guard', `more-like-this intro echoed request text — ${generatedIntro.guard}`);
     }
     const introScript = generatedIntro.introScript;
-    let introDropped = false;
-    const pos = await queue.push({
+    const pushed = await pushListenerRequest(queue, {
       track: pick, requestedBy: requester, intent: 'more_like_this', introScript,
       introKind: 'dj-speak',
       // Voice it as whoever wrote it: render and air happen later and would
       // otherwise re-resolve the speaker off the wall clock.
       introPersona: generatedIntro.introPersona,
       introHostSpeech: generatedIntro.introHostSpeech,
-      onStandInDropped: () => { introDropped = true; },
     });
     entry.pick = pick;
-    if (pos === -2) {
+    if (pushed.status === 'blocked') {
       // Blocklist refused the pick; decline with the standard not-found copy so
       // the block doesn't leak.
       entry.pickSource = `${entry.pickSource}:blocked`;
       return failed(`Couldn't find anything close to "${reference?.track?.title || refArtist}" in the crates.`);
     }
-    if (pos === -1) {
+    if (pushed.status === 'already-queued') {
       // A concurrent request already queued this track (#619).
       const dupAck = queue.dedupAck(pick.id);
       entry.pickSource = `${entry.pickSource}:already-queued`;
@@ -351,7 +318,7 @@ async function resolveRequest(entry) {
       session.appendTurn({ role: 'dj', kind: 'request', text: dupAck, meta: { trackId: pick.id, requester } });
       return resolved({ ack: dupAck, track: { title: pick.title, artist: pick.artist }, queuePosition: null });
     }
-    const airedIntro = introDropped ? null : introScript || null;
+    const airedIntro = pushed.introDropped ? null : introScript || null;
     session.appendTurn({
       role: 'dj', kind: 'request',
       text: airedIntro || ackLine,
@@ -555,7 +522,7 @@ async function resolveRequest(entry) {
     session.appendTurn({ role: 'dj', kind: 'request', text: ack, meta: { trackId: pick.id, requester } });
     return resolved({ ack, track: { title: pick.title, artist: pick.artist }, queuePosition: null });
   }
-  if (heldBackForShow(pick)) {
+  if (heldBackForShow(queue, pick)) {
     entry.pick = pick;
     entry.outcome = 'no-match';
     entry.pickSource = `${pickSource}:explicit`;
@@ -596,8 +563,7 @@ async function resolveRequest(entry) {
   const introScript = generatedIntro.introScript;
 
   // 4. Enqueue. push() dedups a track a concurrent request already queued (#619).
-  let introDropped = false;
-  const pos = await queue.push({
+  const pushed = await pushListenerRequest(queue, {
     track: pick,
     requestedBy: requester,
     intent: matched.intent,
@@ -605,16 +571,15 @@ async function resolveRequest(entry) {
     introKind: 'dj-speak',
     introPersona: generatedIntro.introPersona,
     introHostSpeech: generatedIntro.introHostSpeech,
-    onStandInDropped: () => { introDropped = true; },
   });
   entry.pick = pick;
-  if (pos === -2) {
+  if (pushed.status === 'blocked') {
     // Blocklist refused the pick; standard not-found copy so it doesn't leak.
     entry.outcome = 'no-match';
     entry.pickSource = `${pickSource}:blocked`;
     return failed(sorryNoMatch(requester));
   }
-  if (pos === -1) {
+  if (pushed.status === 'already-queued') {
     const dupAck = queue.dedupAck(pick.id);
     entry.outcome = 'already-queued';
     entry.pickSource = `${pickSource}:already-queued`;
@@ -622,7 +587,7 @@ async function resolveRequest(entry) {
     session.appendTurn({ role: 'dj', kind: 'request', text: dupAck, meta: { trackId: pick.id, requester } });
     return resolved({ ack: dupAck, track: { title: pick.title, artist: pick.artist }, queuePosition: null });
   }
-  const airedIntro = introDropped ? null : introScript || null;
+  const airedIntro = pushed.introDropped ? null : introScript || null;
   session.appendTurn({
     role: 'dj', kind: 'request',
     text: airedIntro || ack || `Queued "${pick.title}".`,
@@ -637,6 +602,15 @@ async function resolveRequest(entry) {
     queuePosition: queue.upcoming.length,
   });
 }
+
+// The listener's copy for each admission refusal (broadcast/listener-request.ts
+// owns the gates and their order; this route owns only the words).
+const ADMISSION_MESSAGES: Record<string, (retryAfter: number) => string> = {
+  'cooldown': retryAfter => `Easy there — try again in ${retryAfter}s.`,
+  'global-cap': () => 'The request line is busy — try again in a few minutes.',
+  'one-pending': () => 'Your last request is still queued — it airs first.',
+  'queue-full': () => "The request queue's full — try again in a few minutes.",
+};
 
 // Validates + rate-limits synchronously, then resolves in the background.
 // The shared schema owns the SHAPE and REFUSES over-cap text rather than slicing
@@ -674,68 +648,18 @@ router.post('/request', validatePublicBody(listenerRequestSchema), async (req, r
         : 'Empty request',
     });
   }
-  const s = settings.get() as any;
-  const reservedNames = [
-    'dj', 'admin', 'host', 'mod', 'moderator',
-    s?.station || '',
-    ...(Array.isArray(s?.personas) ? s.personas.map((p: any) => p?.name || '') : []),
-  ];
-  const requester = cleanRequesterName(rawName, reservedNames);
+  const requester = cleanRequesterName(rawName, reservedRequesterNames());
 
   const ip = clientIp(req);
-  // Janitor runs BEFORE the gates: the one-pending hold returns 429 without
-  // reaching the rest of the handler, so pruning later held an IP past the TTL.
-  pruneRequests();
-  const gate = checkRateLimit(ip);
-  if (!gate.ok) {
-    res.setHeader('Retry-After', String(gate.retryAfter));
+  const admission = admitListenerRequest(queue, ip);
+  if (!admission.ok) {
+    res.setHeader('Retry-After', String(admission.retryAfter));
     return res.status(429).json({
       success: false,
-      message: `Easy there — try again in ${gate.retryAfter}s.`,
-      retryAfter: gate.retryAfter,
+      message: ADMISSION_MESSAGES[admission.reason](admission.retryAfter),
+      retryAfter: admission.retryAfter,
     });
   }
-  const globalGate = checkGlobalRateLimit();
-  if (!globalGate.ok) {
-    res.setHeader('Retry-After', String(globalGate.retryAfter));
-    return res.status(429).json({
-      success: false,
-      message: 'The request line is busy — try again in a few minutes.',
-      retryAfter: globalGate.retryAfter,
-    });
-  }
-  // Both queue-state refusals carry the COOLDOWN as Retry-After: checkRateLimit
-  // already stamped it, so the caller genuinely cannot succeed before it expires.
-  const retryAfter = Number(cfg.cooldownSec) > 0 ? Number(cfg.cooldownSec) : 60;
-  if (cfg.onePendingPerIp !== false && stillInFlight(lastByIp.get(ip), queue.queuedIds())) {
-    res.setHeader('Retry-After', String(retryAfter));
-    return res.status(429).json({
-      success: false,
-      message: 'Your last request is still queued — it airs first.',
-      retryAfter,
-    });
-  }
-  // LISTENER requests only — an operator's own studio push carries
-  // `requestedBy: 'studio'` for the air-path exemptions and must not consume a
-  // slot in the listener queue. See queue.pendingListenerRequests(). Requests
-  // still resolving count too: they hold no queue slot yet, so a burst
-  // accepted inside one resolution window would otherwise all pass. The brief
-  // overlap between a push and its entry settling errs toward refusing.
-  const pendingCount = queue.pendingListenerRequests() + resolvingRequestCount();
-  if (pendingCount >= (Number(cfg.maxPending) || 6)) {
-    res.setHeader('Retry-After', String(retryAfter));
-    return res.status(429).json({
-      success: false,
-      message: "The request queue's full — try again in a few minutes.",
-      retryAfter,
-    });
-  }
-
-  // Spend the hourly budgets only after the queue-state gates: those reject
-  // without queueing, and charging them burned the station-wide cap to zero on
-  // rejections alone. The per-IP cooldown was already spent by checkRateLimit.
-  commitRateLimit(ip);
-  commitGlobalRateLimit();
 
   const id = randomUUID();
   const entry: any = {
@@ -746,7 +670,7 @@ router.post('/request', validatePublicBody(listenerRequestSchema), async (req, r
     createdAt: Date.now(),
   };
   requests.set(id, entry);
-  lastByIp.set(ip, entry);
+  noteRequestFrom(ip, entry);
   queue.log('request', `${requester}: "${text}" (id ${id.slice(0, 8)})${stripped.injection ? ` [${stripped.injection} stripped]` : ''}`);
   webhooks.notify('request.received', { requestedBy: requester, text });
 

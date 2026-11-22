@@ -280,6 +280,8 @@ function resolveShowShape(show, s) {
     fadeAtShowEnd: typeof show.fadeAtShowEnd === 'boolean' ? show.fadeAtShowEnd : null,
     // Explicit opt-in; an older persisted show keeps ordinary ducked speech.
     pauseTalk: show.pauseTalk === true,
+    // Explicit opt-in: the Hotline is closed unless the show on air opens it.
+    hotline: show.hotline === true,
     // Navidrome playlist anchor: the union of these playlists becomes the show's
     // candidate pool (music/show-playlist.ts). playlistStrict makes it the show's
     // entire universe; soft just lets it dominate. Empty array = no anchor.

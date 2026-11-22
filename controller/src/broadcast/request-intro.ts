@@ -33,7 +33,8 @@ export async function generateQueuedRequestIntro(
     // The retry must see no listener-derived text at all, or it can echo again:
     // the request text is withheld, and so is the missed artist's NAME (the miss
     // itself stays flagged, so the retry is still honest about the stand-in).
-    const { missedArtist: _missedArtist, ...withoutListenerText } = args;
+    // A Hotline Dedication is the Caller's words too, so it is withheld as well.
+    const { missedArtist: _missedArtist, dedication: _dedication, ...withoutListenerText } = args;
     const guarded = await guardIntro(script, requestText, () =>
       generate({ ...withoutListenerText, persona: owner.persona }));
     const current = session.finalizeAutomaticHostSpeech(guarded.script, owner);

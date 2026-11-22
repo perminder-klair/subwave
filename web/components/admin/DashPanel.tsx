@@ -46,6 +46,7 @@ import { RefreshCw, X } from 'lucide-react';
 import StationHeader, { type HealthMetrics } from './StationHeader';
 import { cn } from '../../lib/cn';
 import { RequestsCard } from './dash/RequestsCard';
+import { HotlineCard } from './hotline/HotlineCard';
 import { TakeoverCard } from './dash/TakeoverCard';
 import { SteerCard } from './dash/SteerCard';
 import QueueHeldBadge from './dash/QueueHeldBadge';
@@ -991,6 +992,8 @@ export default function DashPanel() {
           </ScrollArea>
         )}
       </Card>
+
+      <HotlineCard />
 
       <RequestsCard requests={requests} err={reqErr} tz={tz} locale={locale} />
 

@@ -904,6 +904,7 @@ export interface NormalizedShow {
   guestPersonaIds: string[];
   banter: boolean;
   pauseTalk: boolean;
+  hotline: boolean;
   programme: boolean;
   segmentSkill: string;
   preparationSkill: string;

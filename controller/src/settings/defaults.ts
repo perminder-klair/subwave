@@ -224,6 +224,18 @@ export const DEFAULTS = {
     perIpHourlyCap: 8,
     onePendingPerIp: true,
   },
+  // The Hotline (docs/plans/hotline.md). Closed unless the show on air opens it
+  // AND the provider's key is set; these say how a Call behaves once it is.
+  // wrapUpSec is when the DJ is told to say goodbye, before the hard cap.
+  hotline: {
+    provider: 'openai' as const,
+    model: 'gpt-realtime',
+    voice: '',
+    maxCallSec: 180,
+    wrapUpSec: 150,
+    dailyMinutes: 60,
+    callsPerDevicePerShow: 1,
+  },
   // Global DJ prompt template; '' = DEFAULT_DJ_PROMPT_TEMPLATE. Always the
   // RESOLVED text of the active djPrompts entry, so renderDjPrompt (and an older
   // controller sharing the same settings.json) never has to chase the library.

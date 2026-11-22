@@ -58,6 +58,7 @@ import {
   pickerPatchSchema,
   privacyPatchSchema,
   requestsPatchSchema,
+  hotlinePatchSchema,
   scrobblePatchSchema,
   searchPatchSchema,
   sfxPatchSchema,
@@ -166,6 +167,7 @@ export const SETTINGS_PATCH_KEYS = [
   'ui',
   'privacy',
   'requests',
+  'hotline',
   'webhooks',
   'webhooksPolicy',
   'scrobble',
@@ -257,6 +259,7 @@ export const SETTINGS_PATCH_SCHEMAS: Readonly<Partial<Record<SettingsPatchKey, S
   timezone: timezoneSchema,
   privacy: privacyPatchSchema,
   requests: requestsPatchSchema,
+  hotline: hotlinePatchSchema,
   tts: ttsPatchSchema,
   // Both are validated by the SAME schema update() reaches through
   // validatePersonasStrict / validateDjPromptsStrict. Their branches are NOT

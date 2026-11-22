@@ -54,6 +54,8 @@ export interface Show {
   banter: boolean;
   /** Long skill segments may pause music and speak in a real gap. */
   pauseTalk: boolean;
+  /** Opens the Hotline (listeners ring the DJ) while this show is on air. */
+  hotline: boolean;
   /** [] = Any: the autonomous mood applies while the show is on air.
    *  Multi-value (#929), all selected moods weighted equally. */
   moods: string[];

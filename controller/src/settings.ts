@@ -817,6 +817,21 @@ export async function load() {
           ? stored.requests.onePendingPerIp
           : DEFAULTS.requests.onePendingPerIp,
     },
+    // Hotline. Absent or malformed coerces field-by-field to DEFAULTS.hotline,
+    // and the wrap-up always lands before the hard cap.
+    hotline: (() => {
+      const h = stored.hotline || {};
+      const maxCallSec = intIn(h.maxCallSec, DEFAULTS.hotline.maxCallSec, 60, 900);
+      return {
+        provider: 'openai' as const,
+        model: typeof h.model === 'string' && h.model.trim() ? h.model.trim() : DEFAULTS.hotline.model,
+        voice: typeof h.voice === 'string' ? h.voice.trim() : DEFAULTS.hotline.voice,
+        maxCallSec,
+        wrapUpSec: Math.min(intIn(h.wrapUpSec, DEFAULTS.hotline.wrapUpSec, 30, 870), maxCallSec - 30),
+        dailyMinutes: intIn(h.dailyMinutes, DEFAULTS.hotline.dailyMinutes, 1, 1440),
+        callsPerDevicePerShow: intIn(h.callsPerDevicePerShow, DEFAULTS.hotline.callsPerDevicePerShow, 1, 10),
+      };
+    })(),
     personas,
     activePersonaId,
     shows,
@@ -2696,6 +2711,23 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
       cooldownSec: pick('cooldownSec'),
       perIpHourlyCap: pick('perIpHourlyCap'),
       onePendingPerIp: pick('onePendingPerIp'),
+    };
+  }
+  if ('hotline' in patch) {
+    // Same spread as `requests`: an unusable field keeps the stored value.
+    const hp = parseSettingsPatchKey<Record<string, unknown>>('hotline', patch.hotline);
+    const cur = next.hotline || DEFAULTS.hotline;
+    const pick = <K extends keyof typeof cur>(k: K) =>
+      (hp[k as string] !== undefined ? hp[k as string] : cur[k]) as (typeof cur)[K];
+    const maxCallSec = pick('maxCallSec');
+    next.hotline = {
+      provider: pick('provider'),
+      model: pick('model') || DEFAULTS.hotline.model,
+      voice: pick('voice'),
+      maxCallSec,
+      wrapUpSec: Math.min(pick('wrapUpSec'), maxCallSec - 30),
+      dailyMinutes: pick('dailyMinutes'),
+      callsPerDevicePerShow: pick('callsPerDevicePerShow'),
     };
   }
   if ('webhooks' in patch) {

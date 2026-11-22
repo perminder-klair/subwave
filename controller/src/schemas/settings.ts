@@ -1450,6 +1450,38 @@ export const requestsPatchSchema = settingsBlockOf({
   perIpHourlyCap: settingsRequestsInt({ min: 1, max: 100 }),
 });
 
+/**
+ * `hotline` — the station-wide Hotline settings (docs/plans/hotline.md): which
+ * realtime provider answers, its model and voice, and the limits on Calls. A
+ * show opens the Hotline with its own `hotline` toggle; these only say how it
+ * behaves once open. Same "usable or absent" posture as `requests`: an
+ * unusable field is dropped and update() keeps the stored value.
+ */
+export const HOTLINE_PROVIDERS = ['openai'] as const;
+export const HOTLINE_MODEL_MAX = 80;
+export const HOTLINE_VOICE_MAX = 40;
+
+function settingsHotlineString(max: number) {
+  return z.unknown().transform((raw) => {
+    if (typeof raw !== 'string') return undefined;
+    const v = raw.trim();
+    return v.length <= max && !/[\s]/.test(v) ? v : undefined;
+  });
+}
+
+export const hotlinePatchSchema = settingsBlockOf({
+  provider: z.unknown().transform((raw) =>
+    (HOTLINE_PROVIDERS as readonly string[]).includes(raw as string) ? (raw as (typeof HOTLINE_PROVIDERS)[number]) : undefined),
+  model: settingsHotlineString(HOTLINE_MODEL_MAX),
+  // '' = match the on-air persona's voice where the provider has it, else the
+  // provider's default.
+  voice: settingsHotlineString(HOTLINE_VOICE_MAX),
+  maxCallSec: settingsRequestsInt({ min: 60, max: 900 }),
+  wrapUpSec: settingsRequestsInt({ min: 30, max: 870 }),
+  dailyMinutes: settingsRequestsInt({ min: 1, max: 1440 }),
+  callsPerDevicePerShow: settingsRequestsInt({ min: 1, max: 10 }),
+});
+
 // --- the mood family -------------------------------------------------------
 
 export const SETTINGS_MOODS_LIMIT = 40;

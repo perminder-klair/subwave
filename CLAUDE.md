@@ -164,3 +164,5 @@ The pieces are Broadcast (Icecast + Liquidsoap), Controller (Express, ESM, TypeS
 - A scheduled job deletes only files it wrote itself, matched on an anchored name (`backup/pure.ts`).
 - Operator curation outranks listener signal: an operator heart skips the `topLiked` cutoff and survives the trim.
 - Listeners never get a skip. `POST /dj/skip` is admin-only, and listener remote controls omit it.
+- A Hotline Call is never broadcast; only its Grant and Dedication reach the air, in the DJ's own words (ADR 0001, `broadcast.md` → The Hotline). Nothing on air waits on a Call.
+- A Hotline Grant is a Request: it goes through `broadcast/listener-request.ts`, the chokepoint `POST /request` uses, never guards of its own. Every Hotline decision is `hotline/policy.ts`.

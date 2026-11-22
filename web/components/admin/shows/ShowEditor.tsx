@@ -60,6 +60,7 @@ import { ChipRow } from './ChipRow';
 import { PlaylistPosition } from './PlaylistPosition';
 import { displayedMatchingTracks, type CandidateDiagnostic } from './candidate-diagnostic';
 import { fetchShowCandidates, useShowBlocklistQuery } from './queries';
+import { useHotlineAdminQuery } from '../hotline/queries';
 
 // Operator-facing labels for the developer-facing schema keys.
 const FIELD_LABELS: Record<string, string> = {
@@ -282,6 +283,9 @@ export function ShowEditor({
   const scopedRuleCount = (blocklistQuery.data || []).filter(rule => rule.showIds?.includes(show.id)).length;
 
   const guestIds: string[] = guestsCtl.field.value ?? [];
+  // The Hotline toggle opens only once the provider's key is set (an already-on
+  // show stays switchable, so it can be turned off).
+  const hotlineReady = useHotlineAdminQuery(adminFetch).data?.providerReady === true;
   const eras: EraWindow[] = erasCtl.field.value ?? [];
   // Windows matching no decade preset. The decade row caps on what IT has
   // selected, so hand it the REMAINING budget or the schema refuses a save the
@@ -566,6 +570,18 @@ export function ShowEditor({
                 name={path('pauseTalk')}
                 label="Pause-and-talk breaks"
                 description="Long skill segments pause the music at a track boundary and speak in the clear. Shorter clips still duck normally; choose the length threshold in Station voice settings."
+              />
+            </Field>
+
+            <Field>
+              <SwitchField
+                control={control}
+                name={path('hotline')}
+                label="Hotline"
+                disabled={!hotlineReady && !show.hotline}
+                description={hotlineReady
+                  ? 'Listeners can ring the DJ from the player while this show is on air: a private call, never broadcast. The DJ can queue one track per call and read a dedication on air in its own words. Limits are in Settings → Station → Hotline.'
+                  : 'Needs an OpenAI key (Settings → LLM → keys) before it can open. Listeners ring the DJ from the player for a private call that can queue one track.'}
               />
             </Field>
 

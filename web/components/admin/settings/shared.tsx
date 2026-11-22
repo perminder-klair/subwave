@@ -359,6 +359,17 @@ export interface RequestsForm {
   onePendingPerIp: boolean;
 }
 
+// The station-wide Hotline settings (controller DEFAULTS.hotline). A show opens
+// the line with its own toggle; these say how a Call behaves once it is open.
+export interface HotlineForm {
+  model: string;
+  voice: string;
+  maxCallSec: string;
+  wrapUpSec: string;
+  dailyMinutes: string;
+  callsPerDevicePerShow: string;
+}
+
 export interface SilenceTrimForm {
   enabled: boolean;
   minGapMs: string;
@@ -435,6 +446,7 @@ export interface FormState {
   likes: LikesForm;
   lyrics: LyricsForm;
   requests: RequestsForm;
+  hotline: HotlineForm;
 }
 
 export interface JingleEntry {
@@ -589,6 +601,15 @@ export interface SettingsData {
       cooldownSec?: number;
       perIpHourlyCap?: number;
       onePendingPerIp?: boolean;
+    };
+    hotline?: {
+      provider?: string;
+      model?: string;
+      voice?: string;
+      maxCallSec?: number;
+      wrapUpSec?: number;
+      dailyMinutes?: number;
+      callsPerDevicePerShow?: number;
     };
     scrobble?: {
       lastfm?: Partial<ScrobbleLastfmForm>;
