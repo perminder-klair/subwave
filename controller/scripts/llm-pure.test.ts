@@ -20,7 +20,7 @@ import { personaToneDirectives, validatePersonasStrict, clampTtsSpeed, TTS_SPEED
 import { lengthMode, lengthPhrase } from '../src/llm/internal/prompts/system.js';
 import { showMusicLean } from '../src/llm/internal/prompts/picker.js';
 import { planSchema } from '../src/llm/internal/prompts/programme.js';
-import { modelForCloudRequest, resolveCloudModel, resolveCloudProvider, sharedCloudApiKeyForRequest, speedDirective } from '../src/llm/internal/speech/cloud-speech.js';
+import { deliveryHint, modelForCloudRequest, resolveCloudModel, resolveCloudProvider, sharedCloudApiKeyForRequest, speedDirective } from '../src/llm/internal/speech/cloud-speech.js';
 
 async function main() {
   console.log('isUnreachable vs isTransient (the failover gate):');
@@ -815,7 +815,7 @@ async function main() {
     }
   });
   await test('native-strategy providers get room to seed, refine, cross-check', () => {
-    for (const provider of ['openai', 'anthropic', 'google', 'deepseek', 'openrouter', 'requesty', 'gateway']) {
+    for (const provider of ['openai', 'anthropic', 'google', 'deepseek', 'openrouter', 'requesty', 'cheaperinference', 'gateway']) {
       assert.equal(discoveryStepsFor({ provider }), 3, provider);
       assert.equal(gatedMaxStepsFor({ provider }), 4, provider);
     }
@@ -840,7 +840,7 @@ async function main() {
     // A zero/negative budget would force `done` at step 0 with an empty `seen`
     // map — the model could only fabricate an id. Every real descriptor sits
     // inside the band, so the clamp is the backstop, not the mechanism.
-    for (const provider of Object.keys({ ollama: 0, openai: 0, anthropic: 0, google: 0, deepseek: 0, openrouter: 0, requesty: 0, gateway: 0, locca: 0, 'openai-compatible': 0 })) {
+    for (const provider of Object.keys({ ollama: 0, openai: 0, anthropic: 0, google: 0, deepseek: 0, openrouter: 0, requesty: 0, cheaperinference: 0, gateway: 0, locca: 0, 'openai-compatible': 0 })) {
       const n = discoveryStepsFor({ provider });
       assert.ok(n >= DISCOVERY_STEPS_MIN && n <= DISCOVERY_STEPS_MAX, `${provider} budget ${n} out of band`);
       assert.equal(Number.isInteger(n), true, `${provider} budget must be a whole step count`);
@@ -1272,6 +1272,12 @@ async function main() {
     assert.equal(clampTtsSpeed(1.23), 1.25);
     assert.equal(clampTtsSpeed(0.87), 0.85);
     assert.equal(clampTtsSpeed(1.0), 1.0);
+  });
+
+  await test('deliveryHint never pins a multilingual persona to one language', () => {
+    assert.deepEqual(deliveryHint({ language: 'English' }, 'elevenlabs', 'eleven_v3'), { language: 'en' });
+    assert.deepEqual(deliveryHint({ language: 'English', alsoSpeaks: ['Japanese'] }, 'elevenlabs', 'eleven_v3'), {});
+    assert.match(deliveryHint({ alsoSpeaks: ['Japanese'] }, 'openai', 'gpt-4o-mini-tts').instructions || '', /mixes English, Japanese/);
   });
 
   // At most one of body/atempo is non-null: send `speed` upstream or stretch locally.

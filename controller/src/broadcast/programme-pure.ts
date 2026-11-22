@@ -36,10 +36,10 @@ export function overrideSpan(
   return { index, total };
 }
 
-// Which beat a STATION-ZONE minute belongs to. Placement is a station-clock
-// fact but crons fire on process-local minutes, and station zones sit at
-// :30/:45 offsets — so the scheduler ticks on the stride and dispatches on this
-// window, which each tick samples exactly once (beat flags make repeats no-ops).
+// Which beat a STATION-ZONE minute belongs to. The talk tick's programme row
+// is sampled on a stride of station minutes, like every row in the table
+// (talk-scheduler.ts, #2254), and dispatches on this window, which each tick
+// samples exactly once (beat flags make repeats no-ops).
 //
 // `handoverOffsetMinutes` (#1576) moves the OUTRO window earlier; both windows
 // are one stride wide and open on a multiple of it, which is what keeps the

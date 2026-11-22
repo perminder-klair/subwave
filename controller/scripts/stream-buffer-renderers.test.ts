@@ -1,7 +1,8 @@
 // The controller-written stream buffer depth is the single source of truth
-// for both Icecast renderers. An environment override changes the real burst
-// without changing /now-playing or voice-event timing, so listeners hear one
-// offset while every consumer is told another.
+// for both Icecast renderers. An environment override would silently outrank
+// the saved setting, and a controller older than stream-mounts.json (#2142)
+// would keep advertising that setting, so listeners would hear one offset
+// while every consumer is told another.
 
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';

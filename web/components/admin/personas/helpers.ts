@@ -38,6 +38,8 @@ export function personaFromSettings(p: Partial<Persona> | undefined, allSkills: 
     tagline: p?.tagline ?? '',
     frequency: p?.frequency ?? 'moderate',
     scriptLength: p?.scriptLength ?? 'concise',
+    identMode: p?.identMode === 'verbatim' ? 'verbatim' : 'improvise',
+    identLines: Array.isArray(p?.identLines) ? p.identLines : [],
     djMode: p?.djMode === true,
     linkStyle: p?.linkStyle === 'announce' ? 'announce' : 'natural',
     humour: typeof p?.humour === 'number' ? p.humour : DIAL_NEUTRAL,
@@ -47,6 +49,7 @@ export function personaFromSettings(p: Partial<Persona> | undefined, allSkills: 
     musicLean: typeof p?.musicLean === 'string' ? p.musicLean : '',
     language: typeof p?.language === 'string' ? p.language : '',
     voiceStyle: typeof p?.voiceStyle === 'string' ? p.voiceStyle : '',
+    alsoSpeaks: typeof p?.alsoSpeaks === 'string' ? p.alsoSpeaks : '',
     avatar: typeof p?.avatar === 'string' ? p.avatar : '',
     tts: {
       engine: p?.tts?.engine ?? 'piper',
@@ -55,6 +58,13 @@ export function personaFromSettings(p: Partial<Persona> | undefined, allSkills: 
       gainDb: typeof p?.tts?.gainDb === 'number' ? p.tts.gainDb : 0,
       speed: typeof p?.tts?.speed === 'number' ? p.tts.speed : 1,
     },
+    fallbackVoice: p?.fallbackVoice && typeof p.fallbackVoice === 'object' && typeof p.fallbackVoice.engine === 'string'
+      ? {
+          engine: p.fallbackVoice.engine,
+          cloudProvider: typeof p.fallbackVoice.cloudProvider === 'string' ? p.fallbackVoice.cloudProvider : 'openai',
+          voice: typeof p.fallbackVoice.voice === 'string' ? p.fallbackVoice.voice : '',
+        }
+      : null,
     skills: Array.isArray(p?.skills) ? p.skills : allSkills,
     // Unlike `skills`, an absent value is not a stand-in for "everything":
     // no tags means no tags.

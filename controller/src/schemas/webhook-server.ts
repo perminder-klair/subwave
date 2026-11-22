@@ -8,6 +8,7 @@
 // Keeping them out of schemas/webhook.ts is load-bearing: it is what lets that
 // file be copied byte-for-byte into the browser bundle.
 import { mintId } from '../settings/vocab.js';
+import { stripSecretControlChars } from './settings.js';
 import type { Webhook, WebhookParsed } from './webhook.js';
 
 /**
@@ -40,8 +41,9 @@ export function mergeWebhookSecrets(
   // row whose id was re-minted on collision correctly finds no prior secret.
   return resolveWebhookIds(parsed).map((item) => {
     // 'set' from getRedacted() means "keep the stored value" — the UI never
-    // re-sends the real header. Anything else replaces it.
-    if (item.authHeader !== 'set') return item;
+    // re-sends the real header. Anything else replaces it, control characters
+    // stripped as every secret's save path does (schemas/settings.ts).
+    if (item.authHeader !== 'set') return { ...item, authHeader: stripSecretControlChars(item.authHeader) };
     return { ...item, authHeader: byId.get(item.id)?.authHeader ?? '' };
   });
 }

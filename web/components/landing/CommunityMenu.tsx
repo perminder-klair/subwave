@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/navigation-menu';
 
 const COMMUNITY = [
+  { href: '/community', tag: 'The Commons', title: 'Everything', blurb: 'All of it, and who made it.' },
   { href: '/skills', tag: 'The Exchange', title: 'Skills', blurb: 'Segments to teach your DJ.' },
   { href: '/personas', tag: 'The Green Room', title: 'Personas', blurb: 'DJs to book for your booth.' },
   { href: '/shows', tag: 'The Programme Guide', title: 'Shows', blurb: 'Slots to fill your grid.' },

@@ -29,6 +29,8 @@ const {
   PERSONA_DIAL_NEUTRAL,
   PERSONA_FREQUENCIES,
   PERSONA_ID_RE,
+  PERSONA_IDENT_LINES_LIMIT,
+  PERSONA_IDENT_LINE_MAX,
   PERSONA_LIMIT,
   PERSONA_MUSIC_LEAN_MAX,
   PERSONA_NAME_MAX,
@@ -46,6 +48,7 @@ const {
   clampTtsSpeed,
   djPromptsSchema,
   personaSchema,
+  repairPersonaFallbackVoice,
   repairPersonaForLoad,
   repairTtsVoiceSlot,
   ttsVoiceSlotSchema,
@@ -120,9 +123,12 @@ test('a minimal persona parses and fills every default', () => {
   assert.equal(p.musicLean, '');
   assert.equal(p.language, '');
   assert.equal(p.scriptLength, 'concise');
+  assert.equal(p.identMode, 'improvise');
+  assert.deepEqual(p.identLines, []);
   assert.equal(p.djMode, false);
   assert.equal(p.avatar, '');
   assert.equal(p.skills, null);
+  assert.equal(p.fallbackVoice, null, 'no rescue voice unless one is chosen');
   assert.equal(p.humour, PERSONA_DIAL_NEUTRAL);
   assert.equal(p.localColour, PERSONA_DIAL_NEUTRAL);
   assert.equal(p.warmth, PERSONA_DIAL_NEUTRAL);
@@ -189,6 +195,12 @@ test('language REFUSES a non-string where name COERCES one', () => {
   // exactly here, and both directions are load-bearing behaviour.
   assert.equal(personaSchema.safeParse({ ...base(), language: 42 }).success, false);
   assert.equal(personaSchema.parse({ ...base(), language: '  Turkish  ' }).language, 'Turkish');
+});
+
+test('alsoSpeaks follows language\'s rules: optional, trimmed, non-string refused', () => {
+  assert.equal(personaSchema.parse(base()).alsoSpeaks, '');
+  assert.equal(personaSchema.safeParse({ ...base(), alsoSpeaks: 42 }).success, false);
+  assert.equal(repairPersonaForLoad({ alsoSpeaks: 42 }).alsoSpeaks, undefined);
 });
 
 test('frequency must name a real frequency; scriptLength defaults but is checked', () => {
@@ -572,6 +584,8 @@ test('anything the strict path accepts, the lenient path returns unchanged', () 
     tagline: 'late nights',
     frequency: 'chatty',
     scriptLength: 'extended',
+    identMode: 'verbatim',
+    identLines: ['This is our station.', 'Stay with us.'],
     djMode: true,
     linkStyle: 'natural',
     humour: 8,
@@ -581,8 +595,10 @@ test('anything the strict path accepts, the lenient path returns unchanged', () 
     musicLean: 'favour warm electronic edges',
     language: 'Turkish',
     voiceStyle: 'Warm and unhurried.',
+    alsoSpeaks: 'English, Kurdish',
     avatar: 'p_rich.webp',
     tts: { engine: 'kokoro', cloudProvider: 'openai', voice: 'bf_isabella', gainDb: 1.5, speed: 1.1 },
+    fallbackVoice: { engine: 'cloud', cloudProvider: 'elevenlabs', voice: 'Rachel' },
     skills: ['news', 'weather'],
     tags: ['late-night', 'flagship'],
   };
@@ -642,4 +658,118 @@ test('an untagged persona loads and saves identically — the upgrade is a no-op
   // Absent is NOT a stand-in for "all tags" the way an absent `skills` is for
   // "all skills" — a persona that carries no tags carries no tags.
   assert.notEqual(saved.tags, null);
+});
+
+
+test('station ID mode is strict on save and legacy data keeps improvising', () => {
+  for (const identMode of ['improvise', 'verbatim']) {
+    assert.equal(validate.validatePersonasStrict([{ ...base(), identMode }])[0].identMode, identMode);
+  }
+  assert.throws(() => validate.validatePersonasStrict([{ ...base(), identMode: 'fixed' }]), /identMode/);
+  assert.equal(normalize.normalizePersona({ ...base(), identMode: 'fixed' })!.identMode, 'improvise');
+  assert.equal(normalize.normalizePersona(base())!.identMode, 'improvise');
+  for (const p of vocab.SEED_PERSONAS) {
+    assert.equal(p.identMode, 'improvise');
+    assert.deepEqual(p.identLines, []);
+  }
+});
+
+test('station ID lines trim and ignore blanks without changing their words or order', () => {
+  const raw = { ...base(), identMode: 'verbatim', identLines: ['  Hello, radio.  ', '', '  ', 'Stay tuned!'] };
+  const [p] = validate.validatePersonasStrict([raw]);
+  assert.deepEqual(p.identLines, ['Hello, radio.', 'Stay tuned!']);
+  assert.deepEqual(normalize.normalizePersona(p), { ...p });
+  assert.deepEqual(personaSchema.parse({ ...base(), identLines: null }).identLines, []);
+  assert.deepEqual(personaSchema.parse({ ...base(), identLines: [] }).identLines, []);
+});
+
+test('station ID line limits reject unsafe saves and repair malformed stored data', () => {
+  const maxLine = 'x'.repeat(PERSONA_IDENT_LINE_MAX);
+  const lines = Array.from({ length: PERSONA_IDENT_LINES_LIMIT }, () => maxLine);
+  assert.deepEqual(personaSchema.parse({ ...base(), identLines: [...lines, ' '] }).identLines, lines);
+  for (const identLines of [false, 'one line', [42], [...lines, 'one more'], [maxLine + 'x']]) {
+    assert.throws(() => validate.validatePersonasStrict([{ ...base(), identLines }]), /identLines/);
+  }
+  const repaired = normalize.normalizePersona({
+    ...base(), identMode: 'verbatim', identLines: [null, '', '  ', ...lines.map(line => ' ' + line + 'extra ')],
+  })!;
+  assert.deepEqual(repaired.identLines, lines);
+  assert.equal(repaired.identMode, 'verbatim');
+  assert.deepEqual(normalize.normalizePersona({ ...base(), identLines: 'junk' })!.identLines, []);
+});
+
+// ── fallbackVoice: the persona's own rescue voice (#2029) ────────────────────
+
+test('fallbackVoice: absent or null reads as none, and persists right after tts', () => {
+  assert.equal(personaSchema.parse(base()).fallbackVoice, null);
+  assert.equal(personaSchema.parse({ ...base(), fallbackVoice: null }).fallbackVoice, null);
+  const keys = Object.keys(personaSchema.parse(base()));
+  assert.equal(keys[keys.indexOf('tts') + 1], 'fallbackVoice');
+});
+
+test('fallbackVoice is engine + provider + voice, with no level trims', () => {
+  const p = personaSchema.parse({
+    ...base(),
+    fallbackVoice: { engine: 'kokoro', cloudProvider: 'openai', voice: ' af_bella ', gainDb: 6, speed: 1.5 },
+  });
+  assert.deepEqual(p.fallbackVoice, { engine: 'kokoro', cloudProvider: 'openai', voice: 'af_bella' });
+  // An absent provider reads as openai, the station slot's default.
+  assert.deepEqual(
+    personaSchema.parse({ ...base(), fallbackVoice: { engine: 'gemini', voice: 'Kore' } }).fallbackVoice,
+    { engine: 'gemini', cloudProvider: 'openai', voice: 'Kore' },
+  );
+});
+
+test('a cloud fallbackVoice must name its provider; other engines default it', () => {
+  // A cloud rescue with no provider must not quietly become OpenAI on an
+  // ElevenLabs station (and read as "covered" to the Doctor).
+  assert.throws(
+    () => validate.validatePersonasStrict([{ ...base(), fallbackVoice: { engine: 'cloud', voice: 'Rachel' } }]),
+    /fallbackVoice\.cloudProvider must be one of/,
+  );
+  assert.equal(repairPersonaFallbackVoice({ engine: 'cloud', voice: 'Rachel' }), null);
+  const [loaded] = normalize.normalizePersonaArray([{ ...base(), fallbackVoice: { engine: 'cloud', voice: 'Rachel' } }])!;
+  assert.equal(loaded.fallbackVoice, null);
+  assert.deepEqual(
+    personaSchema.parse({ ...base(), fallbackVoice: { engine: 'cloud', cloudProvider: 'elevenlabs', voice: 'Rachel' } }).fallbackVoice,
+    { engine: 'cloud', cloudProvider: 'elevenlabs', voice: 'Rachel' },
+  );
+  assert.deepEqual(
+    repairPersonaFallbackVoice({ engine: 'gemini', voice: 'Kore' }),
+    { engine: 'gemini', cloudProvider: 'openai', voice: 'Kore' },
+    'a non-cloud rescue still defaults the unused provider',
+  );
+});
+
+test('fallbackVoice refuses inherit and a bad voice on save, naming its own path', () => {
+  assert.throws(
+    () => validate.validatePersonasStrict([{ ...base(), fallbackVoice: { engine: 'inherit', voice: '' } }]),
+    /fallbackVoice\.engine must be one of: piper, kokoro/,
+  );
+  assert.throws(
+    () => validate.validatePersonasStrict([{ ...base(), fallbackVoice: { engine: 'kokoro', voice: 'nope' } }]),
+    /fallbackVoice\.voice must match <lang><gender>_<name> for kokoro/,
+  );
+  assert.throws(
+    () => validate.validatePersonasStrict([{ ...base(), fallbackVoice: { engine: 'cloud', cloudProvider: 'nope', voice: 'x' } }]),
+    /fallbackVoice\.cloudProvider must be one of/,
+  );
+});
+
+test('the lenient path drops an unusable fallbackVoice rather than inventing one', () => {
+  for (const bad of [
+    { engine: 'kokoro', voice: 'nope' },
+    { engine: 'inherit' },
+    { engine: 'bogus', voice: 'x' },
+    'kokoro',
+    42,
+  ]) {
+    assert.equal(repairPersonaFallbackVoice(bad), null, JSON.stringify(bad));
+    const [p] = normalize.normalizePersonaArray([{ ...base(), fallbackVoice: bad }])!;
+    assert.equal(p.fallbackVoice, null, 'the persona survives with no rescue voice');
+  }
+  assert.deepEqual(
+    repairPersonaFallbackVoice({ engine: 'piper', voice: '', cloudProvider: 'openai' }),
+    { engine: 'piper', cloudProvider: 'openai', voice: '' },
+  );
 });

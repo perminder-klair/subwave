@@ -5,6 +5,7 @@
 import express from 'express';
 import { queue } from '../../broadcast/queue.js';
 import { restartLiquidsoap, startStream, stopStream } from '../../broadcast/liquidsoap-control.js';
+import { noteMountsRestarted } from '../../broadcast/stream-idle.js';
 import { requireAdmin } from '../../middleware/auth.js';
 import {
   clearUserThemeCache,
@@ -26,6 +27,11 @@ router.post('/restart-mixer', requireAdmin, async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  } finally {
+    // The mounts come back new, so the idle pause before them no longer
+    // describes what a listener's burst holds (#2072). Also when the mixer did
+    // not confirm: the command may still have landed.
+    noteMountsRestarted();
   }
 });
 
@@ -47,6 +53,8 @@ router.post('/stream-start', requireAdmin, async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  } finally {
+    noteMountsRestarted();
   }
 });
 

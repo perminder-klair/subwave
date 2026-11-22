@@ -2,6 +2,8 @@
 // every generate* script, by matchRequest, and by the segment director
 // (skills/_agent.js) — so they all show the model the same picture of the moment.
 import { CONTEXT_FIELDS, type ContextField } from '../../../schemas/skill.js';
+import { steerClause } from '../../../schemas/steer.js';
+import { activeSteer } from '../../../settings/persona.js';
 
 import { speakClockAllowed } from '../../../broadcast/clock-policy.js';
 import { spokenContext } from '../../../settings.js';
@@ -130,9 +132,26 @@ export function normalizeContextFields(spec?: string | readonly string[] | null)
   return out;
 }
 
+// The operator's steer as one prompt line, or ''. Read from settings at the
+// context's own instant and NEVER carried on the context object: GET
+// /now-playing returns that object to every listener.
+export function steerLine(context: any): string {
+  const at = Date.parse(context?.at ?? '');
+  return steerClause(activeSteer(Number.isFinite(at) ? at : Date.now())?.prompt).trim();
+}
+
 export function buildContextLines(
   context: any,
-  { recentTracks, contextFields }: { recentTracks?: any[]; contextFields?: string | readonly string[] | null } = {},
+  { recentTracks, contextFields, steer = false }: {
+    recentTracks?: any[];
+    contextFields?: string | readonly string[] | null;
+    // The operator's steer, opted into by the links and segments a steer leans
+    // (a song intro, a segment, banter, a programme feature) and by nothing
+    // else. Never a prompt built around a listener's own words, whose output
+    // goes straight back to that listener, nor anything whose output is kept
+    // past the steer (the programme plan, published as the episode angle).
+    steer?: boolean;
+  } = {},
 ) {
   // `allow === null` means no gating (every field) — the historical behaviour
   // for callers that don't pass contextFields.
@@ -140,6 +159,10 @@ export function buildContextLines(
   const on = (f: ContextField) => allow === null || allow.has(f);
   const lines: string[] = [];
   if (typeof context?.episodeEditorial === 'string' && context.episodeEditorial) lines.push(context.episodeEditorial);
+  // Not behind a context field: an operator's steer is not something a skill
+  // opts out of.
+  const steerText = steer ? steerLine(context) : '';
+  if (steerText) lines.push(steerText);
   if (on('date') && context?.date) {
     lines.push(`Day: ${context.date.dayLabel}, ${context.date.dayOfMonth} ${context.date.monthLabel} (${context.date.season})`);
   }
@@ -188,7 +211,10 @@ export function buildContextLines(
     // is the backstop; this stops the most common case at the source.
     const unitWord = (weather.tempUnit || 'C') === 'F' ? 'Fahrenheit' : 'Celsius';
     const heading = 'location' in weather ? `Weather in ${weather.location}` : 'Weather';
-    lines.push(`${heading}: ${weather.condition}${weather.temp != null ? `, ${weather.temp} degrees ${unitWord}` : ''}`);
+    // The forecast's own wording when known ("mainly clear"), else the coarse
+    // condition word.
+    const sky = typeof weather.detail === 'string' && weather.detail ? weather.detail : weather.condition;
+    lines.push(`${heading}: ${sky}${weather.temp != null ? `, ${weather.temp} degrees ${unitWord}` : ''}`);
   }
   if (on('festival') && context?.festival) {
     const note = context.festival.description ? ` — ${context.festival.description}` : '';

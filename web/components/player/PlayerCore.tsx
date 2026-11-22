@@ -8,15 +8,19 @@ import {
   useContext,
   useMemo,
   useRef,
+  useState,
   type Dispatch,
   type ReactNode,
   type RefObject,
   type SetStateAction,
 } from 'react';
-import { useStationFeed, type StationFeed } from '@/hooks/useStationFeed';
+import { useStationFeed } from '@/hooks/useStationFeed';
 import { usePlayer, type PlayerStatus } from '@/hooks/usePlayer';
 import { useSignal, type Signal } from '@/hooks/useSignal';
 import { useMediaSession } from '@/hooks/useMediaSession';
+import { useClockZone } from '@/hooks/useClockZone';
+import { displayTimezone } from '@/lib/clockZone';
+import { FeedContext, useOptionalPlayerFeed, type PlayerFeed } from './feedContext';
 import { useStationClient, type LikeResult, type LikeStatus } from '@/lib/stationClient';
 import { listenerRequestSchema } from '@/lib/schemas.generated';
 import type { RequestResult } from '@/lib/types';
@@ -43,6 +47,11 @@ export interface PlayerActions {
   play: () => void;
   pause: () => void;
   stop: () => void;
+  /** The station gate took this listener off the air and holds them for the right password
+   *  (lib/gateResume.ts). Written only by the gate; `pause` and `stop` drop it, because any other
+   *  tune-out does. Here rather than in the gate so a Media Session command under the prompt reaches
+   *  it, and so it dies with this provider on a showcase switch. */
+  gateHoldRef: RefObject<boolean>;
   toggleMute: () => void;
   setVolume: Dispatch<SetStateAction<number>>;
   /** Submit a listener request. Rejects on network error. */
@@ -57,7 +66,7 @@ export interface PlayerActions {
   likeStatus: () => Promise<LikeStatus | null>;
 }
 
-const FeedContext = createContext<StationFeed | null>(null);
+export type { PlayerFeed };
 const AudioContext = createContext<PlayerAudio | null>(null);
 const ActionsContext = createContext<PlayerActions | null>(null);
 
@@ -67,9 +76,11 @@ function useRequired<T>(ctx: React.Context<T | null>, name: string): T {
   return value;
 }
 
-export function usePlayerFeed(): StationFeed {
+export function usePlayerFeed(): PlayerFeed {
   return useRequired(FeedContext, 'usePlayerFeed');
 }
+
+export { useOptionalPlayerFeed };
 
 export function usePlayerAudio(): PlayerAudio {
   return useRequired(AudioContext, 'usePlayerAudio');
@@ -81,9 +92,12 @@ export function usePlayerActions(): PlayerActions {
 
 export function PlayerCoreProvider({ children }: { children: ReactNode }) {
   const client = useStationClient();
+  // How much of the buffer the player skipped on its current connection
+  // (#2072). Held here because the feed, which needs it, renders first.
+  const [leadTrimMs, setLeadTrimMs] = useState(0);
   // Feed first: usePlayer's Opus upgrade is gated on the mount the station says
   // it actually serves (#1300).
-  const feed = useStationFeed();
+  const feed = useStationFeed({ leadTrimMs });
   const {
     audioRef,
     attachAudio,
@@ -99,7 +113,7 @@ export function PlayerCoreProvider({ children }: { children: ReactNode }) {
     toggleMute,
     muted,
     idleStopped,
-  } = usePlayer({ opusEnabled: feed.opusEnabled });
+  } = usePlayer({ opusEnabled: feed.opusEnabled, bufferSeconds: feed.bufferMs / 1000, onLeadTrim: setLeadTrimMs });
 
   // Only an explicit false is offline — see PlayerAudio.offline.
   const offline = feed.streamOnline === false;
@@ -117,13 +131,21 @@ export function PlayerCoreProvider({ children }: { children: ReactNode }) {
   pauseRef.current = pause;
   stopRef.current = stop;
   muteRef.current = toggleMute;
+  const gateHoldRef = useRef(false);
 
   const actions = useMemo<PlayerActions>(
     () => ({
       tune: () => tuneRef.current(),
       play: () => playRef.current(),
-      pause: () => pauseRef.current(),
-      stop: () => stopRef.current(),
+      pause: () => {
+        gateHoldRef.current = false;
+        pauseRef.current();
+      },
+      stop: () => {
+        gateHoldRef.current = false;
+        stopRef.current();
+      },
+      gateHoldRef,
       toggleMute: () => muteRef.current(),
       setVolume,
       // Pre-flight against the shared request schema, the same rule the
@@ -180,15 +202,19 @@ export function PlayerCoreProvider({ children }: { children: ReactNode }) {
   // into every feed consumer.
   const {
     nowPlaying, context, dj, activeShow, listeners, streamOnline,
-    llmTokens, state, session, trackStartedAt, opusEnabled, timezone, locale, leadMs,
+    llmTokens, state, session, trackStartedAt, opusEnabled, timezone, locale, leadMs, bufferMs,
   } = feed;
-  const feedValue = useMemo<StationFeed>(
+  const { zone: clockZone } = useClockZone();
+  const shownTimezone = displayTimezone(timezone, clockZone);
+  const feedValue = useMemo<PlayerFeed>(
     () => ({
       nowPlaying, context, dj, activeShow, listeners, streamOnline,
-      llmTokens, state, session, trackStartedAt, opusEnabled, timezone, locale, leadMs,
+      llmTokens, state, session, trackStartedAt, opusEnabled, timezone: shownTimezone, locale, leadMs, bufferMs,
+      stationTimezone: timezone, clockZone,
     }),
     [nowPlaying, context, dj, activeShow, listeners, streamOnline,
-     llmTokens, state, session, trackStartedAt, opusEnabled, timezone, locale, leadMs],
+     llmTokens, state, session, trackStartedAt, opusEnabled, shownTimezone, locale, leadMs, bufferMs,
+     timezone, clockZone],
   );
 
   const { latencyMs, quality } = signal;

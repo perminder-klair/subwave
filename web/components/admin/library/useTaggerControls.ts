@@ -19,6 +19,7 @@ import type {
   TagSteps,
 } from '../LibraryTaggingPanel';
 import type { SettingsResponse } from './types';
+import { musicServerLink } from './music-server-link';
 
 // The tagging/analysis half of the library page: the slow /settings poll and
 // every operator action the Tagging panel fires. The tagger snapshot's fast
@@ -78,6 +79,7 @@ export function useTaggerControls() {
   const failures = failuresQuery.data?.failures ?? null;
 
   const libStats: LibraryStatsLite | null = settings?.libraryStats ?? null;
+  const musicServerUrl = musicServerLink(settings?.navidrome?.url);
   const audio = settings?.values?.audio;
   // null until the first poll lands — the toggles render disabled until then.
   const audioEnabled = audio ? !!audio.embeddings : null;
@@ -140,6 +142,20 @@ export function useTaggerControls() {
       if (data.coverage) client.setQueryData(libraryKeys.coverage(), data.coverage);
       else void client.invalidateQueries({ queryKey: libraryKeys.coverage() });
       notify.ok('counting your library — this can take a while on a big one');
+    },
+  });
+
+  // The stale-vector notice's action (#2313): marks only the vectors still built
+  // from moods a relabel-all moved, for the next run to rebuild. Nothing is
+  // embedded here, so it is cheap and needs no confirmation.
+  const markStaleSoundM = useAdminMutation<{ marked?: number; coverage?: Coverage }, void>({
+    request: (_v, fetcher) => adminJson<{ marked?: number; coverage?: Coverage }>(
+      fetcher, '/library/vectors/mark-stale-sound', { method: 'POST' },
+    ),
+    onDone: (data, _v, client) => {
+      if (data.coverage) client.setQueryData(libraryKeys.coverage(), data.coverage);
+      else void client.invalidateQueries({ queryKey: libraryKeys.coverage() });
+      notify.ok(`${(data.marked ?? 0).toLocaleString('en-GB')} vectors queued for re-embed`);
     },
   });
 
@@ -298,7 +314,7 @@ export function useTaggerControls() {
     coverage, remaining, tagger, libStats, failures,
     batch, setBatch, busy, logOpen, setLogOpen,
     audioEnabled, vocalEnabled, quietEnabled, quietMins, budgetMode,
-    llmLabel, embedLabel,
+    llmLabel, embedLabel, musicServerUrl,
     startTagger: (steps?: TagSteps) => { startM.mutate(steps); },
     stopTagger: () => { stopM.mutate(); },
     rescanTagger: (opts: RescanOpts) => { rescanM.mutate(opts); },
@@ -314,6 +330,8 @@ export function useTaggerControls() {
     saveQuietMinutes: (minutes: number) => { saveQuietMinutesM.mutate(minutes); },
     countLibrary: () => { countLibraryM.mutate(); },
     countingLibrary: countLibraryM.isPending,
+    markStaleSound: () => { markStaleSoundM.mutate(); },
+    markingStaleSound: markStaleSoundM.isPending,
     loadFailures, clearFailures,
   };
 }

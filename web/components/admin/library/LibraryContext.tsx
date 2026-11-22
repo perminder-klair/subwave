@@ -20,6 +20,7 @@ import type {
   BlockRef, BlockType, BrowseResponse, LikeIndex, QueueBlockKind, QueueBlockResult, Track,
 } from './types';
 import { refreshPlaylistCatalogues } from '../playlist-cache';
+import { coveragePollMs } from './coverage-poll';
 import {
   deleteBlockEntry, liftedText, notifyBlockedWithUndo, postBlock, reconcileBlockCaches,
   restampCachedBlockMarks,
@@ -123,9 +124,10 @@ export function LibraryProvider({
   const tagger = taggerQuery.data ?? null;
 
   // GET /library/coverage is a cheap read (DB counts plus the last-known
-  // Navidrome total), so it runs on mount. It must NOT run on a timer: the total
-  // behind it is a full album-by-album walk of Navidrome (#1570). The count is
-  // now the operator's own press (useTaggerControls' countLibrary).
+  // Navidrome total), so it runs on mount. It must NOT run on an idle timer:
+  // the total behind it is a full album-by-album walk of Navidrome (#1570). The
+  // count is now the operator's own press (useTaggerControls' countLibrary).
+  // When it does poll is coverage-poll.ts (a run, a count, a cold controller).
   // No `staleTime` key on purpose: an explicit `staleTime: 0` made this refetch
   // on every remount, so the client's 30s default is left alone.
   const coverageQuery = useQuery({
@@ -134,11 +136,11 @@ export function LibraryProvider({
       adminFetch, '/library/coverage', undefined, signal,
     ),
     enabled: ready,
-    // The two live states only: a tagging run whose % must climb, and a count
-    // the operator just asked for. Idle, nothing polls.
-    refetchInterval: q => (
-      tagger?.running || q.state.data?.scanning ? 3_000 : false
-    ),
+    refetchInterval: q => coveragePollMs({
+      taggerRunning: !!tagger?.running,
+      data: q.state.data,
+      reads: q.state.dataUpdateCount,
+    }),
   });
   const coverage = coverageQuery.data ?? null;
   const reloadCoverage = useCallback(
@@ -419,19 +421,30 @@ export function LibraryProvider({
   const retagTrack = useCallback(async (track: Track) => {
     setRetagging(track.id);
     try {
-      const j = await adminJson<{ moods?: string[]; energy?: string | null }>(adminFetch, '/library/retag', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(track),
-      });
-      const tagStr = j.moods?.length ? j.moods.join(', ') : '—';
-      notify.ok(`retagged · ${tagStr} [${j.energy || '?'}]`);
+      const j = await adminJson<{ moods?: string[]; energy?: string | null; untaggable?: boolean }>(
+        adminFetch, '/library/retag', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(track),
+        },
+      );
       flash(track.id);
-      // The server stamps retagged rows source='llm'.
-      applyTagEvent(qc, {
-        track, moods: j.moods || [], energy: j.energy ?? null,
-        cleared: false, applyToAlbum: false, source: 'llm',
-      });
+      if (j.untaggable) {
+        // No usable mood (#2283): the server left the track untagged, so it stays
+        // in Needs tags.
+        notify.info(`the model couldn't tag “${track.title}” · left untagged`);
+        applyTagEvent(qc, {
+          track, moods: [], energy: null, cleared: true, applyToAlbum: false, source: 'llm',
+        });
+      } else {
+        const tagStr = j.moods?.length ? j.moods.join(', ') : '—';
+        notify.ok(`retagged · ${tagStr} [${j.energy || '?'}]`);
+        // The server stamps retagged rows source='llm'.
+        applyTagEvent(qc, {
+          track, moods: j.moods || [], energy: j.energy ?? null,
+          cleared: false, applyToAlbum: false, source: 'llm',
+        });
+      }
       reloadCoverage();
     } catch (err) {
       notify.err(errorMessage(err));

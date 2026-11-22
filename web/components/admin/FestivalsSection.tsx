@@ -18,6 +18,8 @@ import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
 } from '../ui/select';
 import { Modal } from '../ui/modal';
+import { ToggleGroup, ToggleGroupItem } from '../ui/toggle-group';
+import { festivalSpanLabel, festivalTiming } from '@/lib/festivalTiming';
 import { V3AlertDialog } from '../ui/alert-dialog';
 import { SkeletonRows } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -30,6 +32,7 @@ import {
   festivalsSchema,
   SETTINGS_FESTIVAL_DESCRIPTION_MAX,
   SETTINGS_FESTIVAL_NAME_MAX,
+  SETTINGS_FESTIVAL_RANGE_DAYS_MAX,
   SETTINGS_FESTIVAL_WINDOW_DAYS_MAX,
 } from '@/lib/schemas.generated';
 
@@ -64,22 +67,11 @@ const EMPTY_FESTIVAL: Festival = {
   windowDays: 0,
 };
 
+// The bound ToggleGroupField's item look, for the unbound Dates switch.
+const MODE_ITEM = 'min-h-9 rounded-none border-ink px-2 text-[12px] hover:bg-[var(--ink-soft)] data-[state=on]:bg-ink data-[state=on]:text-bg';
+
 const sortFestivals = (list: Festival[]) =>
   [...list].sort((a, b) => a.month - b.month || a.day - b.day);
-
-// Display only — the controller owns the real window logic in
-// getFestivalContext. `until` wraps the year boundary.
-function festivalTiming(f: Festival, now: Date) {
-  const dayMs = 86400000;
-  const t0 = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  const diffs = [-1, 0, 1].map(dy =>
-    Math.round((new Date(now.getFullYear() + dy, f.month - 1, f.day).getTime() - t0) / dayMs),
-  );
-  return {
-    active: diffs.some(d => Math.abs(d) <= (f.windowDays || 0)),
-    until: Math.min(...diffs.filter(d => d >= 0)),
-  };
-}
 
 // The modal's fields, bound into the `festivals` field array at `idx`. Its own
 // component so its hooks are unconditional; the parent mounts it only while a
@@ -99,12 +91,27 @@ function FestivalModalFields({
   const monthField = useController({ control, name: `festivals.${idx}.month` });
   const dayField = useController({ control, name: `festivals.${idx}.day` });
   const windowField = useController({ control, name: `festivals.${idx}.windowDays` });
+  const endMonthField = useController({ control, name: `festivals.${idx}.endMonth` });
+  const endDayField = useController({ control, name: `festivals.${idx}.endDay` });
 
   const monthAria = fieldAria(`${fieldId}-month`, monthField.fieldState.error);
   const dayAria = fieldAria(`${fieldId}-day`, dayField.fieldState.error);
   const windowAria = fieldAria(`${fieldId}-window`, windowField.fieldState.error);
+  const endMonthAria = fieldAria(`${fieldId}-end-month`, endMonthField.fieldState.error);
+  const endDayAria = fieldAria(`${fieldId}-end-day`, endDayField.fieldState.error);
 
   const month = monthField.field.value;
+  // One model at a time (#2112): a festival is a day ± a window, or a
+  // from/to range. The mode is whether an end date is set; a single-day
+  // festival saves no end keys at all.
+  const ranged = endMonthField.field.value != null;
+  const endMonth = endMonthField.field.value ?? month;
+  const setRanged = (on: boolean) => {
+    if (on === ranged) return;
+    // A fresh range starts as the one day already chosen.
+    endMonthField.field.onChange(on ? month : undefined);
+    endDayField.field.onChange(on ? dayField.field.value : undefined);
+  };
   const moodOptions = moods.map(m => ({ value: m, label: m }));
 
   return (
@@ -117,9 +124,24 @@ function FestivalModalFields({
         maxLength={SETTINGS_FESTIVAL_NAME_MAX}
       />
 
+      <Field>
+        <FieldLabel id={`${fieldId}-mode`}>Dates</FieldLabel>
+        <ToggleGroup
+          type="single"
+          variant="outline"
+          aria-labelledby={`${fieldId}-mode`}
+          className="w-fit flex-wrap justify-start"
+          value={ranged ? 'range' : 'day'}
+          onValueChange={v => { if (v) setRanged(v === 'range'); }}
+        >
+          <ToggleGroupItem value="day" className={MODE_ITEM}>A day (± window)</ToggleGroupItem>
+          <ToggleGroupItem value="range" className={MODE_ITEM}>From / to dates</ToggleGroupItem>
+        </ToggleGroup>
+      </Field>
+
       <div className="grid grid-cols-2 gap-3">
         <Field data-invalid={monthAria.invalid || undefined}>
-          <FieldLabel {...monthAria.labelProps}>Month</FieldLabel>
+          <FieldLabel {...monthAria.labelProps}>{ranged ? 'From month' : 'Month'}</FieldLabel>
           <Select
             value={String(month)}
             onValueChange={v => {
@@ -144,7 +166,7 @@ function FestivalModalFields({
         </Field>
 
         <Field data-invalid={dayAria.invalid || undefined}>
-          <FieldLabel {...dayAria.labelProps}>Day</FieldLabel>
+          <FieldLabel {...dayAria.labelProps}>{ranged ? 'From day' : 'Day'}</FieldLabel>
           <Select
             value={String(dayField.field.value)}
             onValueChange={v => dayField.field.onChange(Number(v))}
@@ -161,6 +183,53 @@ function FestivalModalFields({
           <FieldError {...dayAria.errorProps} errors={dayField.fieldState.error ? [dayField.fieldState.error] : undefined} />
         </Field>
       </div>
+
+      {ranged && (
+        <div className="grid grid-cols-2 gap-3">
+          <Field data-invalid={endMonthAria.invalid || undefined}>
+            <FieldLabel {...endMonthAria.labelProps}>To month</FieldLabel>
+            <Select
+              value={String(endMonth)}
+              onValueChange={v => {
+                const nextMonth = Number(v);
+                endMonthField.field.onChange(nextMonth);
+                const maxDay = DAYS_IN_MONTH(nextMonth);
+                if ((endDayField.field.value ?? 1) > maxDay) endDayField.field.onChange(maxDay);
+                // Both or neither: a range always carries its end day.
+                if (endDayField.field.value == null) endDayField.field.onChange(1);
+              }}
+            >
+              <SelectTrigger {...endMonthAria.controlProps} onBlur={endMonthField.field.onBlur} ref={endMonthField.field.ref}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {MONTH_NAMES.map((name, i) => (
+                  <SelectItem key={i + 1} value={String(i + 1)}>{name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <FieldError {...endMonthAria.errorProps} errors={endMonthField.fieldState.error ? [endMonthField.fieldState.error] : undefined} />
+          </Field>
+
+          <Field data-invalid={endDayAria.invalid || undefined}>
+            <FieldLabel {...endDayAria.labelProps}>To day</FieldLabel>
+            <Select
+              value={String(endDayField.field.value ?? 1)}
+              onValueChange={v => endDayField.field.onChange(Number(v))}
+            >
+              <SelectTrigger {...endDayAria.controlProps} onBlur={endDayField.field.onBlur} ref={endDayField.field.ref}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {Array.from({ length: DAYS_IN_MONTH(endMonth) }, (_, i) => (
+                  <SelectItem key={i + 1} value={String(i + 1)}>{i + 1}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <FieldError {...endDayAria.errorProps} errors={endDayField.fieldState.error ? [endDayField.fieldState.error] : undefined} />
+          </Field>
+        </div>
+      )}
 
       <TextField
         control={control}
@@ -179,7 +248,7 @@ function FestivalModalFields({
           options={moodOptions}
         />
 
-        <Field data-invalid={windowAria.invalid || undefined}>
+        {!ranged && <Field data-invalid={windowAria.invalid || undefined}>
           <FieldLabel {...windowAria.labelProps}>
             Window <span className="text-muted">(days)</span>
           </FieldLabel>
@@ -200,11 +269,12 @@ function FestivalModalFields({
             ref={windowField.field.ref}
           />
           <FieldError {...windowAria.errorProps} errors={windowField.fieldState.error ? [windowField.fieldState.error] : undefined} />
-        </Field>
+        </Field>}
       </div>
       <div className="field-hint -mt-2">
-        Music and spoken tone shift into the mood for the days around the date — a 3-day
-        window covers a full week.
+        {ranged
+          ? `Music and spoken tone shift into the mood from the first date through the last, both included, for up to ${SETTINGS_FESTIVAL_RANGE_DAYS_MAX} days. A range can run past New Year.`
+          : 'Music and spoken tone shift into the mood for the days around the date — a 3-day window covers a full week.'}
       </div>
     </div>
   );
@@ -379,6 +449,13 @@ export default function FestivalsSection() {
         }
       />
 
+      <p className="field-hint">
+        Festivals set the mood; they don&apos;t choose the music. For songs that should air only
+        between two dates, such as a Christmas playlist, add a rule on{' '}
+        <a href="/admin/library?tab=blocked" className="underline">Library → Blocked</a>
+        {' '}under Blocking rules and tick &ldquo;Seasonal&rdquo;.
+      </p>
+
       {err && <ErrorState error={err} onRetry={load} />}
 
       {!loaded && !err && <SkeletonRows rows={4} />}
@@ -436,7 +513,7 @@ export default function FestivalsSection() {
                       </span>
                       <span className="col-start-2 row-start-2 flex items-baseline gap-2.5 text-[10px] tracking-[0.08em] text-muted sm:col-start-3 sm:row-start-1">
                         <span>{f.mood}</span>
-                        {f.windowDays ? <span className="mono-num">±{f.windowDays}d</span> : null}
+                        {festivalSpanLabel(f) ? <span className="mono-num">{festivalSpanLabel(f)}</span> : null}
                       </span>
                     </button>
                   ))}

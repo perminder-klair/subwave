@@ -1,12 +1,15 @@
 import { z } from 'zod';
-import { parseVocalRangesJson } from '../lyric-vocal.js';
+import { parseTailVocalRangesJson, parseVocalRangesJson } from '../lyric-vocal.js';
+import { hasTaggerSoundWords } from '../sound-line.js';
 import { preparationTrackSchema } from '../../schemas/show-preparation.js';
 import { getTrack } from './tracks.js';
+import { creditsArtist } from '../artist-credit.js';
 // Mood- and tag-keyed reads, plus the per-genre embedding centroids.
 
-import { SQL_HAS_MOODS, SQL_NO_MOODS, requireDb } from './handle.js';
-import type { EnergyValue, MoodPoolRecord, MoodPoolRow, EnergyPoolRecord, EnergyPoolRow } from './types.js';
+import { SQL_HAS_MOODS, SQL_NO_MOODS, SQL_TAIL_VOCAL_RANGES, requireDb } from './handle.js';
+import type { EnergyValue, ExplicitStatus, MoodPoolRecord, MoodPoolRow, EnergyPoolRecord, EnergyPoolRow } from './types.js';
 import { rowToMoodPool, rowToEnergyPool, safeParseArray } from './rows.js';
+import { eraSuspectSql, storedYearUntrusted } from '../era-suspect.js';
 
 // Projected to exactly the fields blocklist-rules.ruleMatches reads. Not
 // rowToTrack: GET /library/blocklist runs this over the whole library per request.
@@ -38,7 +41,7 @@ export function ruleMatchRows(): Array<{
 }
 
 const MOOD_POOL_COLUMNS = `t.id, t.title, t.artist, t.album, t.album_id, t.artist_id,
-  t.year, t.genres, t.genre, t.moods, t.energy, t.duration_sec`;
+  t.year, t.genres, t.genre, t.moods, t.energy, t.duration_sec, t.explicit_status`;
 
 export function songsByMood(mood: string): MoodPoolRecord[] {
   // Start at the covering membership index, never scan tracks/json_each.
@@ -54,7 +57,8 @@ export function songsByEnergy(energy: EnergyValue): EnergyPoolRecord[] {
   const rows = requireDb().prepare(`SELECT ${MOOD_POOL_COLUMNS},
     t.original_year, t.is_compilation, t.era_untrusted, t.audio_moods,
     t.bpm, t.musical_key, t.intro_ms, t.loudness_lufs,
-    t.structure_json, t.vocal_ranges_json, t.pace_json
+    t.structure_json, t.vocal_ranges_json, t.pace_json,
+    ${SQL_TAIL_VOCAL_RANGES} AS tail_vocal_ranges_json
     FROM tracks t WHERE t.energy = ? AND ${SQL_HAS_MOODS} ORDER BY t.rowid`).all(energy) as EnergyPoolRow[];
   return rows.map(rowToEnergyPool);
 }
@@ -106,6 +110,51 @@ export function staleTaggedIds(promptHash: string, model: string, limit?: number
   return rows.map(r => r.id);
 }
 
+// "Re-decide moods → blind rows only" scope (#2281): rows the LLM decided
+// without measurements of their audio that have been measured since, so a
+// re-decide now gives the model a Sound: line. A blind row that is still
+// unmeasured stays out: re-tagging it would be blind again. Blind is
+// tagged_measured = 0, or a NULL stamp on a model-decided row, which is every row
+// tagged before the stamp existed (no earlier prompt carried measurements).
+// Never manual or propagated: neither was decided by the LLM. "Measured since" is
+// the stamp's own rule (hasTaggerSoundWords) run over the row, never a SQL copy
+// of it; the WHERE only narrows to rows carrying one of its inputs.
+export function blindTaggedIds(limit?: number): string[] {
+  const rows = requireDb()
+    .prepare(
+      `SELECT id, bpm, musical_key, vocal_ranges_json,
+              ${SQL_TAIL_VOCAL_RANGES} AS tail_vocal_ranges
+         FROM tracks
+        WHERE ${SQL_HAS_MOODS}
+          AND (source IS NULL OR source NOT IN ('manual', 'propagated'))
+          AND (tagged_measured IS NULL OR tagged_measured = 0)
+          AND (bpm IS NOT NULL OR musical_key IS NOT NULL
+               OR vocal_ranges_json IS NOT NULL OR outro_json IS NOT NULL)
+        ORDER BY id`,
+    )
+    .iterate() as IterableIterator<{
+      id: string;
+      bpm: number | null;
+      musical_key: string | null;
+      vocal_ranges_json: string | null;
+      tail_vocal_ranges: string | null;
+    }>;
+  const cap = limit && limit > 0 ? Math.floor(limit) : Infinity;
+  const ids: string[] = [];
+  for (const r of rows) {
+    const measured = hasTaggerSoundWords({
+      bpm: r.bpm,
+      musicalKey: r.musical_key,
+      ...parseVocalRangesJson(r.vocal_ranges_json),
+      ...parseTailVocalRangesJson(r.tail_vocal_ranges),
+    });
+    if (measured) ids.push(r.id);
+    // Leaving the loop closes the statement's iterator.
+    if (ids.length >= cap) break;
+  }
+  return ids;
+}
+
 // "Re-enrich" scope: only what was already enriched. Distinct from --re-enrich,
 // which spans the full live catalogue (#531).
 export function enrichedIds(): string[] {
@@ -123,6 +172,14 @@ export function untaggedIds(limit?: number): string[] {
   const stmt = requireDb().prepare(q);
   const rows = (limit ? stmt.all(limit) : stmt.all()) as Array<{ id: string }>;
   return rows.map(r => r.id);
+}
+
+// Untagged rows the tagger marked untaggable, with the key each was marked
+// under. Whether a marker still holds is tag-library's call (tag-input.ts).
+export function untaggableMarks(): Array<{ id: string; key: string }> {
+  return requireDb()
+    .prepare(`SELECT id, untaggable_key AS key FROM tracks WHERE ${SQL_NO_MOODS} AND untaggable_key IS NOT NULL`)
+    .all() as Array<{ id: string; key: string }>;
 }
 
 export function unembeddedIds(limit?: number): string[] {
@@ -152,7 +209,7 @@ export function trackIdsByGenreDecade(): Map<string, string[]> {
       `SELECT id, COALESCE(genre, '') AS g,
               CASE
                 WHEN original_year > 0 THEN (original_year / 10) * 10
-                WHEN is_compilation = 1 OR era_untrusted = 1 THEN 0
+                WHEN ${eraSuspectSql()} THEN 0
                 WHEN year > 0 THEN (year / 10) * 10
                 ELSE 0
               END AS decade
@@ -245,6 +302,25 @@ export function genreCentroids(): GenreCentroid[] {
   addGenreVectors(acc, GENRE_WALK_START);
   return centroidsOf(acc);
 }
+type CandidateFilterRow = {
+  id: string;
+  title: string | null;
+  artist: string | null;
+  year: number | null;
+  original_year: number | null;
+  is_compilation: number | null;
+  era_untrusted: number | null;
+  genres: string | null;
+  genre: string | null;
+  moods: string | null;
+  audio_moods: string | null;
+  energy: EnergyValue;
+  vocal_ranges_json: string | null;
+  tail_vocal_ranges_json: string | null;
+  duration_sec: number | null;
+  explicit_status: ExplicitStatus | null;
+};
+
 // Whole-library projection for the Show-editor candidate diagnostic: the fields
 // the strict show locks use, none of the heavy analysis JSON.
 export function candidateFilterTracks(): Array<{
@@ -262,58 +338,99 @@ export function candidateFilterTracks(): Array<{
   energy: EnergyValue;
   vocalRanges: unknown[] | null;
   vocalRangesInvalid: boolean;
+  tailVocalRanges: unknown[] | null;
+  tailVocalRangesInvalid: boolean;
   // For the minimum-track-length floor (#1573); without this column every row
   // reads as unknown length and the funnel over-counts.
   durationSec: number | null;
+  // Carried, so a clean show's walk over this whole projection is no per-row read.
+  explicitStatus: ExplicitStatus | null;
 }> {
-  type CandidateFilterRow = {
-    id: string;
-    title: string | null;
-    artist: string | null;
-    year: number | null;
-    original_year: number | null;
-    is_compilation: number | null;
-    era_untrusted: number | null;
-    genres: string | null;
-    genre: string | null;
-    moods: string | null;
-    audio_moods: string | null;
-    energy: EnergyValue;
-    vocal_ranges_json: string | null;
-    duration_sec: number | null;
-  };
   const rows = requireDb().prepare(`SELECT id, title, artist, year, original_year,
     is_compilation, era_untrusted, genres, genre, moods, audio_moods, energy, duration_sec,
-    vocal_ranges_json
+    vocal_ranges_json, ${SQL_TAIL_VOCAL_RANGES} AS tail_vocal_ranges_json, explicit_status
     FROM tracks`).all() as CandidateFilterRow[];
-  return rows.map((row) => ({
+  return rows.map(candidateFilterTrack);
+}
+
+function candidateFilterTrack(row: CandidateFilterRow): ReturnType<typeof candidateFilterTracks>[number] {
+  return {
     id: row.id,
     title: row.title ?? null,
     artist: row.artist ?? null,
     year: row.year ?? null,
     originalYear: row.original_year ?? null,
     isCompilation: row.is_compilation == null ? null : !!row.is_compilation,
-    yearUntrusted: (row.is_compilation === 1 || row.era_untrusted === 1)
-      ? true
-      : (row.is_compilation == null && row.era_untrusted == null ? null : false),
+    yearUntrusted: storedYearUntrusted(row.is_compilation, row.era_untrusted),
     genres: row.genres ? safeParseArray(row.genres) : [],
     genre: row.genre ?? null,
     moods: row.moods ? safeParseArray(row.moods) : [],
     audioMoods: row.audio_moods ? safeParseArray(row.audio_moods) : [],
     energy: row.energy ?? null,
     ...parseVocalRangesJson(row.vocal_ranges_json),
+    ...parseTailVocalRangesJson(row.tail_vocal_ranges_json),
     durationSec: row.duration_sec ?? null,
-  }));
+    explicitStatus: row.explicit_status ?? null,
+  };
 }
 
-export function tracksByArtistId(artistId: string) {
-  const ids = z.array(z.object({ id: z.string() })).parse(requireDb().prepare('SELECT id FROM tracks WHERE artist_id = ?').all(artistId));
-  return ids.flatMap(({ id }) => {
-    const track = getTrack(id);
-    if (!track) return [];
-    const parsed = preparationTrackSchema.safeParse(track);
-    return parsed.success ? [parsed.data] : [];
-  });
+// Rows per page of the paged strict-show scan: small enough that one page's
+// read and row mapping is a short slice of the event loop, large enough that a
+// 50k-track library is ~100 pages rather than thousands of setImmediate hops.
+export const CANDIDATE_FILTER_PAGE_ROWS = 500;
+
+// candidateFilterTracks()'s projection, read in rowid pages with a yield
+// between them, so a strict-show pool build doesn't block the controller for
+// the whole catalogue. Pages are not one snapshot. A restore or reset between
+// pages swaps or closes the handle, and the next page throws rather than read
+// a closed statement or splice two libraries: the caller falls back to the
+// whole synchronous read (strictShowLibraryPoolSliced).
+export async function* candidateFilterTrackBatches(): AsyncGenerator<ReturnType<typeof candidateFilterTracks>> {
+  const handle = requireDb();
+  const stmt = handle.prepare(`SELECT rowid AS candidate_rowid, id, title, artist, year, original_year,
+    is_compilation, era_untrusted, genres, genre, moods, audio_moods, energy, duration_sec,
+    vocal_ranges_json, ${SQL_TAIL_VOCAL_RANGES} AS tail_vocal_ranges_json, explicit_status
+    FROM tracks WHERE rowid > ? ORDER BY rowid LIMIT ?`);
+  let after = 0;
+  while (true) {
+    if (requireDb() !== handle) throw new Error('library-db reopened during a paged candidate scan');
+    const rows = stmt.all(after, CANDIDATE_FILTER_PAGE_ROWS) as Array<CandidateFilterRow & { candidate_rowid: number }>;
+    if (!rows.length) return;
+    after = rows.at(-1)!.candidate_rowid;
+    yield rows.map(candidateFilterTrack);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+}
+
+// A prepared artist episode's catalogue as the mirror holds it (#2333): every
+// row artist-credit.creditsArtist keeps (the track artist, or the first album
+// artist), and how much of the artist's albums the mirror covers, so
+// episode-source can tell a complete mirror from one it must not trust.
+//   onAlbums: rows on `albumIds` (getArtist's albums), every artist's: the same
+//     set Navidrome's songCount totals.
+//   unwalked: rows on those albums or credited to the artist that carry no
+//     album_artist_id yet, so the mirror cannot judge their credit.
+export function artistCatalogue(artistId: string, albumIds: string[]) {
+  const d = requireDb();
+  const rows = z.array(z.object({ id: z.string(), artist_id: z.string().nullable(), album_artist_id: z.string().nullable() }))
+    .parse(d.prepare('SELECT id, artist_id, album_artist_id FROM tracks WHERE artist_id = ? OR album_artist_id = ?').all(artistId, artistId));
+  const coverage = z.object({ n: z.number(), unwalked: z.number() }).parse(d.prepare(`
+    SELECT COUNT(*) AS n, COUNT(*) - COUNT(album_artist_id) AS unwalked
+    FROM tracks WHERE album_id IN (SELECT value FROM json_each(?))
+  `).get(JSON.stringify(albumIds)));
+  const tracks = rows
+    .filter(row => creditsArtist({ artistId: row.artist_id, albumArtistId: row.album_artist_id }, artistId))
+    .flatMap(({ id }) => {
+      const track = getTrack(id);
+      if (!track) return [];
+      const parsed = preparationTrackSchema.safeParse(track);
+      return parsed.success ? [parsed.data] : [];
+    });
+  return {
+    tracks,
+    onAlbums: coverage.n,
+    unwalked: coverage.unwalked + rows.filter(row => row.album_artist_id == null).length,
+  };
 }
 
 export function artistIdentities(minTracks: number) {

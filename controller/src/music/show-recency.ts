@@ -1,8 +1,9 @@
 // No-repeat capacity for scheduled shows: the hard window clamped to the universe
 // a pick may draw from. One module so the agent and pool paths share one policy.
 
-import { effectiveNoRepeatWindow, exhaustiveNoRepeatWindow, trackKey } from './recency.js';
+import { effectiveNoRepeatWindow, episodeNoRepeatWindow, exhaustiveNoRepeatWindow, trackKey } from './recency.js';
 import { applyStrictLocks, type FilterTrack, type VocalMode, type YearRange } from './show-filter.js';
+import { excludesExplicit, withoutExplicit } from './explicit-policy.js';
 import { applyKnownTrackCeiling } from './track-duration.js';
 import { applyTrackFloor, trackLengthSeconds } from './track-floor.js';
 
@@ -23,6 +24,7 @@ type RecencyShow = {
   moods?: string[];
   energies?: string[];
   vocals?: string;
+  excludeExplicit?: boolean;
 } | null;
 
 export type ShowNoRepeatGuard = {
@@ -32,10 +34,17 @@ export type ShowNoRepeatGuard = {
   // The show's own full-rotation window (#1612) rather than a clamped N. The pool
   // picker samples its show-playlist source differently when set; never re-derive.
   exhaustive: boolean;
-  // The airable rotation itself, present exactly when `exhaustive` is. Its
-  // window is measured over THIS set's own air history (hardRecentFor), never
-  // the station's: other shows' plays must not push its tracks out (#1919).
+  // The airable rotation itself: the strict anchor playlist or a prepared
+  // episode's full rotation (both with `exhaustive`), or an episode's current
+  // airing (with `airedSince`, #2320). Its window
+  // is measured over THIS set's own air history (hardRecentFor), never the
+  // station's: other shows' plays must not push its tracks out (#1919).
   rotation?: ShowTrack[];
+  // Count `rotation` only over airings at or after this instant (epoch ms): a
+  // prepared episode without full rotation holds what THIS airing has played
+  // and leaves earlier airings to the soft recency (#2320). Absent = the
+  // rotation's whole history.
+  airedSince?: number;
 };
 
 // When a track last went to air, epoch ms; null = never on record. Infinity =
@@ -58,9 +67,9 @@ export interface NoRepeatHistory {
 // nothing coasts through it.)
 export const COAST_MIN_SEC = 3600;
 
-// What of a strict anchor can actually AIR: the show's strict locks (never-
-// starve, as the pool picker applies them), the known length ceiling, the
-// minimum-length floor, and the excluded playlists. ORDER-PRESERVING — every
+// What of a strict anchor can actually AIR: a clean show's explicit filter, the
+// show's strict locks (never-starve, as the pool picker applies them), the known
+// length ceiling, the minimum-length floor, and the excluded playlists. ORDER-PRESERVING — every
 // step is a filter — so the in-order walk (music/playlist-order.ts) walks the
 // same set this guard counts. Two copies of "can this anchor track air" is how
 // the rotation size and the running order would come to disagree.
@@ -80,8 +89,11 @@ export function airableAnchorTracks<T extends ShowTrack>(
     maxTrackSec?: number | null;
   },
 ): T[] {
+  // A clean show first and hard: the locks below never-starve, so one that found
+  // only tagged tracks must be skipped rather than bring them back.
+  const allowed = withoutExplicit(playlistTracks, excludesExplicit(show));
   const filtered = show?.filtersStrict
-    ? applyStrictLocks(playlistTracks, {
+    ? applyStrictLocks(allowed, {
         genres: resolvedGenres ?? show.genres ?? [],
         eras: show.eras ?? [],
         moods: show.moods ?? [],
@@ -90,7 +102,7 @@ export function airableAnchorTracks<T extends ShowTrack>(
           ? show.vocals
           : '') as VocalMode,
       }, { starve: false })
-    : playlistTracks;
+    : allowed;
   // Hard, unlike the pool picker's never-starve use of the same floor: what can
   // air, not a pool that must not empty. Nothing left = nothing airable.
   const airable = applyTrackFloor(applyKnownTrackCeiling(filtered, maxTrackSec), minTrackSec ?? null, { starve: true });
@@ -108,18 +120,44 @@ export function airableAnchorTracks<T extends ShowTrack>(
 // a few hours, every discovery source came back empty, and each pick fell to
 // the fallback pool. A strict playlist was already clamped to its own size; a
 // strict filter is the same kind of closed catalogue.
+type StrictShowPoolOptions = {
+  show: RecencyShow;
+  excludedIds: Set<string> | null;
+  resolvedGenres?: string[];
+  minTrackSec?: number | null;
+  maxTrackSec?: number | null;
+};
+
 export function strictShowLibraryPool<T extends ShowTrack>(
   libraryTracks: T[] | null | undefined,
-  opts: {
-    show: RecencyShow;
-    excludedIds: Set<string> | null;
-    resolvedGenres?: string[];
-    minTrackSec?: number | null;
-    maxTrackSec?: number | null;
-  },
+  opts: StrictShowPoolOptions,
 ): T[] | null {
   if (!opts.show?.filtersStrict || !libraryTracks) return null;
   return airableAnchorTracks(libraryTracks, opts);
+}
+
+// strictShowLibraryPool over a library read in pages, yielding between them so
+// the SQL read and row mapping never block the controller for the whole
+// catalogue. The pages are only COLLECTED here: airableAnchorTracks runs once,
+// on the whole set, because its strict locks never-starve per dimension, and
+// applied page by page a page with no genre match would skip the genre lock and
+// bring every row on it into the pool. A scan that fails part-way (the library
+// was restored, reset or closed between pages) falls back at once to the whole
+// synchronous read, the pre-paging behaviour; with no fallback it throws.
+export async function strictShowLibraryPoolSliced<T extends ShowTrack>(
+  libraryBatches: AsyncIterable<T[]>,
+  opts: StrictShowPoolOptions,
+  wholeLibrary?: () => T[],
+): Promise<T[] | null> {
+  if (!opts.show?.filtersStrict) return null;
+  const rows: T[] = [];
+  try {
+    for await (const page of libraryBatches) for (const row of page) rows.push(row);
+  } catch (err) {
+    if (!wholeLibrary) throw err;
+    return strictShowLibraryPool(wholeLibrary(), opts);
+  }
+  return strictShowLibraryPool(rows, opts);
 }
 
 export function showNoRepeatGuard(
@@ -129,6 +167,7 @@ export function showNoRepeatGuard(
     show,
     playlistTracks,
     episodeTracks = null,
+    episodeAiringStartedAt = null,
     excludedIds,
     resolvedGenres,
     minTrackSec,
@@ -138,6 +177,10 @@ export function showNoRepeatGuard(
     show: RecencyShow;
     playlistTracks: ShowTrack[] | null;
     episodeTracks?: ShowTrack[] | null;
+    // When the episode's current airing began (the preparation occurrence's
+    // startsAt). Null or absent = unknown, and the episode falls back to the
+    // configured N over the station's plays.
+    episodeAiringStartedAt?: number | null;
     excludedIds: Set<string> | null;
     // Free-text show genres already resolved onto library tags, so capacity and
     // eligibility agree.
@@ -152,8 +195,33 @@ export function showNoRepeatGuard(
   },
 ): ShowNoRepeatGuard {
   if (episodeTracks) {
+    // The episode outranks the anchor playlist, so its own tracks are the
+    // universe here. resolveArtistEpisodeSource has already applied the show's
+    // airable rule to them (excluded playlists, clean show, locks, length), so
+    // they are counted as given.
     const identities = new Set(episodeTracks.map(track => track.title ? `key:${trackKey(track)}` : `id:${track.id}`));
-    return { window: effectiveNoRepeatWindow(configuredN, identities.size), exhaustive: false };
+    // Full rotation over the episode (#2320): the show's switch means "every
+    // track once before a repeat", and during an episode the episode is the set
+    // that can be true of. Gated exactly as the playlist branch below gates it,
+    // so the switch stays a no-op without playlistStrict. Measured over the
+    // episode's OWN airings through `rotation`, as #1919 measures a playlist's.
+    if (show?.playlistStrict && show.playlistExhaust === true) {
+      const window = exhaustiveNoRepeatWindow(identities.size);
+      return window > 0 ? { window, exhaustive: true, rotation: episodeTracks } : { window, exhaustive: false };
+    }
+    // Otherwise no track twice in ONE airing: everything this airing has
+    // played is held, counted over the episode's own airings since it began,
+    // and a repeat across airings is left to the soft recency. The S-2 window
+    // caps it at S-1 held with the on-air and queued tracks, so one always
+    // survives. `noRepeatWindow: 0` still turns the guard off.
+    const window = episodeNoRepeatWindow(configuredN, identities.size) > 0 ? exhaustiveNoRepeatWindow(identities.size) : 0;
+    if (window > 0 && Number.isFinite(episodeAiringStartedAt)) {
+      return { window, exhaustive: false, rotation: episodeTracks, airedSince: episodeAiringStartedAt as number };
+    }
+    // No airing start known: the configured N under the episode's own S-2
+    // headroom, over the station's plays. effectiveNoRepeatWindow's ceiling and
+    // floor turned the guard off for any artist under 40 tracks (#2320).
+    return { window: episodeNoRepeatWindow(configuredN, identities.size), exhaustive: false };
   }
   // A soft anchor can leave the playlist, and an unresolved strict anchor has
   // no playlist lock at runtime. Both still need the library-wide window.
@@ -192,7 +260,7 @@ export function showNoRepeatGuard(
 // break came round again while others had not aired at all.
 export function hardRecentFor(guard: ShowNoRepeatGuard, history: NoRepeatHistory): { ids: Set<string>; keys: Set<string> } {
   return guard.rotation
-    ? rotationHardSet(guard.rotation, history.rotationAirTimes(), guard.window)
+    ? rotationHardSet(guard.rotation, history.rotationAirTimes(), guard.window, guard.airedSince)
     : history.recentlyPlayedByCount(guard.window);
 }
 
@@ -207,12 +275,15 @@ export function rotationHardSet(
   rotation: ShowTrack[],
   airTimeOf: AirTimeOf,
   window: number,
+  // Only airings at or after this instant count (an episode's current airing).
+  // On-air and queued stamp Infinity, so they always count.
+  since: number = -Infinity,
 ): { ids: Set<string>; keys: Set<string> } {
   const ids = new Set<string>();
   const keys = new Set<string>();
   if (!Number.isFinite(window) || window <= 0) return { ids, keys };
   const aired = rotationIdentities(rotation, airTimeOf)
-    .filter(identity => identity.at != null)
+    .filter(identity => identity.at != null && identity.at >= since)
     // Equal stamps compare as equal: Infinity - Infinity is NaN.
     .sort((a, b) => (a.at === b.at ? 0 : (b.at as number) - (a.at as number)));
   for (const identity of aired.slice(0, window + 1)) {

@@ -5,7 +5,7 @@
 If you find a security issue, please **do not open a public issue**. Instead,
 report it privately:
 
-- Email: perminder.klair@gmail.com
+- Email: hello@getsubwave.com
 - Or use GitHub's [private vulnerability reporting](https://docs.github.com/en/code-security/security-advisories/guidance-on-reporting-and-writing-information-about-vulnerabilities/privately-reporting-a-security-vulnerability)
   on this repository.
 

@@ -111,13 +111,19 @@ export function pickerToolsSynthetic() {
   };
   const tools: any = {
     searchLibrary: tool({
-      description: 'Search the music library by artist name, song title, or real genre (e.g. "jazz", "punjabi"). Returns matching songs.',
+      description: 'Search the music library by artist name, song title, or real genre (e.g. "jazz", "punjabi"). Pass a title or an artist alone, never "X by Y": every word must match, so "by" alone finds nothing. Returns matching songs.',
       inputSchema: z.object({ query: z.string() }),
+      // search3's rule: every word must match, and a miss is empty. A fake that
+      // answered a miss with library rows could never show a model's "X by Y"
+      // query failing (#2195). The answer is the live tool's empty shape, never
+      // a bare [], which draws a fabricated id.
       execute: async ({ query }: any) => {
-        const q = String(query || '').toLowerCase();
-        const hits = LIBRARY.filter(s =>
-          s.title.toLowerCase().includes(q) || s.artist.toLowerCase().includes(q) || s.genre.toLowerCase().includes(q));
-        return wrap(hits.length ? hits.slice(0, 6) : LIBRARY.slice(0, 6));
+        const words = String(query || '').toLowerCase().split(/\s+/).filter(Boolean);
+        const hits = LIBRARY.filter(s => {
+          const text = `${s.title} ${s.artist} ${s.album} ${s.genre}`.toLowerCase();
+          return words.every(word => text.includes(word));
+        });
+        return hits.length ? wrap(hits.slice(0, 6)) : { tracks: [], note: 'nothing matched this search — choose from your other tool results this round' };
       },
     }),
     similarSongs: tool({
@@ -190,11 +196,24 @@ export function requestMessages(requestText: string, requester = 'bench') {
 
 // --- Segment fixtures --------------------------------------------------------
 
+// Shaped like the built-in weather tool's result (skills/builtins/weather/tool.mjs).
+const benchHour = (inHours: number, condition: string, conditions: string, temp: number, rainChancePct: number) =>
+  ({ inHours, condition, conditions, temp, rainChancePct });
 export const WEATHER_FRESH = {
-  available: true, location: 'Punjab', condition: 'rainy', temp: 33, tempUnit: 'C', changedSinceLastMention: true,
+  available: true, location: 'Punjab', condition: 'rainy', conditions: 'heavy rain showers', temp: 33, tempUnit: 'C',
+  changedSinceLastMention: true, outlookChangedSinceLastMention: true,
+  outlook: ['drying out in about 3 hours'], outlookKinds: ['drying'],
+  nextHours: [
+    benchHour(1, 'rainy', 'rain showers', 32, 80), benchHour(2, 'rainy', 'light rain showers', 32, 55),
+    benchHour(3, 'cloudy', 'partly cloudy', 31, 20), benchHour(4, 'cloudy', 'partly cloudy', 31, 10),
+    benchHour(5, 'clear', 'mainly clear', 31, 5), benchHour(6, 'clear', 'clear sky', 31, 0),
+  ],
 };
 export const WEATHER_DULL = {
-  available: true, location: 'Punjab', condition: 'clear', temp: 31, tempUnit: 'C', changedSinceLastMention: false,
+  available: true, location: 'Punjab', condition: 'clear', conditions: 'clear sky', temp: 31, tempUnit: 'C',
+  changedSinceLastMention: false, outlookChangedSinceLastMention: false,
+  outlook: [], outlookKinds: [],
+  nextHours: [1, 2, 3, 4, 5, 6].map(h => benchHour(h, 'clear', 'clear sky', 31, 0)),
 };
 export const NEWS_DATA = {
   feed: 'BBC World',
@@ -240,6 +259,7 @@ export function freshSegmentState() {
   return {
     seenHeadlines: new Set<string>(),
     lastWeatherCondition: null,
+    lastWeatherOutlook: null,
     lastSearchedArtist: null,
     lastAnySegment: 0,
   };

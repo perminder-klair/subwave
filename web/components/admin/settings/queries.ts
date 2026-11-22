@@ -15,11 +15,14 @@ import {
 import { useAdminQuery } from '@/lib/admin-query';
 import { errorMessage } from '@/lib/notify';
 import { resetGeminiLibraryDefaults } from '../tts/geminiLibraryQueries';
+import { patchMovesStemUsage, type StemUsageResponse } from './stem-budget';
 
 export const settingsKeys = {
   all: ['settings'] as const,
   detail: () => ['settings', 'detail'] as const,
   genreSuggestions: () => ['settings', 'genre-suggestions'] as const,
+  // The stem cache's stored size, read beside the budget field.
+  stemUsage: () => ['settings', 'stem-usage'] as const,
 };
 
 export interface SettingsSaveResult<TSaved = Record<string, unknown>> {
@@ -47,6 +50,18 @@ export function useSettingsQuery<T>({
     request: (fetcher, signal) => adminJson<T>(fetcher, '/settings', undefined, signal),
     ...(refetchInterval !== undefined ? { refetchInterval } : {}),
     ...(refetchOnMount !== undefined ? { refetchOnMount } : {}),
+    toastOnError: false,
+  });
+}
+
+/** The stem cache's STORED size (never a walk) for the budget field.
+ *  Silent on failure: the field simply shows no figure. */
+export function useStemUsageQuery({ adminFetch, enabled }: { adminFetch: AdminFetch; enabled: boolean }) {
+  return useAdminQuery<StemUsageResponse>({
+    key: settingsKeys.stemUsage(),
+    adminFetch,
+    enabled,
+    request: (fetcher, signal) => adminJson<StemUsageResponse>(fetcher, '/stem-cache/usage', undefined, signal),
     toastOnError: false,
   });
 }
@@ -153,6 +168,12 @@ export function useSettingsMutation<TSettings>({
         }
       });
       receiptRef.current = { ...receiptRef.current, ...read };
+      // The budget field's note reads the usage route, whose answer follows the
+      // saved budget and pick-time setting: without this it lagged a save
+      // until its own refetch.
+      if (patchMovesStemUsage(patch)) {
+        void client.invalidateQueries({ queryKey: settingsKeys.stemUsage() });
+      }
     },
   });
   const runMutation = mutation.mutateAsync;

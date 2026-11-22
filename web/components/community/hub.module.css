@@ -1,0 +1,370 @@
+/* /community — the Commons. Department tiles with their counts, the newest
+   additions as a wire, and a contributor roll call. Theme tokens only. */
+
+.section {
+    margin: 0 0 clamp(40px, 6vw, 72px);
+}
+.sectionHead {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 0 0 16px;
+    padding-bottom: 8px;
+    border-bottom: 3px double var(--ink);
+}
+.sectionTitle {
+    margin: 0;
+    font-family: var(--font-display);
+    font-size: clamp(26px, 3.4vw, 40px);
+    font-weight: 900;
+    letter-spacing: -0.02em;
+    line-height: 1;
+    text-transform: uppercase;
+}
+.sectionNote {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+
+/* ---- Department tiles --------------------------------------------------- */
+
+.depts {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 0;
+    border: 2px solid var(--ink);
+}
+.dept {
+    grid-column: span 2;
+    min-width: 0;
+    border-right: 1px solid var(--ink);
+    border-bottom: 1px solid var(--ink);
+}
+/* Two big tiles on the top row, three on the bottom. */
+.dept:nth-child(1),
+.dept:nth-child(2) {
+    grid-column: span 3;
+}
+.dept:nth-child(2),
+.dept:nth-child(5) {
+    border-right: 0;
+}
+.dept:nth-child(n + 3) {
+    border-bottom: 0;
+}
+@media (max-width: 760px) {
+    .depts {
+        grid-template-columns: minmax(0, 1fr);
+    }
+    .dept,
+    .dept:nth-child(1),
+    .dept:nth-child(2) {
+        grid-column: auto;
+        border-right: 0;
+        border-bottom: 1px solid var(--ink);
+    }
+    .dept:last-child {
+        border-bottom: 0;
+    }
+}
+.deptLink {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    height: 100%;
+    padding: clamp(18px, 2.4vw, 28px);
+    color: var(--ink);
+    text-decoration: none;
+    overflow: hidden;
+    transition: background 160ms ease, color 160ms ease;
+}
+.dept:nth-child(1) .deptLink {
+    background: var(--ink);
+    color: var(--bg);
+}
+.deptLink:hover,
+.deptLink:focus-visible,
+.dept:nth-child(1) .deptLink:hover,
+.dept:nth-child(1) .deptLink:focus-visible {
+    background: var(--accent);
+    color: var(--bg);
+}
+.deptTag {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.26em;
+    text-transform: uppercase;
+    color: var(--accent);
+}
+.deptLink:hover .deptTag,
+.deptLink:focus-visible .deptTag {
+    color: inherit;
+}
+.deptRow {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 12px;
+}
+.deptTitle {
+    margin: 0;
+    font-family: var(--font-display);
+    font-size: clamp(30px, 4vw, 52px);
+    font-weight: 900;
+    letter-spacing: -0.02em;
+    line-height: 0.9;
+    text-transform: uppercase;
+}
+.deptCount {
+    font-family: var(--font-display);
+    font-size: clamp(54px, 8vw, 112px);
+    font-weight: 900;
+    line-height: 0.8;
+    letter-spacing: -0.04em;
+    color: transparent;
+    -webkit-text-stroke: 1.5px currentColor;
+    font-variant-numeric: tabular-nums;
+}
+.deptBlurb {
+    margin: 0;
+    font-size: 14px;
+    line-height: 1.5;
+    opacity: 0.8;
+    max-width: 44ch;
+}
+.deptPreview {
+    margin: auto 0 0;
+    padding-top: 8px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    opacity: 0.7;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.deptGo {
+    position: absolute;
+    top: clamp(16px, 2.2vw, 26px);
+    right: clamp(16px, 2.2vw, 26px);
+    font-size: 20px;
+    line-height: 1;
+    transition: transform 160ms ease;
+}
+.deptLink:hover .deptGo,
+.deptLink:focus-visible .deptGo {
+    transform: translate(3px, -3px);
+}
+
+/* ---- Two-column lower half ---------------------------------------------- */
+
+.lower {
+    display: grid;
+    grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+    gap: clamp(28px, 5vw, 64px);
+}
+@media (max-width: 860px) {
+    .lower {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+/* ---- The wire ----------------------------------------------------------- */
+
+.wire {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    position: relative;
+}
+.wire::before {
+    content: '';
+    position: absolute;
+    top: 6px;
+    bottom: 6px;
+    left: 5px;
+    width: 1px;
+    background: var(--line);
+}
+.wireItem {
+    position: relative;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+    padding: 0 0 18px 26px;
+}
+.wireItem::before {
+    content: '';
+    position: absolute;
+    top: 4px;
+    left: 0;
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    background: var(--bg);
+    border: 2px solid var(--accent);
+}
+.wireItem:first-child::before {
+    background: var(--accent);
+}
+.wireMeta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 10px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+.wireKind {
+    padding: 1px 6px;
+    border: 1px solid currentColor;
+    color: var(--accent);
+    font-weight: 700;
+}
+.wireName {
+    font-family: var(--font-display);
+    font-size: clamp(18px, 2vw, 23px);
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    line-height: 1.15;
+    color: var(--ink);
+    text-decoration: none;
+}
+.wireName:hover,
+.wireName:focus-visible {
+    color: var(--accent);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+
+/* ---- Roll call ---------------------------------------------------------- */
+
+.roll {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    counter-reset: roll;
+}
+.rollItem {
+    counter-increment: roll;
+    display: grid;
+    grid-template-columns: 28px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 4px 12px;
+    padding: 10px 0;
+    border-bottom: 1px dotted var(--line);
+}
+.rollItem::before {
+    content: counter(roll, decimal-leading-zero);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--muted);
+}
+.rollItem:nth-child(-n + 3)::before {
+    color: var(--accent);
+}
+.rollName {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.rollName a {
+    color: var(--ink);
+    text-decoration: none;
+}
+.rollName a:hover,
+.rollName a:focus-visible {
+    color: var(--accent);
+    text-decoration: underline;
+}
+.rollTotal {
+    font-family: var(--font-display);
+    font-size: 22px;
+    font-weight: 900;
+    line-height: 1;
+}
+.rollBar {
+    grid-column: 2 / -1;
+    display: block;
+    width: 100%;
+    height: 6px;
+}
+/* One colour per department, as a fill (SVG bar) and a background (legend). */
+.rollSeg[data-kind='skill'] {
+    fill: var(--accent);
+    background: var(--accent);
+}
+.rollSeg[data-kind='persona'] {
+    fill: var(--ink);
+    background: var(--ink);
+}
+.rollSeg[data-kind='show'] {
+    fill: color-mix(in oklab, var(--accent) 50%, var(--bg));
+    background: color-mix(in oklab, var(--accent) 50%, var(--bg));
+}
+.rollSeg[data-kind='app'] {
+    fill: var(--line);
+    background: var(--line);
+}
+.rollSeg[data-kind='station'] {
+    fill: var(--ink-faint);
+    background: var(--ink-faint);
+}
+/* A hairline between segments, in the page colour. */
+.rollBar .rollSeg {
+    stroke: var(--bg);
+    stroke-width: 0.06;
+    vector-effect: non-scaling-stroke;
+}
+.legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 14px;
+    margin: 12px 0 0;
+    padding: 0;
+    list-style: none;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+.legend li {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.legend .rollSeg {
+    display: inline-block;
+    width: 14px;
+    height: 6px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .deptLink,
+    .deptGo {
+        transition: none;
+    }
+    .deptLink:hover .deptGo,
+    .deptLink:focus-visible .deptGo {
+        transform: none;
+    }
+}

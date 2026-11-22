@@ -1,19 +1,20 @@
 
 @keyframes platter-spin { to { transform: rotate(360deg); } }
-@keyframes platter-sheen { to { transform: rotate(360deg); } }
-@keyframes platter-rim { to { transform: rotate(360deg); } }
+@keyframes platter-sheen { from { transform: rotate(-5deg); } to { transform: rotate(5deg); } }
 @keyframes platter-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.28; } }
 
 /* Each turns only while .playing. The pause rides in the shorthand itself: a
    separate animation-play-state rule ahead of these was reset by them, so the
    record went on spinning after STOP. */
-/* Keep .rim and .record durations equal so the mat and record rotate together. */
 .record { animation: platter-spin 5.9s linear infinite paused; }
 /* Pure white laid over anything at some alpha: screen-blended, white over a
    colour is white, so plain alpha paints the same, without making WebKit
-   blend one turning layer into another. */
+   blend one turning layer into another.
+   The light is the room's, so it stays where it is while the record turns
+   under it: it only sways, once a turn each way, as a record that isn't quite
+   flat throws it. Turning with the record, it read as paint on the vinyl. */
 .sheen {
-  animation: platter-sheen 11.8s linear infinite paused;
+  animation: platter-sheen 5.9s ease-in-out infinite alternate paused;
   background: conic-gradient(
     from 210deg,
     rgba(255, 255, 255, 0) 0deg,
@@ -24,14 +25,12 @@
     rgba(255, 255, 255, 0) 344deg
   );
 }
-.rim { animation: platter-rim 5.9s linear infinite paused; }
 .pulse { animation: platter-pulse 2.4s ease-in-out infinite paused; }
 .playing { animation-play-state: running; }
 
 @media (prefers-reduced-motion: reduce) {
   .record,
   .sheen,
-  .rim,
   .pulse {
     animation: none;
   }
@@ -59,6 +58,18 @@
 }
 .armRest { transform: rotate(-24deg); }
 .armLive { transform: rotate(calc(-14deg + var(--pf, 0) * 22deg)); }
+
+/* The arm's shadow, in the ink so it darkens a pale deck and a dark one. */
+.armShade { fill: var(--ink); stroke: var(--ink); opacity: 0.18; }
+
+/* Progress round the record (ProgressRing): lit ticks where the song has been. */
+.tick { fill: none; stroke: color-mix(in oklab, var(--ink) 26%, transparent); stroke-width: 0.3; stroke-linecap: round; }
+.tickLit { fill: none; stroke: var(--accent); stroke-width: 0.55; stroke-linecap: round; }
+
+/* The sleeve's wash gathers round the record and is gone by the table's
+   corners. The gradient's 100% is the corner, and the record's edge sits near
+   half of that, so the wash is held in full to just past the tick ring. */
+.wash { mask-image: radial-gradient(circle at 50% 50%, #000 62%, transparent 96%); }
 
 .progFill { width: calc(var(--pf, 0) * 100%); }
 .progHead { left: calc(var(--pf, 0) * 100%); }
@@ -147,6 +158,8 @@
 
 /* The column folds away; in its place the deck spreads across the stage. */
 .stageIn { animation: platter-stage-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; }
+/* The deck gives the lyrics the stage's left third and takes it back. */
+.stageSlides { transition: left 0.6s cubic-bezier(0.22, 1, 0.36, 1); }
 @keyframes platter-stage-in {
   from { opacity: 0; transform: translateY(14px) scale(0.96); }
   to { opacity: 1; transform: none; }
@@ -232,5 +245,46 @@
 @media (prefers-reduced-motion: reduce) {
   .isoSpin,
   .stageIn { animation: none; }
+  .stageSlides { transition: none; }
   .armSwing .isoArm { transition: none; }
 }
+
+/* ── Focus mode: the lyrics wheel (PlatterLyrics) ──────────────────────── */
+
+/* Every line is a spoke about one hub, two spokes' length off to the right
+   where the record is, so a notch of 5° spreads the lines' left ends about a
+   quarter of the wheel's width apart and their right ends two thirds of
+   that: far enough round to read as a wheel, near enough to parallel that a
+   three-line sung line clears its neighbours. The sung
+   line lies level; clockwise lifts a sung line up and away, anticlockwise
+   holds a coming one below. The outermost notch either way is invisible: a
+   line enters and leaves through it, so nothing ever mounts into view. */
+.spoke {
+  transform-origin: 300% 50%;
+  color: var(--ink);
+}
+.wheelTurns .spoke {
+  transition: transform 0.7s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.7s ease-out;
+}
+.spokeM3 { transform: translateY(-50%) rotate(15deg); opacity: 0; }
+.spokeM2 { transform: translateY(-50%) rotate(10deg); opacity: 0.14; }
+.spokeM1 { transform: translateY(-50%) rotate(5deg); opacity: 0.36; }
+/* The anchor between songs' lines (a break): level, but as faint as sung. */
+.spoke0 { transform: translateY(-50%) rotate(0deg); opacity: 0.36; }
+.spokeP1 { transform: translateY(-50%) rotate(-5deg); opacity: 0.4; }
+.spokeP2 { transform: translateY(-50%) rotate(-10deg); opacity: 0.16; }
+.spokeP3 { transform: translateY(-50%) rotate(-15deg); opacity: 0; }
+.spokeSung { opacity: 1; }
+
+/* Words ink in as they are sung. */
+.word { opacity: 0.38; }
+.wordLit { opacity: 1; }
+.wheelTurns .word { transition: opacity 0.5s ease-out; }
+
+/* Untimed lines dissolve at the column's top and bottom rather than cut. */
+.plainLyrics {
+  padding-block: 1.4em;
+  scrollbar-width: none;
+  mask-image: linear-gradient(to bottom, transparent, #000 1.4em, #000 calc(100% - 1.4em), transparent);
+}
+.plainLyrics::-webkit-scrollbar { display: none; }

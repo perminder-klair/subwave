@@ -6,7 +6,7 @@ import { generateText, Output } from 'ai';
 import { withFailover } from '../core/failover.js';
 import { withTransientRetry } from '../core/retry.js';
 import { stripThinking, extractJson, perfOf, warningsOf, failureDiagnostics, schemaHint, isModelUnavailable, isGenerationControlError, createUsageMeter } from '../core/pure.js';
-import { needsToolCallObject, reasoningFor, samplingWithLocalKnobs, googleSafetyOptions } from '../provider/capabilities.js';
+import { needsToolCallObject, llmCallOptions, samplingWithLocalKnobs } from '../provider/capabilities.js';
 import { objectViaToolCall } from './object-via-tool.js';
 import { resolveMaxOutputTokens } from '../../../settings.js';
 
@@ -64,8 +64,7 @@ export async function djObject({
               temperature,
               maxOutputTokens,
               output: Output.object({ schema }),
-              reasoning: reasoningFor(l.cfg),
-              ...googleSafetyOptions(l.cfg),
+              ...llmCallOptions(l.cfg),
               ...(signal ? { abortSignal: signal } : {}),
               onLanguageModelCallEnd: meter.onLanguageModelCallEnd,
             }), signal);
@@ -83,8 +82,7 @@ export async function djObject({
                 + (hint ? ` It MUST validate against this JSON Schema — every required key must be present:\n${hint}` : ''),
               temperature,
               maxOutputTokens,
-              reasoning: reasoningFor(l.cfg, { forceNoThink: true }),
-              ...googleSafetyOptions(l.cfg),
+              ...llmCallOptions(l.cfg, { forceNoThink: true }),
               ...(signal ? { abortSignal: signal } : {}),
               onLanguageModelCallEnd: meter.onLanguageModelCallEnd,
             }), signal);

@@ -8,8 +8,8 @@ import pc from 'picocolors';
 import readline from 'node:readline';
 import { getInteractiveInput, inPipedStdinDangerZone } from './tty.ts';
 
-// Undefined with no /dev/tty (CI, headless), which leaves @clack/core on its
-// process.stdin default.
+// Undefined off macOS (#2262) or with no /dev/tty (CI, headless), which leaves
+// @clack/core on its process.stdin default.
 const interactiveInput = getInteractiveInput();
 function withInput<T>(opts: T): T {
   if (!interactiveInput) return opts;

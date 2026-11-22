@@ -219,11 +219,16 @@ export interface SegProps extends AriaAttributes {
   options: SegOption[];
   accent?: boolean;
   onChange?: (id: string) => void;
+  /** Lay the tabs out as an even grid filling the width (columns set by the
+   *  caller, e.g. `grid-cols-3 @min-[440px]:grid-cols-6`). Hairline rules come
+   *  from a 1px gap over the ink background, so a wrapped row keeps every
+   *  border, which flex-wrap with `border-l` does not. */
+  fill?: string;
 }
 
 /* Segmented control over shadcn ToggleGroup. Clicking the active item is a
    no-op: the group always keeps a value. */
-export function Seg({ value, options, accent, onChange, ...aria }: SegProps) {
+export function Seg({ value, options, accent, onChange, fill, ...aria }: SegProps) {
   return (
     <ToggleGroup
       {...aria}
@@ -232,7 +237,9 @@ export function Seg({ value, options, accent, onChange, ...aria }: SegProps) {
       onValueChange={(v: string) => { if (v && onChange) onChange(v); }}
       // w-fit/max-w-full keep the control hugging its tabs; a parent `.field`
       // (align-items:stretch) would otherwise stretch it to full width.
-      className="inline-flex w-fit max-w-full flex-wrap gap-0 border border-ink"
+      className={fill
+        ? cn('grid w-full gap-px border border-ink bg-ink', fill)
+        : 'inline-flex w-fit max-w-full flex-wrap gap-0 border border-ink'}
     >
       {options.map((o, i) => (
         <ToggleGroupItem
@@ -242,7 +249,7 @@ export function Seg({ value, options, accent, onChange, ...aria }: SegProps) {
           className={cn(
             'h-auto min-w-0 rounded-none border-0 px-[13px] py-[7px] text-[10px] font-bold tracking-[0.18em] text-ink uppercase',
             'hover:bg-[var(--ink-soft)] hover:text-ink',
-            i > 0 && 'border-l border-ink',
+            fill ? 'w-full bg-[var(--card-bg)]' : i > 0 && 'border-l border-ink',
             accent
               ? 'data-[state=on]:bg-[var(--accent)] data-[state=on]:text-white'
               : 'data-[state=on]:bg-ink data-[state=on]:text-bg',

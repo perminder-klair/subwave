@@ -1,5 +1,5 @@
 {
- "updatedAt": "2026-08-05",
+ "updatedAt": "2026-10-30",
  "models": [
   {
    "model": "openrouter:openai/gpt-5.6-luna",
@@ -512,6 +512,51 @@
    "poolPickP50s": 16.1,
    "verdict": "pool-mode",
    "notes": "Structured/pool kinds only (×2) on a CPU host — latency excluded. Same family habits as the 31B."
+  },
+  {
+   "model": "locca:LFM3-1.7B-Q4_K_M.gguf",
+   "route": "locca",
+   "benchedAt": "2026-10-30",
+   "iterations": 3,
+   "reasoning": "off",
+   "coverage": "full",
+   "overall": {
+    "ok": 142,
+    "total": 165
+   },
+   "groups": {
+    "pickPool": {
+     "ok": 18,
+     "total": 24
+    },
+    "pickAgent": {
+     "ok": 5,
+     "total": 6
+    },
+    "segPool": {
+     "ok": 12,
+     "total": 12
+    },
+    "segAgent": {
+     "ok": 5,
+     "total": 6
+    },
+    "requests": {
+     "ok": 66,
+     "total": 72
+    },
+    "scripts": {
+     "ok": 18,
+     "total": 21
+    },
+    "shows": {
+     "ok": 18,
+     "total": 24
+    }
+   },
+   "poolPickP50s": 1.9,
+   "verdict": "pool-mode",
+   "notes": "The smallest model on record, served from a laptop iGPU (Radeon 890M, Vulkan) at under 2 s a pick, and not one call threw. Its misses are content, not format: it falls for the same-artist trap every time (pool and Shortlist), writes “hiphop” for hip-hop, reaches for banned openers in links and show talk, and invented one id in an agent pick. thinking:false is leaky: reasoning spilled into the reply on 3 runs, one taking 47 s. Benched on the current, larger matrix (Shortlist and direct requests), so its overall isn’t a like-for-like with the July rows."
   },
   {
    "model": "openai-compatible:qwen/qwen3.5-9b",

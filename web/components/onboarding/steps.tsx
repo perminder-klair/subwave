@@ -38,6 +38,12 @@ import { V3Alert } from '@/components/ui/alert';
 import { SourceFields } from '../admin/music/SourceFields';
 import { blankSource, missingFields, selectablePlugins, type DraftSource } from '../admin/music/sourceDraft';
 import type { MusicPluginInfo, RouterTestResult } from '@/lib/schemas.generated';
+import {
+  DJ_BRAIN_BASE_URL,
+  DJ_BRAIN_CHAT_MODEL,
+  DJ_BRAIN_SIGNUP_URL,
+  isDjBrainUrl,
+} from '@/lib/djBrain';
 
 // Presentation primitives kept local to the wizard, so a screen most operators
 // see once doesn't drag in the full admin UI library.
@@ -349,14 +355,13 @@ const llmStepSchema = z.object({
 });
 
 // The hosted DJ Brain is a preset over the openai-compatible provider, not a
-// provider of its own: one click fills base URL + model and everything
-// downstream is the ordinary compat path.
-const DJ_BRAIN_BASE_URL = 'https://my.getsubwave.com/v1';
-const DJ_BRAIN_MODEL = 'dj-brain';
-const DJ_BRAIN_SIGNUP_URL = 'https://my.getsubwave.com/brain';
+// provider of its own (lib/djBrain.ts): one click fills base URL + model, and
+// moving on asks the brain whether the key's plan includes the studio voice,
+// which the save then wires from the same key.
 
 export function LlmStep({ w }: { w: WizardController }) {
   const [busy, setBusy] = useState(false);
+  const [brainCheck, setBrainCheck] = useState<{ ok: boolean; msg: string } | null>(null);
   const form = useZodForm(llmStepSchema, {
     provider: w.data.llm.provider,
     model: w.data.llm.model,
@@ -372,13 +377,13 @@ export function LlmStep({ w }: { w: WizardController }) {
   const isOllama = provider === 'ollama';
   const isLocca = provider === 'locca';
   const isCustom = provider === 'openai-compatible';
-  const isDjBrain = isCustom && baseUrl.trim() === DJ_BRAIN_BASE_URL;
+  const isDjBrain = isCustom && isDjBrainUrl(baseUrl);
 
   const providerField = useController({ control, name: 'provider' });
   const useDjBrain = () => {
     form.setValue('provider', 'openai-compatible', { shouldValidate: true });
     form.setValue('baseUrl', DJ_BRAIN_BASE_URL, { shouldValidate: true });
-    form.setValue('model', DJ_BRAIN_MODEL, { shouldValidate: true });
+    form.setValue('model', DJ_BRAIN_CHAT_MODEL, { shouldValidate: true });
     form.setValue('ollamaUrl', '', { shouldValidate: true });
   };
   const modelField = useController({ control, name: 'model' });
@@ -401,9 +406,11 @@ export function LlmStep({ w }: { w: WizardController }) {
 
   // Enabled for the keyless-discoverable providers; cloud providers need their
   // key saved on the box first, so they fall back to free-typing the model id.
+  // Never for the brain: it serves one fixed model id, and its key-gated list
+  // would only read as "Discovery failed" before the key is saved.
   const discoveryEnabled =
     isOllama || isLocca ||
-    (isCustom && !!baseUrl.trim()) ||
+    (isCustom && !!baseUrl.trim() && !isDjBrain) ||
     provider === 'openrouter';
   const discovery = useModelDiscovery({
     provider,
@@ -421,10 +428,21 @@ export function LlmStep({ w }: { w: WizardController }) {
   });
   const serverProviders = settingsQuery.data?.llm?.providers;
 
-  const onNext = form.handleSubmit(vals => {
+  const onNext = form.handleSubmit(async vals => {
     const v = vals as unknown as WizardData['llm'];
+    let djBrainVoice = false;
+    if (v.provider === 'openai-compatible' && isDjBrainUrl(v.baseUrl)) {
+      // The brain can't work without a key it accepts, so a refusal stays here.
+      setBusy(true);
+      const c = await w.checkDjBrain(v.baseUrl, v.apiKey);
+      setBusy(false);
+      setBrainCheck({ ok: c.ok, msg: c.message });
+      if (!c.ok) return;
+      djBrainVoice = c.voice;
+    }
     w.patch({
       llm: v,
+      djBrainVoice,
       ...(testedRef.current !== JSON.stringify(liveValues) ? { llmTest: { ok: null } } : {}),
     });
     w.next();
@@ -441,7 +459,7 @@ export function LlmStep({ w }: { w: WizardController }) {
           <div className="grid gap-0.5">
             <span className={WIZARD_LABEL_CLASS}>No model to run?</span>
             <span className="text-sm text-ink">
-              SUB/WAVE DJ Brain is a hosted brain for this station — one key, from £5/month.{' '}
+              SUB/WAVE DJ Brain is a hosted brain for this station, with the studio voice on Brain Studio. One key, from $6/month.{' '}
               <a href={DJ_BRAIN_SIGNUP_URL} target="_blank" rel="noreferrer" className="underline">Get a key</a>
               {isDjBrain ? ', then paste it below.' : '.'}
             </span>
@@ -494,7 +512,7 @@ export function LlmStep({ w }: { w: WizardController }) {
             type="password"
             autoComplete="off"
             description={isDjBrain
-              ? 'Your DJ Brain access token from my.getsubwave.com/brain — stored in settings.json'
+              ? 'Your DJ Brain key from my.getsubwave.com/brain. On Brain Studio it wires the studio voice too. Stored in settings.json'
               : isCustom
                 ? 'Optional for most self-hosted servers — stored in settings.json'
                 : 'Stored in state/secrets.env (mode 0600), not in settings.json'}
@@ -553,7 +571,10 @@ export function LlmStep({ w }: { w: WizardController }) {
           </Button>
           <TestPill result={stale ? { ok: null } : w.data.llmTest} />
         </div>
-        <NextButton disabled={!form.formState.isValid} />
+        {isDjBrain && brainCheck && !brainCheck.ok && (
+          <p role="alert" className="text-sm text-destructive">{brainCheck.msg}</p>
+        )}
+        <NextButton disabled={busy || !form.formState.isValid} />
       </div>
     </form>
   );
@@ -608,6 +629,31 @@ export function TtsStep({ w }: { w: WizardController }) {
     w.next();
   });
 
+  const brainLlm = w.data.llm.provider === 'openai-compatible' && isDjBrainUrl(w.data.llm.baseUrl);
+  if (brainLlm && w.data.djBrainVoice) {
+    return (
+      <div>
+        <StepHeader
+          title="Voice: the DJ Brain studio voice"
+          blurb="Your Brain Studio key includes the studio voice, so the DJ will speak with it. Nothing to set up here."
+        />
+        <div className="grid gap-3">
+          <p className="text-sm text-muted">
+            When the month&apos;s studio hours are spent, the DJ drops to a plainer voice until
+            the month resets, unless you turn on extra voice hours at my.getsubwave.com/brain.
+            Fine-tune it later under Admin → Settings → TTS voice.
+          </p>
+          <div className="mt-2 flex flex-wrap justify-end gap-2">
+            <Button variant="outline" type="button" onClick={() => w.patch({ djBrainVoice: false })}>
+              Use a different voice instead
+            </Button>
+            <Button variant="solid" type="button" onClick={w.next}>Next →</Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <form onSubmit={onNext} noValidate>
       <StepHeader
@@ -615,6 +661,12 @@ export function TtsStep({ w }: { w: WizardController }) {
         blurb="Piper is the default — fast, local, decent. Kokoro is slower but more natural. Cloud routes through OpenAI, ElevenLabs, or Fish Audio."
       />
       <div className="grid gap-3">
+        {brainLlm && (
+          <V3Alert title="Your DJ Brain plan is brain only">
+            The DJ speaks with this station&apos;s own voice. Pick one below; Piper works out of
+            the box. Brain Studio adds the studio voice from the same key.
+          </V3Alert>
+        )}
         <SelectField
           control={form.control}
           name="defaultEngine"
@@ -819,15 +871,23 @@ export function ReviewStep({
     w.data.music.mode === 'router'
       ? ['Music', `${w.data.music.label || w.data.music.sources[0]?.plugin || '—'} (via the music router)`]
       : ['Navidrome', w.data.navidrome.url ? `${w.data.navidrome.user} @ ${w.data.navidrome.url}` : '— skipped —'],
-    ['LLM', `${w.data.llm.provider} · ${w.data.llm.model}`],
-    ['TTS', w.data.tts.defaultEngine + (w.data.tts.cloud.enabled ? ` (+ ${w.data.tts.cloud.provider})` : '')],
+    ...(w.hosted
+      ? [['DJ & voice', 'Managed by SUB/WAVE Cloud'] as [string, string]]
+      : [
+        ['LLM', `${w.data.llm.provider} · ${w.data.llm.model}`] as [string, string],
+        ['TTS', w.data.djBrainVoice && isDjBrainUrl(w.data.llm.baseUrl)
+          ? 'DJ Brain studio voice'
+          : w.data.tts.defaultEngine + (w.data.tts.cloud.enabled ? ` (+ ${w.data.tts.cloud.provider})` : '')] as [string, string],
+      ]),
     ['Station', `${w.data.dj.stationName} — ${w.data.dj.locationName}`],
   ];
   return (
     <div>
       <StepHeader
         title="All set?"
-        blurb="Review and save. Settings land in state/settings.json + state/setup-config.json; API keys land in state/secrets.env (mode 0600)."
+        blurb={w.hosted
+          ? 'Review and save. You can change all of this later in the admin panel.'
+          : 'Review and save. Settings land in state/settings.json + state/setup-config.json; API keys land in state/secrets.env (mode 0600).'}
       />
       <dl className="grid grid-cols-[120px_1fr] gap-x-4 gap-y-2 text-sm">
         {rows.map(([k, v]) => (
