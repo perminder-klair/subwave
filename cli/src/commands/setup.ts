@@ -281,7 +281,7 @@ async function detectOllamaUrl(): Promise<string | null> {
 const DJ_BRAIN_BASE_URL = 'https://my.getsubwave.com/v1';
 type LlmOption = { value: LlmProvider | 'later' | 'dj-brain'; label: string; hint: string };
 const DJ_BRAIN_OPTION: LlmOption = {
-  value: 'dj-brain', label: 'SUB/WAVE DJ Brain — hosted', hint: 'no model to run — one key from my.getsubwave.com/brain, from £5/mo',
+  value: 'dj-brain', label: 'SUB/WAVE DJ Brain — hosted', hint: 'no model to run — one key from my.getsubwave.com/brain, from $6/mo',
 };
 // The catalogue by group (on your network, then vendors, then gateways), with
 // DJ Brain offered right after the Ollama default.
