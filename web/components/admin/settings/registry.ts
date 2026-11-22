@@ -104,7 +104,7 @@ export const SECTIONS = [
     // and TTS voice sections keep the dirty tracking for those keys, and this
     // one holds local state only, so it lists no formKeys.
     id: 'brain', group: 'the dj', label: 'DJ Brain',
-    hint: 'one field · brain + voice', icon: BrainCircuit,
+    hint: 'one key · hosted brain', icon: BrainCircuit,
     formKeys: [],
   },
   {
