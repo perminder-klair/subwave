@@ -38,7 +38,7 @@ const FACTS = [
   'The DJ is a language model the operator chooses (Ollama, Anthropic, OpenAI, Google, DeepSeek, OpenRouter, Requesty, Cheaper Inference, Vercel AI Gateway, or any OpenAI-compatible server) and can switch without a redeploy. Its voice is text-to-speech: Piper and Kokoro built in, Chatterbox and PocketTTS in an optional sidecar, cloud voices, or a self-hosted TTS server.',
   'A station runs with Docker Compose on one host. The quickest install is `curl -fsSL https://cli.getsubwave.com | sh`, then `subwave setup` to connect Navidrome and a language model.',
   'Every station serves the same routes on one origin: the player at `/listen`, the admin console at `/admin`, the HTTP API under `/api`, an MCP server at `/api/mcp`, and the broadcast at `/stream.mp3` (always on) with optional `/stream.opus`, `/stream.aac` and `/stream.flac` mounts.',
-  'Two optional paid services fund the project: DJ Brain, a hosted model (with an optional cloud voice) for a self-hosted station, and SUB/WAVE Hosted, a whole station at `yourname.getsubwave.com`. Both are at https://my.getsubwave.com/.',
+  'Two optional paid services fund the project: DJ Brain, a hosted model (with an optional cloud voice) for a self-hosted station, and SUB/WAVE Hosted, a whole station at `yourname.subw.app`. Both are at https://my.getsubwave.com/.',
 ];
 
 export const LLMS_SECTIONS: LlmsSection[] = [
