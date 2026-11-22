@@ -10,6 +10,8 @@
 // Only the player's displayed times follow it. Schedule grids keep the station
 // zone whatever this says: a show's hours are station hours, and the "now"
 // marker has to land on the cell the controller resolves the active show from.
+// The classic schedule drawer still works in station hours but labels each one
+// in the chosen clock (lib/scheduleClock.ts).
 // Durations (elapsed / remaining) have no zone at all.
 
 export type ClockZone = 'station' | 'local';
