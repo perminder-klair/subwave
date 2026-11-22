@@ -1,5 +1,7 @@
 import EditorialReveal from '../landing/EditorialReveal';
+import Link from 'next/link';
 import { cn } from '@/lib/cn';
+import { IS_OFFICIAL_HOST } from '@/lib/site';
 
 // A small tag chip, matching the broadsheet pill box used in the Navidrome
 // "also works with" row. The accent variant swaps the border + ink to
@@ -82,6 +84,17 @@ export default function YourStack() {
             <div className="bs-seam-copy">
               <h3>{s.title}</h3>
               <p>{s.body}</p>
+              {/* The paid offer shows only on the project's own site (app/cloud). */}
+              {s.tag === 'Seam A' && IS_OFFICIAL_HOST && (
+                <p className="text-muted">
+                  No GPU, no keys to juggle?{' '}
+                  <strong className="text-ink">DJ Brain</strong> is one key for the
+                  model and the voice.{' '}
+                  <Link href="/cloud" className="font-semibold text-ink underline hover:text-vermilion">
+                    See the Cloud Edition →
+                  </Link>
+                </p>
+              )}
             </div>
             <div className="bs-seam-fits">
               <p className="bs-seam-fits-cap">Fits</p>
