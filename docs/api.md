@@ -22,7 +22,8 @@ tabs:
   setup is offered as the local-only alternative.
 - **Integrations** — the stream URLs (with live on/off state per mount),
   now-playing feeds, and paste-ready recipes for **Music Assistant** and **Home
-  Assistant**.
+  Assistant**. To send listener requests from a Home Assistant dashboard or
+  from Assist, see [Request a song from Home Assistant](./homeassistant/README.md).
 - **Webhooks** — the push direction: register outbound HTTP POSTs that fire on
   station events (track changes, requests, on-air segments), with every payload
   shape documented.
@@ -45,6 +46,14 @@ an admin credential:
   live show's host and guests already hydrated.
 - `GET /lyrics/current` — lyrics for the track a listener is hearing, when the
   operator has the Lyrics panel on (see **Lyrics** below).
+
+**Show text for listeners.** A show carries two pieces of text. `description`
+(up to 300 characters, `''` when the operator has not set one) is written for
+listeners. `topic` is the DJ's brief: instructions written for the model, often
+long. Show `description` when it is non-empty and fall back to `topic` when it is
+empty, which is what the web player does. Both `/schedule`'s shows and
+`/now-playing`'s `context.activeShow` carry both fields; `description` is absent
+from an older controller, so treat a missing key as empty.
 
 **Persona souls are opt-in.** A persona's `soul` is its system prompt rather
 than a written bio, so the roster-wide reads above publish it only when the
@@ -69,6 +78,10 @@ each one:
   without handing it the admin console.
 - **admin** — HTTP Basic with `ADMIN_USER` / `ADMIN_PASS`. `/dj/*`, `/library/*`,
   `/settings`, `/sfx`, `/jingles`, and everything else operational.
+  Ten different wrong passwords lock the client for 15 minutes: a `429` with
+  `Retry-After` and `{"code":"admin_locked"}`, which refuses the right password
+  too. Re-sending one wrong password counts once. See
+  [the login recovery notes](updating.md#the-admin-console-wont-accept-your-login).
 
 A station-gated read takes the password in any of three carriers, tried in that
 order:

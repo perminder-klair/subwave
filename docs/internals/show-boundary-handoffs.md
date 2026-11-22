@@ -125,10 +125,27 @@ while that intro is pending, the old runner yields to the newer track.
 - If the wall-clock session roll wins the race with the final-track marker, the
   armed record transfers to the incoming session and generic roll/drain hooks
   still leave it for the confirmed-track runner.
+- Both halves take the incoming persona and show name from the record
+  captured at arm time, never from the live session or the clock: before the
+  roll those still name the outgoing host and the show that is ending. A null
+  incoming show is a show → autonomous boundary and stays null. An incoming
+  persona deleted before the pair renders drops the pair. The greeting's prompt
+  context and show preparation still come from the context the caller passes,
+  which is the live one on a record with no confirmed final track.
 - The outgoing half reads the still-live outgoing session; the incoming half
   starts with clean prompt memory. If the incoming show is a programme, its plan
   is prepared onto the boundary record and transferred at the real roll so the
   greeting carries the incoming angle and durably replaces the standalone intro.
+  That plan waits for the incoming show's preparation to settle, and the
+  greeting takes its angle only while the occurrence and subject the plan was
+  written from still match; otherwise it greets without one rather than hold
+  the boundary (`broadcast.md`, Episode preparation research, #2321). While the
+  preparation is unsettled but its skill has already chosen a subject, the
+  greeting names that subject with no angle and no facts
+  (`preparationOpening`, which the standalone intro also reads); with no
+  subject chosen it names neither. This
+  is the incoming show's own preparation data, not outgoing speech, so the
+  clean-memory rule for the incoming half holds.
 - Episode research for the outgoing half is saved on the session and copied into
   the handoff record. Both ordinary post-roll and armed handoffs recover that
   source snapshot after restart. Preparing an incoming occurrence cannot replace
@@ -139,6 +156,57 @@ while that intro is pending, the old runner yields to the newer track.
   by their request/session rules rather than by the handoff lifecycle.
 - Treat a missing/unknown duration conservatively: never invent an exact
   boundary time or delay music waiting for one.
+
+## The mixer's jingle list
+
+When the mixer counts the jingle rotate, it draws from `jingles.m3u`, which the
+controller keeps as the on-air show's jingle list (#2367,
+`broadcast/jingle-show-sync.ts`). The stinger at the seam between the outgoing
+show's final track and the incoming show's first belongs to the **incoming**
+show, like any opening ident. That seam is decided before any roll can run, so
+the list cannot wait for the roll:
+
+```
+T(n-1) ends ── seam ──▶ [outgoing stinger, if due] ──▶ final outgoing track F
+                now-playing(F): the boundary record's final track, confirmed
+                → jingles.m3u = the incoming show's list, jingles.reload at once
+                  (a stinger on air: reloaded in place, plays out;
+                   between stingers: a fresh playlist, the prepared clip dropped)
+F plays ...      the next seam is decided about a crossfade before F's end
+F ends ── seam ──▶ [stinger drawn from the INCOMING list] ──▶ first incoming track
+roll (talk tick, pick cycle, ...) → re-apply: same bytes, nothing written or sent
+```
+
+- **The early swap needs a boundary record that names the incoming show**
+  (`incomingShowId`, set at arm time; `null` is a show → autonomous boundary,
+  which is every jingle). It fires on the music start that
+  `boundaryHandoffReadyForTrack` confirms as the recorded final track, the same
+  now-playing transition that authorises the handoff pair, and does not wait
+  for that track's intro publication. When the pick cycle arms the record on
+  the track **already on air** (no held anchor, the usual case), that start has
+  passed before the record exists, so the cycle hands the list over itself,
+  straight after the arm (`queue.confirmOnAirJingleList`) and ahead of the
+  boundary plan and the pair's render. Seen on a dev stack before that call
+  existed: armed five seconds into the final track, the pair rendered eighteen
+  seconds later, and the list changed only at the roll, which beat the seam by
+  28 seconds that time. A record armed before #2367 has no id and waits for the
+  roll.
+- **The seam before F stays the outgoing show's.** A request source starts its
+  next request as the current one ends, so F's `now-playing.json` is written in
+  the same frame the rotate chooses that seam's stinger; by the time the
+  controller reads it the stinger is on air, and a reload then plays it out.
+- **Until the session rolls, every re-apply resolves to the incoming show**, so
+  a settings save during F cannot restore the outgoing list. A boundary the
+  schedule calls off (the record no longer names that show) falls back to the
+  on-air show.
+- **A boundary with no record** (same host, no persona change, a takeover, a
+  boot past the boundary) changes the list at the roll. The roll can then lose
+  the race with the boundary seam by up to a minute, and that one stinger comes
+  from the outgoing list.
+- **A controller restart during F** forgets the early swap: boot applies the
+  on-air (outgoing) show, and the roll applies the incoming one. While the
+  controller is down the mixer keeps the last list it loaded, as the coast keeps
+  the last `auto.m3u`.
 
 ## Optional schedule-fact cadence
 
@@ -163,6 +231,14 @@ Tests should cover at least:
 - a real seam before the two-minute bound, and light-duck fallback when no seam arrives;
 - a long final track where no handoff has rendered by the deadline;
 - a controller restart that preserves the rendered pair and its original deadline;
+- a show → autonomous boundary, where neither half names an incoming show or
+  reopens the one that is ending;
+- an incoming persona deleted between arming and rendering, which drops the
+  pair instead of handing the mic back to the outgoing host;
+- the mixer's jingle list changing to the incoming show's at the confirmed final
+  outgoing track, and the roll re-applying it without a write
+  (`scripts/jingle-show-list.test.ts`, and the mixer side in
+  `scripts/liquidsoap-jingle-swap.py`);
 
 ## Resolved live finding — 8 September 2026
 

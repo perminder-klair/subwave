@@ -3,7 +3,7 @@
 import { LLM_PROVIDER_FORM_KEYS } from './registry';
 
 import type { ChangeEvent } from 'react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { notify, errorMessage } from '../../../lib/notify';
 import { adminResponse } from '../../../lib/admin-query';
 import { fieldAria } from '../../../lib/form';
@@ -19,12 +19,26 @@ import { ProviderPicker } from '../llm/ProviderPicker';
 import { ModelCombobox } from '../llm/ModelCombobox';
 import { LLM_ENV_VARS, groupProviders, llmProviderLabel } from '../llm/providerMeta';
 import { Advanced } from './section-chrome';
+import { ContextSizing } from './ContextSizing';
+import { DjBrainFields, brainVoiceKeyOnFile, savedBrainState } from './DjBrainFields';
+import {
+  DJ_BRAIN_BASE_URL, DJ_BRAIN_CHAT_MODEL, brainVoiceWirable, djBrainSettingsPatch,
+  isBrainRoute, isBrainVoice, isDjBrainUrl, sameBaseUrl, type DjBrainCheckResult,
+} from '../../../lib/djBrain';
 import { COMPAT_MODE_OPTIONS, compatDetectedNote, effectiveCompatMode, type CompatMode } from './compat-mode';
 import { pinnedFieldNames, type SwapEmbeddingPreview } from './llm-swap-copy';
 import {
+  LLM_BODY_PARAM_PRESETS, LLM_BODY_PARAMS_MAX, bodyParamProblem, bodyParamsPayload, fillBodyParamsPreset,
+  type LlmBodyParamRow, type LlmLegId,
+} from './llmBodyParams';
+import {
+  REASONING_EFFORT_OPTIONS, hostedReasoningHint, reasoningEffortHiddenHint, reasoningEffortHint,
+  reasoningEffortShown, setReasoningEffort, type ReasoningEffort, type ReasoningLegView,
+} from './reasoningEffort';
+import {
   SectionHeader, SaveBar, KeyStatus, KeyTestResult, KEY_HINTS, NowBanner,
   headerMap,
-  type SectionProps, type LlmHeaderRow,
+  type SectionProps, type LlmHeaderRow, type FormState,
 } from './shared';
 import {
   LLM_HEADER_NAME_RE,
@@ -155,6 +169,161 @@ export function HeaderRowsEditor({
   );
 }
 
+// One `{ key, value }` row list of request-body fields (#2296). Values that
+// parse as JSON (false, 128, {"a":1}, null) are sent as JSON, anything else
+// as a string. Problems are what the save would refuse, from the mirrored rule.
+function BodyParamRowsEditor({ rows, onChange, idPrefix, keyPlaceholder, valuePlaceholder, addLabel }: {
+  rows: LlmBodyParamRow[];
+  onChange: (next: LlmBodyParamRow[]) => void;
+  idPrefix: string;
+  keyPlaceholder: string;
+  valuePlaceholder: string;
+  addLabel: string;
+}) {
+  const setRow = (i: number, patch: Partial<LlmBodyParamRow>) =>
+    onChange(rows.map((r, n) => (n === i ? { ...r, ...patch } : r)));
+  return (
+    <div className="flex flex-col gap-2">
+      {rows.map((r, i) => {
+        const err = bodyParamProblem(r, rows);
+        return (
+          <div key={`${idPrefix}-${i}`} className="flex flex-col gap-1">
+            <div className="flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
+              <Input
+                value={r.key}
+                onChange={(e: ChangeEvent<HTMLInputElement>) => setRow(i, { key: e.target.value })}
+                placeholder={keyPlaceholder}
+                aria-label="Field name"
+                className="max-w-[220px]"
+              />
+              <Input
+                value={r.value}
+                onChange={(e: ChangeEvent<HTMLInputElement>) => setRow(i, { value: e.target.value })}
+                placeholder={valuePlaceholder}
+                aria-label="Field value"
+                className="max-w-[260px]"
+              />
+              <Btn onClick={() => onChange(rows.filter((_, n) => n !== i))}>Remove</Btn>
+            </div>
+            {err && <div className="text-xs text-vermilion">{err}</div>}
+          </div>
+        );
+      })}
+      <div>
+        <Btn onClick={() => onChange([...rows, { key: '', value: '' }])} disabled={rows.length >= LLM_BODY_PARAMS_MAX}>
+          {addLabel}
+        </Btn>
+      </div>
+    </div>
+  );
+}
+
+// Both request-body lists for one leg, shown for the openai-compatible
+// transport (openai-compatible, local or hosted, and locca) only.
+// The Default / Low / Medium / High control under a leg's Reasoning switch
+// (#2296). Shown only while reasoning is On, and only where the leg can
+// express a level (reasoningEffort.ts); elsewhere a hint points at Request
+// parameters when the leg has them.
+function ReasoningEffortField({ leg, view, on, value, setForm }: {
+  leg: LlmLegId;
+  view: ReasoningLegView;
+  on: boolean;
+  value: ReasoningEffort;
+  setForm: SectionProps['setForm'];
+}) {
+  if (!on) return null;
+  if (!reasoningEffortShown(view)) {
+    const hint = reasoningEffortHiddenHint(view);
+    return hint ? <div className="field-hint mt-2 max-w-[480px]">{hint}</div> : null;
+  }
+  return (
+    <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
+      <div>
+        <div className="text-[13px] font-bold">{leg === 'primary' ? 'Reasoning level' : 'Backup reasoning level'}</div>
+        <div className="field-hint mt-1 max-w-[440px]">{reasoningEffortHint(view)}</div>
+      </div>
+      <Seg
+        accent
+        value={value}
+        options={REASONING_EFFORT_OPTIONS.map(o => ({ id: o.id, label: o.label }))}
+        onChange={v => setForm(setReasoningEffort(leg, v as ReasoningEffort))}
+      />
+    </div>
+  );
+}
+
+function BodyParamsFields({ leg, bodyParams, toolCallBodyParams, setForm }: {
+  leg: LlmLegId;
+  bodyParams: LlmBodyParamRow[];
+  toolCallBodyParams: LlmBodyParamRow[];
+  setForm: SectionProps['setForm'];
+}) {
+  const setList = (list: 'bodyParams' | 'toolCallBodyParams', rows: LlmBodyParamRow[]) =>
+    setForm(f => (leg === 'primary'
+      ? { ...f, llm: { ...f.llm, [list]: rows } }
+      : { ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, [list]: rows } } }));
+  return (
+    <>
+      <div className="field">
+        <Label>Request parameters</Label>
+        <BodyParamRowsEditor
+          idPrefix={`llm-${leg}-body-param`}
+          rows={bodyParams}
+          onChange={rows => setList('bodyParams', rows)}
+          keyPlaceholder="enable_thinking"
+          valuePlaceholder="false"
+          addLabel="Add parameter"
+        />
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          {LLM_BODY_PARAM_PRESETS.map(p => (
+            <Btn key={p.id} onClick={() => setForm(fillBodyParamsPreset(leg, p.id))}>
+              Fill for {p.label}
+            </Btn>
+          ))}
+        </div>
+        <div className="field-hint">
+          Extra fields added to the body of every request to this server, in the
+          server&apos;s own words: SUB/WAVE&apos;s reasoning switch does nothing on a
+          hosted connection, so <strong>thinking settings go here</strong> (for a
+          Qwen3 on Hetzner or vLLM, <code>enable_thinking</code> = <code>false</code>;
+          the Fill button adds that row, and nothing is stored until you save).
+          Values like <code>false</code>, <code>128</code> or{' '}
+          <code>{'{"enable_thinking":false}'}</code> are sent as JSON. A field
+          never replaces one SUB/WAVE sets itself, and <code>model</code>,{' '}
+          <code>messages</code>, <code>tools</code>, <code>tool_choice</code>,{' '}
+          <code>max_tokens</code> and the like are refused. A server may accept
+          a budget field and ignore it (Hetzner does with{' '}
+          <code>thinking_budget</code>), so check{' '}
+          <code>usage.completion_tokens_details.reasoning_tokens</code> in the
+          debug log, not <code>reasoning_content</code>, which can be empty
+          while the model thinks.
+        </div>
+      </div>
+      <div className="field">
+        <Label>Structured &amp; tool-call overrides</Label>
+        <BodyParamRowsEditor
+          idPrefix={`llm-${leg}-tool-call-param`}
+          rows={toolCallBodyParams}
+          onChange={rows => setList('toolCallBodyParams', rows)}
+          keyPlaceholder="thinking_budget"
+          valuePlaceholder="null"
+          addLabel="Add override"
+        />
+        <div className="field-hint">
+          Laid over the request parameters on picks, structured answers and every
+          other call that forces a tool. <strong>Put the off-switch for a thinking
+          setting here</strong>: a model that thinks there truncates mid-thought or
+          is refused, and two short calls (search verification, the 64-token
+          link fallback) fail outright if thinking reaches them. A value of{' '}
+          <code>null</code> removes that field from these calls. DashScope&apos;s
+          Qwen also rejects a forced tool choice while thinking; if it errors on
+          picks, set Tool choice to Auto above.
+        </div>
+      </div>
+    </>
+  );
+}
+
 interface LlmSectionProps extends SectionProps {
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
   refresh: () => void;
@@ -241,6 +410,101 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
       return next;
     });
     if (pin && meta) setEmbedPinNotice({ model: meta.model, dim: meta.dim, newProvider: v });
+  };
+
+  // ── DJ Brain as the source ────────────────────────────────────────────────
+  // The hosted brain is a preset over openai-compatible (lib/djBrain.ts), so
+  // "DJ Brain" here is a view of the same form fields, not a provider. The
+  // choice is local state so typing a URL in the full form never flips the
+  // page mid-edit; it follows the SAVED route whenever that changes.
+  const brainSaved = savedBrainState(data.values);
+  const formCompatUrl = form.llm.providerBaseUrls['openai-compatible'] ?? '';
+  const [source, setSource] = useState<'brain' | 'own'>(
+    isBrainRoute({ provider: form.llm.provider, baseUrl: formCompatUrl, model: form.llm.model }) ? 'brain' : 'own',
+  );
+  const [syncedRouted, setSyncedRouted] = useState(brainSaved.routed);
+  if (syncedRouted !== brainSaved.routed) {
+    setSyncedRouted(brainSaved.routed);
+    setSource(brainSaved.routed ? 'brain' : 'own');
+  }
+  const brainMode = source === 'brain';
+  const [brainTesting, setBrainTesting] = useState(false);
+  const [brainCheck, setBrainCheck] = useState<DjBrainCheckResult | null>(null);
+  // The route the operator had before trying DJ Brain, put back if they return
+  // to their own provider without saving.
+  const ownRoute = useRef<{
+    llm: Pick<FormState['llm'], 'provider' | 'model' | 'providerBaseUrls' | 'headers' | 'bodyParams' | 'toolCallBodyParams'>;
+    embedding: FormState['embedding'];
+  } | null>(null);
+  const llmKeysOnFile = (data.values?.llm as { keys?: Record<string, unknown> } | undefined)?.keys || {};
+  const brainKeyOnFile = llmKeysOnFile['openai-compatible'] === 'set';
+
+  const selectSource = (next: string) => {
+    if (next === source) return;
+    if (next === 'brain') {
+      const { provider, model, providerBaseUrls, headers, bodyParams, toolCallBodyParams } = form.llm;
+      ownRoute.current = {
+        llm: { provider, model, providerBaseUrls, headers, bodyParams, toolCallBodyParams },
+        embedding: form.embedding,
+      };
+      changeLlmProvider('openai-compatible');
+      setForm(f => {
+        const cur = f.llm.providerBaseUrls['openai-compatible'] ?? '';
+        // Already a brain route (typed by hand in the full form): keep it whole.
+        if (provider === 'openai-compatible' && isBrainRoute({ provider, baseUrl: cur, model: f.llm.model })) return f;
+        return {
+          ...f,
+          llm: {
+            ...f.llm,
+            model: DJ_BRAIN_CHAT_MODEL,
+            providerBaseUrls: { ...f.llm.providerBaseUrls, 'openai-compatible': isDjBrainUrl(cur) ? cur : DJ_BRAIN_BASE_URL },
+            // Another server's gateway headers and body fields mean nothing to the brain.
+            headers: [], bodyParams: [], toolCallBodyParams: [],
+          },
+        };
+      });
+      // A preset's "clear the saved token" would wipe the key the brain needs.
+      setResetCompatKey(false);
+    } else {
+      const prev = ownRoute.current;
+      if (prev) setForm(f => ({ ...f, llm: { ...f.llm, ...prev.llm }, embedding: prev.embedding }));
+      ownRoute.current = null;
+    }
+    // A key typed for one source is never the other's: the brain would refuse
+    // another server's key, and a brain key must not reach another server. The
+    // provider-change effect misses this when both sides are openai-compatible.
+    setCompatKeyInput('');
+    setBrainCheck(null);
+    setSource(next === 'brain' ? 'brain' : 'own');
+  };
+
+  // Ask the brain what this key includes (POST /settings/dj-brain/check). A
+  // blank key reads the openai-compatible key on file.
+  const checkBrain = async (): Promise<DjBrainCheckResult> => {
+    if (!formCompatUrl.trim()) return { ok: false, voice: false, message: 'Enter a Base URL first', latencyMs: 0 };
+    try {
+      const r = await adminResponse(adminFetch, '/settings/dj-brain/check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: compatKeyInput.trim(), baseUrl: formCompatUrl.trim() }),
+      });
+      return await r.json() as DjBrainCheckResult;
+    } catch (e) {
+      return { ok: false, voice: false, message: errorMessage(e), latencyMs: 0 };
+    }
+  };
+  const testBrain = async () => {
+    setBrainTesting(true);
+    setBrainCheck(null);
+    setBrainCheck(await checkBrain());
+    setBrainTesting(false);
+  };
+  // Read from the SAVED voice, not the form: an unsaved edit on TTS voice is
+  // not what the station speaks with.
+  const brainVoiceWiredToUrl = isBrainVoice(brainSaved.cloud, formCompatUrl);
+  const brainVoiceInputs = {
+    token: compatKeyInput,
+    brainVoiceKeyOnFile: brainVoiceKeyOnFile(data.values, formCompatUrl),
   };
 
   const primaryKeyVar = LLM_ENV_VARS[form.llm.provider];
@@ -381,7 +645,33 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
   const save = async () => {
     const activeProvider = form.llm.provider;
     const activeFallbackProvider = form.llm.fallback.provider;
+    // A DJ Brain save that changes the route or the key asks the brain which
+    // plan the key is on, and wires (or unwires) the studio voice to match.
+    // Any other save on this page (a budget, the backup) leaves the voice
+    // alone, so a voice the operator chose since is never taken back.
+    let brainTts: ReturnType<typeof djBrainSettingsPatch>['tts'];
+    if (brainMode && (
+      !!compatKeyInput.trim() || !brainSaved.routed || !sameBaseUrl(brainSaved.brainUrl, formCompatUrl)
+    )) {
+      const check = await checkBrain();
+      setBrainCheck(check);
+      // The plan decides whether the voice is wired, so a save the brain can't
+      // vouch for stops here rather than guessing.
+      if (!check.ok) { notify.err(check.message); return; }
+      brainTts = djBrainSettingsPatch({
+        baseUrl: formCompatUrl,
+        token: compatKeyInput,
+        // A voice already on the brain keeps the model and voice chosen for it.
+        ...(brainVoiceWiredToUrl
+          ? { voiceModel: form.tts.cloud.model, voiceName: form.tts.cloud.voice }
+          : {}),
+        voice: brainVoiceWirable({ planHasVoice: check.voice, ...brainVoiceInputs }),
+        stationEngine: brainSaved.stationEngine,
+        voiceWiredToBrain: brainVoiceWiredToUrl,
+      }).tts;
+    }
     await saveSettings({
+      ...(brainTts ? { tts: brainTts } : {}),
       llm: {
         provider: activeProvider,
         model: form.llm.model,
@@ -390,8 +680,11 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         repeatPenalty: form.llm.repeatPenalty,
         providerBaseUrls: form.llm.providerBaseUrls,
         headers: headerMap(form.llm.headers),
+        bodyParams: bodyParamsPayload(form.llm.bodyParams),
+        toolCallBodyParams: bodyParamsPayload(form.llm.toolCallBodyParams),
         compatibleMode: form.llm.compatibleMode,
         reasoning: form.llm.reasoning,
+        reasoningEffort: form.llm.reasoningEffort,
         toolChoice: form.llm.toolChoice,
         pauseWhenEmpty: form.llm.pauseWhenEmpty,
         dailyTokenCap: form.llm.dailyTokenCap,
@@ -413,8 +706,11 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
           geminiSafety: { ...form.llm.fallback.geminiSafety },
           providerBaseUrls: form.llm.fallback.providerBaseUrls,
           headers: headerMap(form.llm.fallback.headers),
+          bodyParams: bodyParamsPayload(form.llm.fallback.bodyParams),
+          toolCallBodyParams: bodyParamsPayload(form.llm.fallback.toolCallBodyParams),
           compatibleMode: form.llm.fallback.compatibleMode,
           reasoning: form.llm.fallback.reasoning,
+          reasoningEffort: form.llm.fallback.reasoningEffort,
           toolChoice: form.llm.fallback.toolChoice,
           ...(INLINE_KEY_PROVIDERS.includes(activeFallbackProvider) && compatFallbackKeyInput.trim()
             ? { apiKey: compatFallbackKeyInput.trim() }
@@ -455,19 +751,55 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
       <SectionHeader
         eyebrow="llm provider"
         title="The model that writes scripts and picks tracks."
-        sub="Ollama runs on the homelab box and needs no key; the cloud providers are opt-in. Switching here reroutes every LLM call, no redeploy."
+        sub="Use the hosted DJ Brain on one key, or your own provider: Ollama runs on the homelab box and needs no key, and the cloud providers are opt-in. Switching here reroutes every LLM call, no redeploy."
         metrics={[{ n: String((data.llm?.providers || []).length), l: 'providers' }]}
         manualHref="/manual/llm"
       />
 
       <Card title="Provider" sub="active routing">
         <div className="grid gap-[18px]">
-          <NowBanner label={<>Routing now · {llmProviderLabel(activeProvider)}</>}>
+          <NowBanner label={<>Routing now · {brainSaved.routed ? 'DJ Brain' : llmProviderLabel(activeProvider)}</>}>
             {activeModel
               ? <>Model <code>{activeModel}</code>, every LLM call goes here. {llmDirty ? 'Your edits below aren’t live until you Save.' : 'This is the saved, running config.'}</>
               : <>No model is set for this provider yet.</>}
           </NowBanner>
 
+          <div className="field">
+            <Label>Source</Label>
+            <Seg
+              accent
+              value={source}
+              options={[
+                { id: 'brain', label: 'DJ Brain', title: 'The hosted brain: one key, nothing to run' },
+                { id: 'own', label: 'Your own provider', title: 'Ollama, a cloud provider or your own server' },
+              ]}
+              onChange={selectSource}
+            />
+            <div className="field-hint">
+              {brainMode
+                ? 'SUB/WAVE DJ Brain is the hosted model for your station. One key, no GPU and no provider account.'
+                : 'Run the model yourself or bring a provider account. DJ Brain is the hosted alternative on one key.'}
+            </div>
+          </div>
+
+          {brainMode && (
+            <DjBrainFields
+              data={data}
+              baseUrl={formCompatUrl}
+              model={form.llm.model}
+              onBaseUrl={v => setForm(f => ({ ...f, llm: { ...f.llm, providerBaseUrls: { ...f.llm.providerBaseUrls, 'openai-compatible': v } } }))}
+              onModel={v => setForm(f => ({ ...f, llm: { ...f.llm, model: v } }))}
+              token={compatKeyInput}
+              onToken={setCompatKeyInput}
+              keyOnFile={brainKeyOnFile}
+              check={brainCheck}
+              testing={brainTesting}
+              onTest={testBrain}
+              voiceNeedsKey={!!brainCheck?.voice && !brainVoiceWirable({ planHasVoice: true, ...brainVoiceInputs })}
+            />
+          )}
+
+          {!brainMode && (<>
           <div className="field">
             <div className="flex items-center gap-2">
               <Label>Provider</Label>
@@ -528,6 +860,11 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 raise it for reasoning models, lower it on tight VRAM. Set 0 to
                 use Ollama&apos;s default. Ignored for <code>:cloud</code> models.
               </div>
+              <ContextSizing
+                adminFetch={adminFetch}
+                numCtx={form.llm.numCtx}
+                onUse={tokens => setForm(f => ({ ...f, llm: { ...f.llm, numCtx: tokens } }))}
+              />
             </div>
           )}
 
@@ -672,6 +1009,15 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 value or removing the row drops the header.
               </div>
             </div>
+          )}
+
+          {INLINE_KEY_PROVIDERS.includes(form.llm.provider) && (
+            <BodyParamsFields
+              leg="primary"
+              bodyParams={form.llm.bodyParams}
+              toolCallBodyParams={form.llm.toolCallBodyParams}
+              setForm={setForm}
+            />
           )}
 
           {(form.llm.provider === 'locca' || (form.llm.provider === 'openai-compatible' && effectiveCompatMode(form.llm.compatibleMode, data.llm?.compatDetection?.primary) === 'local')) && (
@@ -823,6 +1169,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
               </div>
             </div>
           )}
+          </>)}
         </div>
       </Card>
 
@@ -1024,6 +1371,15 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 </>
               )}
 
+              {INLINE_KEY_PROVIDERS.includes(form.llm.fallback.provider) && (
+                <BodyParamsFields
+                  leg="fallback"
+                  bodyParams={form.llm.fallback.bodyParams}
+                  toolCallBodyParams={form.llm.fallback.toolCallBodyParams}
+                  setForm={setForm}
+                />
+              )}
+
               {(form.llm.fallback.provider === 'locca' || (form.llm.fallback.provider === 'openai-compatible' && effectiveCompatMode(form.llm.fallback.compatibleMode, data.llm?.compatDetection?.fallback) === 'local')) && (
                 <div className="field">
                   <Label>Repetition penalty (repeat_penalty)</Label>
@@ -1190,7 +1546,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                   <div className="text-[13px] font-bold">Backup chain-of-thought</div>
                   <div className="mt-0.5 max-w-[480px] text-[14px] leading-[1.5] text-muted">
                     {form.llm.fallback.provider === 'openai-compatible' && effectiveCompatMode(form.llm.fallback.compatibleMode, data.llm?.compatDetection?.fallback) === 'hosted'
-                      ? 'Hosted compatible services control their own reasoning; this switch is ignored for this backup.'
+                      ? hostedReasoningHint(form.llm.fallback.model, true)
                       : 'Whether the backup model may emit a reasoning step. Off by default, like the primary.'}
                   </div>
                 </div>
@@ -1206,6 +1562,13 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                   }
                 />
               </div>
+              <ReasoningEffortField
+                leg="fallback"
+                view={{ provider: form.llm.fallback.provider, model: form.llm.fallback.model, compatibleMode: effectiveCompatMode(form.llm.fallback.compatibleMode, data.llm?.compatDetection?.fallback) }}
+                on={form.llm.fallback.reasoning}
+                value={form.llm.fallback.reasoningEffort}
+                setForm={setForm}
+              />
 
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
                 <div>
@@ -1236,7 +1599,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             <div className="text-[13px] font-bold">Chain-of-thought</div>
             <div className="field-hint mt-1 max-w-[440px]">
               {form.llm.provider === 'openai-compatible' && effectiveCompatMode(form.llm.compatibleMode, data.llm?.compatDetection?.primary) === 'hosted'
-                ? 'Hosted compatible services control their own reasoning; this switch is ignored for this connection.'
+                ? hostedReasoningHint(form.llm.model, false)
                 : <>When off, thinking-capable models skip their internal reasoning
               step (Ollama, Qwen3, Gemini, OpenAI o-series/gpt-5, Claude,
               DeepSeek). DJ scripts and structured picks are short, so thinking
@@ -1255,6 +1618,13 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, reasoning: v === 'on' } }))}
           />
         </div>
+        <ReasoningEffortField
+          leg="primary"
+          view={{ provider: form.llm.provider, model: form.llm.model, compatibleMode: effectiveCompatMode(form.llm.compatibleMode, data.llm?.compatDetection?.primary) }}
+          on={form.llm.reasoning}
+          value={form.llm.reasoningEffort}
+          setForm={setForm}
+        />
 
         <div className="field mt-4">
           <Label>Max response size (tokens)</Label>

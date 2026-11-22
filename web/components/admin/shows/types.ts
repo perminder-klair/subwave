@@ -1,9 +1,14 @@
+import type { JingleRotateOwner, JinglePlacement } from '@/lib/schemas.generated';
+import type { JingleEntry } from '../settings/shared';
 
 import {
+  ALBUM_KINDS,
+  ALBUM_KIND_LABELS,
   EXCLUDED_PLAYLISTS_PER_SHOW,
   GUESTS_PER_SHOW,
   PLAYLISTS_PER_SHOW,
   SHOWS_LIMIT,
+  SHOW_DESCRIPTION_MAX,
   SHOW_ENERGY,
   SHOW_FILTER_VALUES_MAX,
   SHOW_NAME_MAX,
@@ -19,6 +24,7 @@ import {
 
 export const NAME_MAX = SHOW_NAME_MAX;
 export const TOPIC_MAX = SHOW_TOPIC_MAX;
+export const DESCRIPTION_MAX = SHOW_DESCRIPTION_MAX;
 export const SHOWS_MAX = SHOWS_LIMIT;
 export const GUESTS_MAX = GUESTS_PER_SHOW;
 export const PLAYLISTS_MAX = PLAYLISTS_PER_SHOW;
@@ -86,6 +92,11 @@ export interface Show {
   playlistInOrder: boolean;
   /** Excluded from the candidate pool regardless of the other filters. */
   excludedPlaylistIds: string[];
+  /** A clean show: tracks tagged explicit stay off air. Only a positive tag
+   *  counts, so an untagged track still plays. */
+  excludeExplicit: boolean;
+  /** Album kinds (Library → Era) never played on this show, e.g. 'dj-mix'. */
+  excludedAlbumKinds: string[];
   /** The show airs as a produced episode: intro, feature segment, sign-off. */
   programme: boolean;
   /** Pin the feature segment to one skill. Empty = producer picks per episode.
@@ -95,6 +106,15 @@ export interface Show {
   /** Operator organisation tags. They filter and group this list and nothing
    *  else -- picker, DJ agent and public routes are blind to them. */
   tags: string[];
+  /** Jingle filenames the automatic rotate and over-music ID may draw while
+   *  this show airs. Empty = every jingle. */
+  allowedJingles: string[];
+  /** Bed names a link or request bed may use while this show airs. Empty =
+   *  every bed. */
+  allowedBeds: string[];
+  /** What listeners read on the schedule and On Now card (#2358). '' = unset:
+   *  they see the brief (`topic`) instead. Never reaches the DJ. */
+  description: string;
 }
 
 /** Mirrors the controller's EraWindow. Multiple windows let a show span
@@ -106,6 +126,8 @@ export interface CommunityShow {
   slug: string;
   name: string;
   topic: string;
+  /** Listener blurb (#2358); absent from an older controller. */
+  description?: string;
   moods: string[];
   genres: string[];
   eras: EraWindow[];
@@ -139,6 +161,8 @@ export const ENERGY_OPTIONS: readonly string[] = SHOW_ENERGY;
 // without a label here shows its raw key rather than vanishing.
 const VOCAL_LABELS: Record<string, string> = { instrumental: 'instrumental', vocal: 'vocals' };
 export const VOCAL_OPTIONS = SHOW_VOCALS.map((key) => ({ key, label: VOCAL_LABELS[key] ?? key }));
+// Album kinds a show can leave out (Library → Era sets one per album).
+export const ALBUM_KIND_OPTIONS = ALBUM_KINDS.map((value) => ({ value, label: ALBUM_KIND_LABELS[value] }));
 export const ANY_SENTINEL = '__any__';
 // Radix Select refuses an empty string value and `null` is not a value at all,
 // so the tri-state "inherit" needs its own token.
@@ -248,6 +272,12 @@ export interface SettingsResponse {
     /** Station-wide picking windows; `minTrackLengthSeconds` is the default a
      *  show inherits when its own field is null. */
     picker?: { albumHours?: number; minTrackLengthSeconds?: number };
+    /** Who counts the between-songs jingle rotate. Only the controller can
+     *  honour a show's jingle list. */
+    jingleRotate?: JingleRotateOwner;
+    jinglePlacement?: JinglePlacement;
   };
   tts?: { moods?: string[] };
+  /** The station's jingle library (files that exist), for the Imaging lists. */
+  jingles?: JingleEntry[];
 }

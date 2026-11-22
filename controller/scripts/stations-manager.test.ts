@@ -3,9 +3,9 @@
 
 import assert from 'node:assert/strict';
 import {
-  existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync,
+  existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync,
 } from 'node:fs';
-import { createTempDir } from './test-utils/temp-dir.js';
+import { createTempDir, removeTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as manager from '../src/stations/manager.js';
@@ -20,6 +20,12 @@ try {
   writeFileSync(join(root, 'icecast-secrets.env'), 'SECRET=1');
   mkdirSync(join(root, 'jingles'));
   writeFileSync(join(root, 'jingles', 'a.wav'), 'x');
+  mkdirSync(join(root, 'logs'));
+  writeFileSync(join(root, 'logs', 'radio.log'), 'mixer log\n');
+  writeFileSync(join(root, 'logs', 'radio.log.old'), 'rotated\n');
+  writeFileSync(join(root, 'logs', 'web-dev.log'), 'next dev\n');
+  writeFileSync(join(root, 'logs', 'events-2026-11-15.jsonl'), '{"type":"track.play"}\n');
+  writeFileSync(join(root, 'logs', 'requests.log'), 'req\n');
 
   // Single-station listing: one synthetic root entry.
   const single = manager.listStations(root, 'Legacy FM');
@@ -34,6 +40,20 @@ try {
   assert.ok(existsSync(join(root, 'stations', 'main', 'settings.json')));
   assert.ok(existsSync(join(root, 'stations', 'main', 'jingles', 'a.wav')));
   assert.ok(existsSync(join(root, 'icecast-secrets.env'))); // stayed
+  // logs/ stays at the root: the AIO links /var/log/liquidsoap at it and compose
+  // bind-mounts it, so moving it left the mixer unable to open radio.log (#2349).
+  // Only liquidsoap's (and the host CLI's) files stay; the station's own
+  // history moves with it, so the daily token seed, the repeat backfill and the
+  // orphan-name source still find it after the switch.
+  assert.equal(readFileSync(join(root, 'logs', 'radio.log'), 'utf8'), 'mixer log\n');
+  assert.equal(readFileSync(join(root, 'logs', 'radio.log.old'), 'utf8'), 'rotated\n');
+  assert.equal(readFileSync(join(root, 'logs', 'web-dev.log'), 'utf8'), 'next dev\n');
+  assert.deepEqual(readdirSync(join(root, 'logs')).sort(), ['radio.log', 'radio.log.old', 'web-dev.log']);
+  assert.equal(
+    readFileSync(join(root, 'stations', 'main', 'logs', 'events-2026-11-15.jsonl'), 'utf8'),
+    '{"type":"track.play"}\n',
+  );
+  assert.deepEqual(readdirSync(join(root, 'stations', 'main', 'logs')).sort(), ['events-2026-11-15.jsonl', 'requests.log']);
   assert.ok(!existsSync(join(root, 'settings.json')));      // moved
   assert.equal(manager.activeIdOnDisk(root), 'main');
   assert.equal(
@@ -184,6 +204,77 @@ try {
   );
 } finally {
   rmSync(root2, { recursive: true, force: true });
+}
+
+// Rollback across the split logs/ (#2349): a failure after the station's logs
+// moved puts every one back, loses none and leaves no copy under stations/. The
+// failure is the post-loop setup-config write (a directory where the file
+// should be, so readFileSync throws EISDIR), which runs after every rename
+// whatever order readdir returns.
+const logsRoot = createTempDir(join(tmpdir(), 'subwave-mgr-logs-rollback-'));
+try {
+  writeFileSync(join(logsRoot, 'settings.json'), '{"station":"Legacy FM"}');
+  mkdirSync(join(logsRoot, 'setup-config.json'));
+  mkdirSync(join(logsRoot, 'logs'));
+  writeFileSync(join(logsRoot, 'logs', 'radio.log'), 'mixer\n');
+  writeFileSync(join(logsRoot, 'logs', 'events-a.jsonl'), 'a\n');
+  writeFileSync(join(logsRoot, 'logs', 'events-b.jsonl'), 'b\n');
+  const logMoves: string[] = [];
+  const recordingRename = (src: string, dest: string) => {
+    if (src.includes(join('logs', 'events-')) && dest.includes('stations')) logMoves.push(src);
+    renameSync(src, dest);
+  };
+  assert.throws(
+    () => manager.convertToMultiStation(logsRoot, 'Legacy FM', recordingRename, { url: 'http://m:4533', user: 'u', pass: 'p' }),
+    /conversion failed.*restored/,
+  );
+  assert.equal(logMoves.length, 2, 'precondition: both station logs moved before the failure');
+  assert.deepEqual(readdirSync(join(logsRoot, 'logs')).sort(), ['events-a.jsonl', 'events-b.jsonl', 'radio.log']);
+  assert.equal(readFileSync(join(logsRoot, 'logs', 'events-a.jsonl'), 'utf8'), 'a\n');
+  assert.equal(readFileSync(join(logsRoot, 'logs', 'radio.log'), 'utf8'), 'mixer\n');
+  assert.ok(existsSync(join(logsRoot, 'settings.json')));
+  assert.equal(manager.isMultiStation(logsRoot), false);
+} finally {
+  await removeTempDir(logsRoot);
+}
+
+// A station log on another filesystem (logs/ is its own mount) cannot be
+// renamed: it stays at the root and the conversion still succeeds.
+const exdevRoot = createTempDir(join(tmpdir(), 'subwave-mgr-logs-exdev-'));
+try {
+  writeFileSync(join(exdevRoot, 'settings.json'), '{}');
+  mkdirSync(join(exdevRoot, 'logs'));
+  writeFileSync(join(exdevRoot, 'logs', 'events-a.jsonl'), 'a\n');
+  const exdev = (src: string, dest: string) => {
+    if (src.includes(join('logs', 'events-'))) {
+      throw Object.assign(new Error('EXDEV: cross-device link not permitted'), { code: 'EXDEV' });
+    }
+    renameSync(src, dest);
+  };
+  assert.equal(manager.convertToMultiStation(exdevRoot, 'Legacy FM', exdev), 'main');
+  assert.equal(readFileSync(join(exdevRoot, 'logs', 'events-a.jsonl'), 'utf8'), 'a\n');
+  assert.ok(existsSync(join(exdevRoot, 'stations', 'main', 'settings.json')));
+} finally {
+  await removeTempDir(exdevRoot);
+}
+
+// A logs/ that is a symlink (an operator parking logs on another disk) is left
+// whole: the link and everything behind it stay where the operator put them.
+const linkRoot = createTempDir(join(tmpdir(), 'subwave-mgr-logs-link-'));
+try {
+  const elsewhere = join(linkRoot, 'elsewhere');
+  mkdirSync(join(linkRoot, 'legacy'));
+  writeFileSync(join(linkRoot, 'legacy', 'settings.json'), '{}');
+  mkdirSync(elsewhere);
+  writeFileSync(join(elsewhere, 'events-a.jsonl'), 'a\n');
+  symlinkSync(elsewhere, join(linkRoot, 'legacy', 'logs'));
+  const legacy = join(linkRoot, 'legacy');
+  assert.equal(manager.convertToMultiStation(legacy, 'Legacy FM'), 'main');
+  assert.ok(lstatSync(join(legacy, 'logs')).isSymbolicLink());
+  assert.equal(readFileSync(join(elsewhere, 'events-a.jsonl'), 'utf8'), 'a\n');
+  assert.ok(!existsSync(join(legacy, 'stations', 'main', 'logs')));
+} finally {
+  await removeTempDir(linkRoot);
 }
 
 // createStation: conversion succeeds, then something AFTER it (the duplicate

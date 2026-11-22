@@ -7,6 +7,9 @@ import { cn } from '@/lib/cn';
 import { resolveFont, type Theme } from '@/lib/theme';
 import { useDynamicStyle } from '../hooks/useDynamicStyle';
 import { useLiteMode } from '../hooks/useLiteMode';
+import { useClockZone } from '../hooks/useClockZone';
+import { localTimezone, type ClockZone } from '@/lib/clockZone';
+import { useOptionalPlayerFeed } from './player/feedContext';
 import { useThemeSwitcher } from './ThemeProvider';
 import { useSkinSelection } from './skins/SkinContext';
 
@@ -119,6 +122,47 @@ function SectionHead({ label, overridden, stationName, resetLabel, followingLabe
   );
 }
 
+// "Europe/London" → "London", "America/Argentina/Buenos_Aires" → "Buenos Aires".
+function zoneCity(tz: string | null): string | null {
+  if (!tz) return null;
+  const city = tz.split('/').pop() ?? tz;
+  return city.replace(/_/g, ' ');
+}
+
+interface ClockOptionProps {
+  zone: ClockZone;
+  active: boolean;
+  label: string;
+  detail: string;
+  onPick: (zone: ClockZone) => void;
+}
+
+function ClockOption({ zone, active, label, detail, onPick }: ClockOptionProps) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={active}
+      onClick={() => onPick(zone)}
+      className={cn(
+        'v3-focus flex min-w-0 cursor-pointer items-center gap-2.5 border px-3 py-2 text-left transition-colors duration-150',
+        active ? 'border-vermilion bg-[var(--accent-soft)]' : 'border-ink bg-bg hover:bg-[var(--overlay)]',
+      )}
+    >
+      <span
+        className={cn('size-1.5 shrink-0 rounded-full', active ? 'bg-vermilion' : 'bg-transparent ring-1 ring-muted')}
+        aria-hidden="true"
+      />
+      <span className="grid min-w-0 flex-1 gap-0.5">
+        <span className={cn('truncate text-[10px] font-bold tracking-[0.14em] uppercase', active && 'text-vermilion')}>
+          {label}
+        </span>
+        <span className="truncate text-[10px] leading-[1.3] text-muted">{detail}</span>
+      </span>
+    </button>
+  );
+}
+
 export interface ThemeSwitcherProps {
   /** Trigger button text styling, so it picks up the right cluster's font. */
   variant?: 'player' | 'admin';
@@ -142,6 +186,12 @@ export default function ThemeSwitcher({ variant = 'player', className }: ThemeSw
   const [, setPreviewLoaded] = useState(false);
   const activeChipRef = useRef<HTMLButtonElement>(null);
   const { lite, setLite } = useLiteMode();
+  const { zone: clockZone, setZone: setClockZone } = useClockZone();
+  // Only the player has a station clock to swap; the admin keeps station time.
+  const feed = useOptionalPlayerFeed();
+  const showClock = variant === 'player' && feed != null;
+  const stationTz = feed?.stationTimezone ?? null;
+  const localTz = showClock ? localTimezone() : null;
 
   // Opened before the warm-up below landed: the cards draw empty and fill in
   // when the chunk arrives, without suspending anything around them.
@@ -369,6 +419,47 @@ export default function ThemeSwitcher({ variant = 'player', className }: ThemeSw
                   })}
                 </div>
                 {shownSkin && <Readout name={shownSkin.name} description={shownSkin.description} />}
+              </section>
+            )}
+
+            {/* Like lite mode, the clock is this browser's choice, so no reset.
+                Booth stamps, the clock line and "last on air" follow it; the
+                schedule keeps station hours (lib/clockZone.ts). */}
+            {showClock && (
+              <section className="grid gap-1.5">
+                <div className="border-b border-soft-border px-1 pb-1">
+                  <span id="appearance-clock" className="v3-eyebrow text-[10px] tracking-[0.3em]">Times</span>
+                </div>
+                <div
+                  role="radiogroup"
+                  aria-labelledby="appearance-clock"
+                  className="mx-1 mt-1.5 grid grid-cols-1 gap-2 sm:grid-cols-2"
+                >
+                  <ClockOption
+                    zone="station"
+                    active={clockZone === 'station'}
+                    label="Station time"
+                    detail={
+                      stationTz
+                        ? `${zoneCity(stationTz)} · matches what the DJ says`
+                        : 'Matches what the DJ says'
+                    }
+                    onPick={setClockZone}
+                  />
+                  <ClockOption
+                    zone="local"
+                    active={clockZone === 'local'}
+                    label="My local time"
+                    detail={
+                      localTz && stationTz === localTz
+                        ? `${zoneCity(localTz)} · same as the station`
+                        : localTz
+                          ? `${zoneCity(localTz)} · your device's clock`
+                          : "Your device's clock"
+                    }
+                    onPick={setClockZone}
+                  />
+                </div>
               </section>
             )}
 

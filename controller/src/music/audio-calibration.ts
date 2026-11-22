@@ -160,6 +160,41 @@ export function audioEnergy(
   return null;
 }
 
+// How far the arousal diff must clear zero (in sd) to overrule an energy the
+// LLM gave. Much stricter than the propagated correction's 0.35: an LLM energy
+// is a per-track answer, and only this band was checked by ear (on a 74k-track
+// library, the 20 strongest disagreements: audio 18, medium 2, LLM 0).
+export const ENERGY_OVERRULE_Z = 1.0;
+
+// The energy that replaces an LLM's, or null to keep it: only where the audio
+// is strongly decisive and says otherwise (an LLM 'medium' included).
+export function audioEnergyOverrule(
+  scores: Record<string, number>,
+  baselines: MoodBaselines | null,
+  current: string | null,
+): 'low' | 'high' | null {
+  const diff = arousalDiff(scores, baselines);
+  if (diff == null) return null;
+  const strong = diff >= ENERGY_OVERRULE_Z ? 'high' : diff <= -ENERGY_OVERRULE_Z ? 'low' : null;
+  return strong && strong !== current ? strong : null;
+}
+
+// The energy for a tagged track that has NONE. Three-way, unlike audioEnergy,
+// because there is no guess here to leave alone: the measured middle band is
+// what 'medium' means, and leaving the box empty drops the track from every
+// show with strict filters. null only when the audio cannot be scored at all.
+// Overruling an energy that IS there stays audioEnergy's two-sided job.
+export function audioEnergyFill(
+  scores: Record<string, number>,
+  baselines: MoodBaselines | null,
+): 'low' | 'medium' | 'high' | null {
+  const diff = arousalDiff(scores, baselines);
+  if (diff == null) return null;
+  if (diff >= ENERGY_HIGH_Z) return 'high';
+  if (diff <= ENERGY_LOW_Z) return 'low';
+  return 'medium';
+}
+
 // audio_embedding_meta.mood_vocab_hash is `<vocabHash>:<calibrationVersion>`.
 // The halves invalidate different work: vocabulary → full CLAP re-score,
 // calibration → relabel from the cosines on disk.
@@ -172,12 +207,14 @@ export function composeMoodStateHash(vocabHash: string, version = CALIBRATION_VE
 export const UNCALIBRATED_VERSION = 0;
 
 // The one place the stamp decision lives; a pass calling composeMoodStateHash
-// directly would stamp the uncalibrated case as done.
-export function moodStateHashFor(vocabHash: string, calibrated: boolean): string {
-  return composeMoodStateHash(
-    vocabHash,
-    calibrated ? CALIBRATION_VERSION : UNCALIBRATED_VERSION,
-  );
+// directly would stamp the uncalibrated case as done. `version` is the
+// vocabulary's own derivation version: sound descriptors keep a separate one.
+export function moodStateHashFor(
+  vocabHash: string,
+  calibrated: boolean,
+  version = CALIBRATION_VERSION,
+): string {
+  return composeMoodStateHash(vocabHash, calibrated ? version : UNCALIBRATED_VERSION);
 }
 
 export interface MoodState {
@@ -199,10 +236,14 @@ export type MoodPassAction = 'none' | 'relabel' | 'rescore';
 
 // What a pass must do given what is on disk: no state or a changed vocabulary
 // → rescore; only the version changed → relabel; otherwise none.
-export function moodPassAction(stored: string | null, wantVocabHash: string): MoodPassAction {
+export function moodPassAction(
+  stored: string | null,
+  wantVocabHash: string,
+  version = CALIBRATION_VERSION,
+): MoodPassAction {
   const prev = parseMoodStateHash(stored);
   if (!prev) return 'rescore';
   if (prev.vocabHash !== wantVocabHash) return 'rescore';
-  if (prev.version !== CALIBRATION_VERSION) return 'relabel';
+  if (prev.version !== version) return 'relabel';
   return 'none';
 }

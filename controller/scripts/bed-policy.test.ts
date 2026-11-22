@@ -1,6 +1,8 @@
 // Unit tests for the bed policy's pure helpers (broadcast/bed-policy.ts):
 // rampBudgetMs (the three-state vocal read), bedWanted (threshold vs vocal
-// onset), bedLengthFor (the bed/ramp arithmetic) and pickBed (pool selection).
+// onset), bedLengthFor (the bed/ramp arithmetic), pickBed (pool selection) and
+// the length rules pickBed shares with the doctor (bedFits, entryCrossSecFor,
+// thresholdLinkBedSec, #2367).
 // Run: `npm test -- bed-policy`.
 //
 // node:assert-via-tsx style, matching scripts/programme.test.ts.
@@ -11,6 +13,9 @@ import {
   bedWanted,
   bedLengthFor,
   pickBed,
+  bedFits,
+  entryCrossSecFor,
+  thresholdLinkBedSec,
   BED_HEAD_SEC,
   BED_TAIL_SEC,
 } from '../src/broadcast/bed-policy.js';
@@ -247,3 +252,26 @@ function round2(n: number): number {
 }
 
 console.log('bed-policy: all assertions passed');
+
+// ── bedFits / entryCrossSecFor / thresholdLinkBedSec (#2367) ─────────────────
+
+// The length rule pickBed and the doctor share: exact fit counts, unknown never.
+assert.equal(bedFits({ durationSec: 30 }, 30), true);
+assert.equal(bedFits({ durationSec: 29.99 }, 30), false);
+assert.equal(bedFits({ durationSec: null }, 0), false, 'unknown duration is never gambled on');
+assert.equal(bedFits({}, 0), false);
+
+// Entry cross: the predecessor's stamp or the crossfade, clamped 0..15; 0 is
+// real (hard cut), anything unreadable is the 10s default.
+assert.equal(entryCrossSecFor(0), 0);
+assert.equal(entryCrossSecFor(6.5), 6.5);
+assert.equal(entryCrossSecFor(40), 15);
+assert.equal(entryCrossSecFor(-3), 0);
+assert.equal(entryCrossSecFor(undefined), 10);
+assert.equal(entryCrossSecFor('nope'), 10);
+
+// A threshold-length link's bed is bedLengthFor at the threshold, nothing else.
+assert.equal(thresholdLinkBedSec(OPTS, 10), bedLengthFor(12_000, OPTS, 10).bedSec);
+assert.equal(thresholdLinkBedSec(OPTS, 10), 33.5);
+assert.equal(thresholdLinkBedSec(OPTS), 23.5);
+assert.equal(thresholdLinkBedSec({ ...OPTS, thresholdSec: -5 }), bedLengthFor(0, OPTS).bedSec);

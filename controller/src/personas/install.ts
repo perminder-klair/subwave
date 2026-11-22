@@ -19,12 +19,16 @@
 // once nothing can still refuse. Asking twice is not redundant — this is the
 // answer that counts, the import's is a dry run.
 import * as settings from '../settings.js';
+import { hostedPersona } from '../setup/hosted.js';
 
 export type PersonaInstallFailure = { ok: false; status: number; error: string };
 export type PersonaInstallSuccess = {
   ok: true;
   personas: any[];
   persona: any | null;
+  // Hosted: what the engine rule changed on the way in (`tts.engine`), so the
+  // route can say so. Absent when nothing was.
+  managed?: string[];
 };
 export type PersonaInstallResult = PersonaInstallSuccess | PersonaInstallFailure;
 
@@ -74,6 +78,14 @@ export async function installPersona(persona: Record<string, unknown>): Promise<
   const slotError = personaSlotError(personas, persona.name);
   if (slotError) return slotError;
 
+  // Hosted: an imported persona gets the same engine rule as an edited one
+  // (setup/hosted.ts hostedPersona): a heavy or keyed engine the box doesn't
+  // run becomes inherit on its voice, and drops its rescue voice to null. A
+  // no-op on a self-hosted station.
+  const hosted = hostedPersona(persona, settings.get()?.tts?.defaultEngine);
+  persona = hosted.persona;
+  const changed = hosted.changed;
+
   try {
     await settings.update({ personas: [...personas, persona] });
   } catch (err: any) {
@@ -83,5 +95,5 @@ export async function installPersona(persona: Record<string, unknown>): Promise<
   const next = settings.get().personas || [];
   const wanted = personaNameKey(persona.name);
   const installed = next.find((p: any) => personaNameKey(p.name) === wanted) || null;
-  return { ok: true, personas: next, persona: installed };
+  return { ok: true, personas: next, persona: installed, ...(changed.length ? { managed: changed } : {}) };
 }

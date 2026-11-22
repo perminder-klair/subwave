@@ -174,11 +174,24 @@ if file.exists("#{state_dir}/liquidsoap_archive_bitrate.txt") then
   if v > 0 then archive_bitrate := v end
 end
 
-if file.exists("#{state_dir}/liquidsoap_stream_bitrate.txt") then
-  raw = string.trim(file.contents("#{state_dir}/liquidsoap_stream_bitrate.txt"))
-  v = int_of_string(default=192, raw)
-  if v > 0 then stream_bitrate := v end
+# The bitrates that size the mounts' Icecast bursts. The broadcast supervisor
+# reads each one once, renders <burst-size> from it and hands the same value
+# here (SUBWAVE_*_BITRATE, #2143), so a save landing between that render and
+# this read cannot size a burst for one encoder and build another. Without the
+# handoff (run by hand, or under an older supervisor) the file is read as before.
+def burst_bitrate(env_name, file_name, fallback) =
+  handed = int_of_string(default=0, environment.get(default="", env_name))
+  if handed > 0 then
+    handed
+  elsif file.exists("#{state_dir}/#{file_name}") then
+    v = int_of_string(default=fallback, string.trim(file.contents("#{state_dir}/#{file_name}")))
+    if v > 0 then v else fallback end
+  else
+    fallback
+  end
 end
+
+stream_bitrate := burst_bitrate("SUBWAVE_STREAM_BITRATE", "liquidsoap_stream_bitrate.txt", 192)
 
 # Opt IN to the Ogg-Opus mount (costs a continuous encoder + a 44.1->48k
 # resample). Only Blink clients ever select it (web/hooks/usePlayer.ts).
@@ -187,11 +200,7 @@ if file.exists("#{state_dir}/liquidsoap_opus_enabled.txt") then
   opus_enabled := (raw == "true")
 end
 
-if file.exists("#{state_dir}/liquidsoap_opus_bitrate.txt") then
-  raw = string.trim(file.contents("#{state_dir}/liquidsoap_opus_bitrate.txt"))
-  v = int_of_string(default=96, raw)
-  if v > 0 then opus_bitrate := v end
-end
+opus_bitrate := burst_bitrate("SUBWAVE_OPUS_BITRATE", "liquidsoap_opus_bitrate.txt", 96)
 
 # Opt IN to the AAC-LC mount — for external players that decode AAC but not
 # Opus. No resample.
@@ -200,11 +209,7 @@ if file.exists("#{state_dir}/liquidsoap_aac_enabled.txt") then
   aac_enabled := (raw == "true")
 end
 
-if file.exists("#{state_dir}/liquidsoap_aac_bitrate.txt") then
-  raw = string.trim(file.contents("#{state_dir}/liquidsoap_aac_bitrate.txt"))
-  v = int_of_string(default=192, raw)
-  if v > 0 then aac_bitrate := v end
-end
+aac_bitrate := burst_bitrate("SUBWAVE_AAC_BITRATE", "liquidsoap_aac_bitrate.txt", 192)
 
 # Opt IN to the Ogg-FLAC mount — a lossless capture of the PROCESSED bus at the
 # source 44.1 kHz. ~800-900 kbps, hence off by default; external players only.
@@ -402,12 +407,37 @@ jingle_now_queue.on_metadata(synchronous=false, fun (_) -> jingle_now_on_air := 
 # every instance would register auto.skip/auto.next/auto.uri again (nothing
 # calls them); radio.liq registers auto.reload and auto.ready below.
 auto_m3u = "#{state_dir}/auto.m3u"
+
+# Reload generations (#2213). A reload in place empties the playlist's queue,
+# but a request its `next()` is still resolving (a subhttp: download takes
+# seconds) is appended after the reload returns: on the stock 2.4.6 playlist the
+# old file's track then airs next on the coast, after any number of DJ picks in
+# between, unless an off-air reload replaces the instance first. So every
+# reload bumps `auto_generation`, and `check_next` (asked before the resolve)
+# stamps each request with the generation it was chosen under. A request whose
+# stamp is older than the current generation came from a file the controller
+# has since replaced. Residual: a `next()` that read the old file a moment
+# before the bump and reached `check_next` after it carries the new stamp.
+auto_generation = ref(0)
+# [(request id, generation)], newest first. Bounded: the queue holds a request
+# or two, so only the newest stamps are ever asked about.
+auto_request_generations = ref([])
+def stamp_auto_request(r) =
+  auto_request_generations := list.prefix(32, [(request.id(r), auto_generation()), ...auto_request_generations()])
+  true
+end
+# An unstamped request counts as current: drop only what is proven stale.
+def auto_request_stale(r) =
+  list.assoc(default=auto_generation(), request.id(r), auto_request_generations()) < auto_generation()
+end
+
 def make_auto_playlist() =
   playlist(
     id="auto",
     register_server_commands=false,
     reload_mode="never",
     mode="randomize",
+    check_next=stamp_auto_request,
     auto_m3u
   )
 end
@@ -448,6 +478,77 @@ def read_auto_m3u() =
 end
 auto_m3u_loaded = ref(read_auto_m3u())
 
+# Drops a stale request (#2213) once a current one is queued behind it, for as
+# long after an in-place reload as a resolve that was in flight can still land
+# (`settings.request.timeout`, plus a margin). Never drops the last request it
+# has: with nothing current resolved, the stale track airs rather than dead air,
+# so the starve guard sees exactly what it saw before. The playlist will not
+# fetch while the stale request fills its queue (`fetch()` is a no-op at the
+# prefetch depth, measured on 2.4.6), so once per generation one entry of the
+# file just loaded is resolved and added beside it, on a slow thread; if that
+# fails, the stale request stays. Same read/set/destroy order as the stdlib's
+# own reload, and never the request on air. Never raises: it runs in thread.run.
+auto_purge_fetched = ref(-1)
+def add_current_auto_request(p) =
+  try
+    entries = list.filter(fun (l) -> l != "" and not string.contains(prefix="#", l),
+      list.map(string.trim, string.split(separator="\n", auto_m3u_loaded())))
+    if list.length(entries) > 0 then
+      uri = list.nth(entries, random.int(min=0, max=list.length(entries)))
+      # Stamped like the playlist's own requests: a reload that lands while
+      # this resolves makes it stale too, or it would air from a replaced file.
+      r = request.create(uri)
+      ignore(stamp_auto_request(r))
+      if not p.add(r) then
+        log(label="subwave", "auto: could not resolve #{redact_subhttp_uri(uri)} to replace a stale request; the stale one stays (#2213)")
+      end
+    end
+  catch err do
+    log(label="subwave", "auto: adding a current request failed (#{err})")
+  end
+end
+def purge_stale_auto() =
+  try
+    p = auto_playlist()
+    q = p.queue()
+    stale = list.filter(auto_request_stale, q)
+    current = list.filter(fun (r) -> not auto_request_stale(r), q)
+    if list.length(stale) > 0 then
+      if list.length(current) > 0 then
+        p.set_queue(current)
+        on_air_rid = null.get(default=-1, null.map(request.id, p.current()))
+        list.iter(fun (r) -> begin
+          log(label="subwave", "auto: dropped #{redact_subhttp_uri(request.uri(r))}, resolved from a fallback a reload replaced (#2213)")
+          if on_air_rid != request.id(r) then request.destroy(r) end
+        end, stale)
+      elsif auto_purge_fetched() != auto_generation() then
+        auto_purge_fetched := auto_generation()
+        thread.run(fast=false, fun () -> add_current_auto_request(p))
+      end
+    end
+  catch err do
+    log(label="subwave", "auto: stale-request purge failed (#{err})")
+  end
+end
+
+# Every in-place reload: bump the generation first, so the reload's own fetch
+# is stamped current, then watch for a request the old file still had in flight.
+# One watcher per reload; a later reload's watcher takes over from it.
+def reload_auto_in_place() =
+  auto_generation := auto_generation() + 1
+  generation = auto_generation()
+  auto_playlist().reload()
+  until = time() + settings.request.timeout() + 5.
+  thread.run.recurrent(delay=0.25, fun () -> begin
+    if auto_generation() == generation and time() < until then
+      purge_stale_auto()
+      0.25
+    else
+      -1.
+    end
+  end)
+end
+
 server.register(
   namespace="auto",
   "reload",
@@ -456,7 +557,7 @@ server.register(
   fun (_) -> begin
     auto_m3u_loaded := read_auto_m3u()
     if auto_on_air() then
-      auto_playlist().reload()
+      reload_auto_in_place()
     else
       fresh = make_auto_playlist()
       auto_playlist := fresh
@@ -477,14 +578,15 @@ server.register(
 # first track after auto.reload, and the controller waits for it before a resume
 # skip, or the skip would air the emergency loop until it arrives. Reloaded in
 # place (on air), the playlist is ready only for the track it is playing: wait
-# for the next one in its queue (queued requests are resolved).
+# for the next one in its queue (queued requests are resolved), and only one
+# chosen from the file just loaded: a stale request (#2213) is not the new show.
 server.register(
   namespace="auto",
   "ready",
   description="Report whether the fallback has a track ready: ready / pending",
   usage="ready",
   fun (_) -> begin
-    ready = if auto_on_air() then list.length(auto_playlist().queue()) > 0 else auto_slot.is_ready() end
+    ready = if auto_on_air() then list.exists(fun (r) -> not auto_request_stale(r), auto_playlist().queue()) else auto_slot.is_ready() end
     ready ? "ready" : "pending"
   end
 )
@@ -512,7 +614,7 @@ def auto_m3u_changed() =
           then
             auto_m3u_loaded := contents
             try
-              auto_playlist().reload()
+              reload_auto_in_place()
             catch err do
               log(label="subwave", "auto.m3u watch reload failed (#{err})")
             end
@@ -771,6 +873,21 @@ def dj_transition(a, b) =
   boundary_fading = a.metadata["liq_show_fade"] == "true"
   jingle_out = a.metadata["subwave_jingle"] == "true"
   jingle_in = b.metadata["subwave_jingle"] == "true"
+  # NO UNUSED OPERATORS ON A JINGLE SEAM. The seam block at the end of this
+  # function reads the raw `a.source` when the outgoing side is a jingle, and
+  # the raw `b.source` on any jingle seam, so the faded/effected a_source and
+  # b_source below would never be connected to anything. Liquidsoap 2.4.6 does
+  # not free an operator that was built but never wired in: each one stays
+  # behind as its own never-started clock (`source.dynamic` + `track_audio_amplify`
+  # + `fade_in`/`fade_out`, ticks 0 in `clock.dump`) and the stream clock scans
+  # every one of them each frame. About 3 leaked per jingle cycle; one station
+  # held 1,475 after 22 days, when the clock could no longer run in real time
+  # and reset its outputs about 100 times a day (#2372). So a jingle seam builds
+  # only what it airs: a_source is the raw a.source when the outgoing side is a
+  # jingle, b_source is the raw b.source on every jingle seam, and the clip
+  # seam's delay (b_delay) is not built on one. The outgoing washout/loop never
+  # arm then either: a jingle never carries their flags.
+  # (scripts/fx-render-test.sh orphans)
   washing = a.metadata["liq_washout"] == "true" and not boundary_fading
   looping = a.metadata["liq_loop"] == "true" and not washing and not boundary_fading
   sweeping = b.metadata["liq_sweep"] == "true" and not looping and not boundary_fading and not jingle_out
@@ -803,7 +920,9 @@ def dj_transition(a, b) =
   # -2.5 dB, at the 0.4s/0.3s clip seam; arithmetic for linear fades).
   a_fade = d - b_delay
   a_source =
-    if washing then
+    if jingle_out then
+      a.source
+    elsif washing then
       fade.out(duration=a_fade, type="exp", initial_metadata=a.metadata, a.source)
     elsif sweeping or chopping then
       fade.out(duration=a_fade, type="log", initial_metadata=a.metadata, a.source)
@@ -846,31 +965,58 @@ def dj_transition(a, b) =
           end
         9000.0 * pow(1100.0 / 9000.0, depth)      # 9 kHz open → 1.1 kHz floor
       end
-      # Makeup on the choked branch: the filter guts the outgoing's energy while
-      # the incoming is only half-faded, so lift the residual +2.6 dB as the
-      # cutoff bottoms out. Without it the mid-blend goes near-quiet.
+      # LEVEL. Heard on air as a step: the sweep's level jumped twice, which
+      # stands out once plain seams hold their level (the equal-power curve).
+      # Measured with `fx-render-test.sh sweepstep` (pink noise A/B, sweep
+      # minus the LINEAR plain fade): −1.4 dB the instant it engaged, then a
+      # 3.5 dB climb to +1.8 dB from 35% to 45% of the blend; on real pairs
+      # (14 s cross) the climb reached +4.9 dB.
+      # ENGAGE: the filtered mix is not transparent even at its open 9 kHz
+      # cutoff, so swapping the raw track for it stepped the level down. The
+      # raw track hands over to it over the first 6% of the blend instead.
+      # MAKEUP: the choke loses about 1 dB of the outgoing early, so +1 dB while
+      # it closes; but the hot log fade keeps the outgoing up late, where the old
+      # +2.6 dB makeup (×1.35 from 30% to 50%) became the climb, so it eases to
+      # −1.1 dB from 40% to 70%. The blend now holds within −0.4..+0.6 dB of the
+      # linear plain fade on pink noise. A bright outgoing still dips while the
+      # cutoff bottoms out (the choke itself, up to −3 dB on real music).
+      # The sweep never takes the equal-power curve (equal_power_seam excludes
+      # it), so against an equal-power plain seam it still sits about 2 dB
+      # under from 25% to 67% of the blend: a gradual dip, not a step.
+      def sweep_engage() =
+        e = source.elapsed(sweep_src)
+        e = if e < 0. then 0. else e end
+        t_eng = 0.06 * d
+        x = if e >= t_eng then 1.0 else e / t_eng end
+        3.0 * x * x - 2.0 * x * x * x
+      end
       def sweep_gain() =
         e = source.elapsed(sweep_src)
         e = if e < 0. then 0. else e end
-        g_max = 1.35
-        t_from = 0.30 * d
-        t_to   = 0.50 * d
-        if e <= t_from then 1.0
-        elsif e >= t_to then g_max
-        else
-          x = (e - t_from) / (t_to - t_from)
-          1.0 + (3.0 * x * x - 2.0 * x * x * x) * (g_max - 1.0)
-        end
+        g_early = 1.12
+        g_late  = 0.88
+        t_from = 0.40 * d
+        t_to   = 0.70 * d
+        g =
+          if e <= t_from then g_early
+          elsif e >= t_to then g_late
+          else
+            x = (e - t_from) / (t_to - t_from)
+            g_early + (3.0 * x * x - 2.0 * x * x * x) * (g_late - g_early)
+          end
+        1.0 + sweep_engage() * (g - 1.0)
       end
       # PARALLEL DRY BLEED — why the stages run full-wet. Wetness on cascaded
       # stages MULTIPLIES the dry path (0.35 x 0.35 ~= 12% ~= -18 dB), so a
       # wetness cap craters the mid-band. An explicit dry branch around a
-      # full-wet chain gives a hard floor: 30% of the untouched track reaches
-      # the mix (~-10 dB, ~-8 dB after makeup) however deep the cutoff dives.
+      # full-wet chain gives a hard floor: once engaged, 30% of the untouched
+      # track reaches the mix however deep the cutoff dives, ~-9.5 dB under the
+      # early makeup (x1.12) and ~-11.6 dB under the late one (x0.88).
       swept = filter.rc(frequency=sweep_cut, mode="low", wetness=1.,
                 filter.rc(frequency=sweep_cut, mode="low", wetness=1., a_source))
-      amplify(sweep_gain, add(normalize=false,
-        [amplify(0.30, a_source), amplify(0.75, swept)]))
+      amplify(override=null, sweep_gain, add(normalize=false,
+        [amplify(override=null, fun () -> 1.0 - 0.70 * sweep_engage(), a_source),
+         amplify(override=null, fun () -> 0.75 * sweep_engage(), swept)]))
     else
       a_source
     end
@@ -896,7 +1042,7 @@ def dj_transition(a, b) =
       # collapses music to -115 dB on 2.2.5; a 40 Hz HPF on a 440 Hz tone
       # renders -inf on 2.4.4). Build the high-pass as dry - lowpass(dry).
       blend_low = filter.rc(frequency=blend_hp, mode="low", wetness=1., a_source)
-      add(normalize=false, [a_source, amplify(-1., blend_low)])
+      add(normalize=false, [a_source, amplify(override=null, -1., blend_low)])
     else
       a_source
     end
@@ -976,7 +1122,7 @@ def dj_transition(a, b) =
       washed = comb(delay=wd, feedback=wash_fb, a_source)
       washed = filter.rc(frequency=tail_cut, mode="low", wetness=tail_wet,
                  filter.rc(frequency=tail_cut, mode="low", wetness=tail_wet, washed))
-      amplify(wash_gain, washed)
+      amplify(override=null, wash_gain, washed)
     else
       a_source
     end
@@ -1074,12 +1220,12 @@ def dj_transition(a, b) =
          comb(delay=0.113, feedback=diss_fb, a_source),
          comb(delay=0.151, feedback=diss_fb, a_source),
          comb(delay=0.181, feedback=diss_fb, a_source),
-         amplify(-4., a_source)])
-      washed = amplify(0.7, washed)
+         amplify(override=null, -4., a_source)])
+      washed = amplify(override=null, 0.7, washed)
       washed = filter.rc(frequency=diss_cut, mode="low", wetness=diss_wet,
                  filter.rc(frequency=diss_cut, mode="low", wetness=diss_wet, washed))
       # Dry (faded) + wash: the track walks out through its own ambience.
-      add(normalize=false, [a_source, amplify(diss_gain, washed)])
+      add(normalize=false, [a_source, amplify(override=null, diss_gain, washed)])
     else
       a_source
     end
@@ -1172,7 +1318,7 @@ def dj_transition(a, b) =
           end
         g * master
       end
-      amplify(chop_gain, a_source)
+      amplify(override=null, chop_gain, a_source)
     else
       a_source
     end
@@ -1253,7 +1399,7 @@ def dj_transition(a, b) =
         e = if e < 0. then 0. else e end
         if e >= d then 0.0 else 1.0 - e / d end
       end
-      gated  = amplify(loop_dry, a_source)
+      gated  = amplify(override=null, loop_dry, a_source)
       looped = comb(delay=bar, feedback=0.0, gated)
       looped = comb(delay=2.0 * bar, feedback=0.0, looped)
       looped = if 4.0 * bar < d then comb(delay=4.0 * bar, feedback=0.0, looped) else looped end
@@ -1265,7 +1411,7 @@ def dj_transition(a, b) =
       # exists, recreating the ~+6 dB transition-entry jump.
       looped = filter.rc(frequency=loop_cut, mode="low", wetness=loop_wet,
                  filter.rc(frequency=loop_cut, mode="low", wetness=loop_wet, looped))
-      amplify(loop_gain, looped)
+      amplify(override=null, loop_gain, looped)
     else
       a_source
     end
@@ -1285,7 +1431,9 @@ def dj_transition(a, b) =
   # always spans the full d.
   b_fade = if b_delay > 0. then d - b_delay else b_fade end
   b_source =
-    if equal_power_seam then
+    if jingle_in or jingle_out then
+      b.source
+    elsif equal_power_seam then
       equal_power_fade(span=b_fade, rising=true, b.source)
     else
       fade.in(duration=b_fade, initial_metadata=b.metadata, b.source)
@@ -1361,12 +1509,12 @@ def dj_transition(a, b) =
       bs = filter.rc(frequency=surf_cut, mode="low", wetness=surf_wet,
              filter.rc(frequency=surf_cut, mode="low", wetness=surf_wet, in_src))
       bs_low = filter.rc(frequency=160., mode="low", wetness=1., bs)
-      add(normalize=false, [bs, amplify(bass_amt, bs_low)])
+      add(normalize=false, [bs, amplify(override=null, bass_amt, bs_low)])
     else
       b_source
     end
   b_source =
-    if b_delay > 0. then
+    if b_delay > 0. and not (jingle_in or jingle_out) then
       sequence(merge=true, [blank(duration=b_delay), b_source])
     else
       b_source
@@ -1415,8 +1563,30 @@ VOICE_GATE_MAX_SEC = 120.
 # their output as ONE never-ending track, so a rotate above them plays a single
 # jingle at startup and is stuck on music forever. music_meta is captured ABOVE
 # this, so jingles never reach now-playing. An empty jingles.m3u is fine (rotate
-# skips an unavailable source); jingle_ratio 0 = jingles OFF (#997), the rotate
-# is not built at all.
+# skips an unavailable source, and the slot it skipped airs at the first seam
+# after a list returns); jingle_ratio 0 = jingles OFF (#997), the rotate is not
+# built at all.
+#
+# The file is the ON-AIR SHOW's list (#2367): the controller rewrites it from a
+# show's jingle list when the show changes, so the rotate needs a reload that
+# takes effect at the next stinger. A playlist draws its next clip as the one on
+# air ends and holds it as its current request, apart from its queue, and
+# reload() empties only the queue (stdlib playlist.liq): measured on 2.4.6, a
+# reload between stingers aired the old list's prepared clip next, and the new
+# list only one stinger later — at the default ratio, the incoming show's first
+# and often only stinger. So the playlist sits in a source.dynamic slot, as the
+# fallback's does (#1925): between stingers `jingles.reload` commits a fresh
+# instance, which drops what the old one prepared; while a rotate stinger is on
+# air it reloads in place, which plays that stinger to its end and draws the
+# next from the new list (measured). `skip` is no substitute: measured, it aired
+# the prepared clip at zero length, and cut a stinger on air.
+#
+# The instances do not watch jingles.m3u: radio.liq watches it once (below) as
+# the backup for a write whose reload never came, and reloads in place only
+# contents no reload has read yet. register_server_commands=false: every
+# instance would register jingles.skip/next/uri again; radio.liq registers
+# `jingles.reload` itself, only here, so a mixer without the rotate still
+# answers "unknown command", which is how the controller knows there is none.
 #
 # True while a rotate jingle is on air: set where it reaches the source cross
 # reads (below the jingle_now switch), released as the playlist starts its next
@@ -1424,18 +1594,98 @@ VOICE_GATE_MAX_SEC = 120.
 rotate_jingle_on_air = ref(false)
 music =
   if jingle_ratio() > 0 then
-    jingles = playlist(
-      id="jingles",
-      mode="randomize",
-      reload_mode="watch",
-      "#{state_dir}/jingles.m3u"
+    jingles_m3u = "#{state_dir}/jingles.m3u"
+    def read_jingles_m3u() =
+      try
+        file.contents(jingles_m3u)
+      catch err do
+        log(label="subwave", "jingles.m3u unreadable (#{err})")
+        ""
+      end
+    end
+    def make_jingles_playlist() =
+      p = playlist(
+        id="jingles",
+        register_server_commands=false,
+        reload_mode="never",
+        mode="randomize",
+        jingles_m3u
+      )
+      # The playlist starts its next clip in the frame that ends the one on air,
+      # and this hook runs inside that frame, before the gate below sees its
+      # track mark. Re-checked at the mark, a closed gate dropped the rest of the
+      # frame, the next clip's head and metadata with it, so that clip later
+      # aired under the previous one's name and length. On each instance, so the
+      # slot changes nothing about when it runs.
+      p.on_track(synchronous=true, fun (_) -> rotate_jingle_on_air := false)
+      p
+    end
+    jingles_playlist = ref(make_jingles_playlist())
+    pending_jingles_playlist = ref(null)
+    # self_sync=false: a playlist never drives its own clock.
+    jingles = source.dynamic(
+      id="jingles_slot",
+      self_sync=false,
+      init=jingles_playlist(),
+      # The clock thread calls this, while only the server thread below stores a
+      # source; clearing only what was taken never drops one stored meanwhile.
+      fun () -> begin
+        next = pending_jingles_playlist()
+        if null.defined(next) then pending_jingles_playlist := null end
+        next
+      end
     )
-    # The playlist starts its next clip in the frame that ends the one on air,
-    # and this hook runs inside that frame, before the gate below sees its track
-    # mark. Re-checked at the mark, a closed gate dropped the rest of the frame,
-    # the next clip's head and metadata with it, so that clip later aired under
-    # the previous one's name and length.
-    jingles.on_track(synchronous=true, fun (_) -> rotate_jingle_on_air := false)
+    # What the last reload read. The watch below skips a write this already
+    # holds; `jingles.reload` always reloads.
+    jingles_m3u_loaded = ref(read_jingles_m3u())
+    server.register(
+      namespace="jingles",
+      "reload",
+      description="Reload jingles.m3u; between stingers, a fresh playlist replaces the one holding a prepared clip",
+      usage="reload",
+      fun (_) -> begin
+        jingles_m3u_loaded := read_jingles_m3u()
+        if rotate_jingle_on_air() then
+          jingles_playlist().reload()
+        else
+          fresh = make_jingles_playlist()
+          jingles_playlist := fresh
+          # The prepared source carries the activation the slot releases when it
+          # replaces it, which shuts the old instance and its request down.
+          pending_jingles_playlist := jingles.prepare(fresh)
+          # Commit now: the slot takes a prepared source only when asked whether
+          # it is ready, and the rotate asks only when a stinger is due.
+          ignore(jingles.is_ready())
+        end
+        "OK"
+      end
+    )
+    # The backup for a write whose `jingles.reload` never arrived: reload in
+    # place, as the playlist's own watch did. Settled like the stdlib's watch.
+    # Only the server thread replaces the instance. Never raises.
+    jingles_watch_scheduled = ref(false)
+    def jingles_m3u_changed() =
+      if not jingles_watch_scheduled() then
+        jingles_watch_scheduled := true
+        thread.run(delay=0.5, fun () -> begin
+          jingles_watch_scheduled := false
+          contents = read_jingles_m3u()
+          if contents != jingles_m3u_loaded() then
+            jingles_m3u_loaded := contents
+            try
+              jingles_playlist().reload()
+            catch err do
+              log(label="subwave", "jingles.m3u watch reload failed (#{err})")
+            end
+          end
+        end)
+      end
+    end
+    try
+      if file.exists(jingles_m3u) then ignore(file.watch(jingles_m3u, jingles_m3u_changed)) end
+    catch err do
+      log(label="subwave", "jingles.m3u is not watched (#{err}); only jingles.reload re-reads it")
+    end
     # Unavailable while a bed is on air (can't split a bed from its song), while
     # a voice clip is on air (can't hand a stinger over the DJ), and while the
     # music chain is starved (can't serve stingers forever over dead air).
@@ -1800,7 +2050,9 @@ sfx_queue = request.queue(id="sfx_queue")
 
 # Silent lead-in clip, pushed immediately before each speech file: smooth_add
 # ducks over the silence so the dip completes BEFORE the DJ's first word.
-# request.queue plays the two pushes gaplessly.
+# request.queue plays the two pushes gaplessly. A clip annotated
+# subwave_no_leadin="true" queues behind one already playing (an exchange
+# continuation line): the duck is down, so its lead-in would be dead air.
 leadin_path = "/sounds/leadin.wav"
 has_leadin = file.exists(leadin_path)
 if has_leadin then
@@ -1815,7 +2067,7 @@ def poll_voice() =
     file.remove("#{state_dir}/say.txt")
     if contents != "" then
       log("DJ says: #{contents}")
-      if has_leadin then
+      if has_leadin and not string.contains(substring='subwave_no_leadin="true"', contents) then
         ignore(voice_queue.push(request.create(leadin_path)))
       end
       ignore(voice_queue.push(request.create(contents)))
@@ -1857,7 +2109,7 @@ def poll_intro() =
         string.replace(pattern="^annotate:", fun(_) -> "annotate:subwave_overlay_epoch=\"#{epoch}\",", contents)
       else contents end
       log("DJ talk-over: #{contents}")
-      if has_leadin then
+      if has_leadin and not string.contains(substring='subwave_no_leadin="true"', contents) then
         leadin = if overlay then "annotate:subwave_jingle_overlay=\"true\",subwave_overlay_epoch=\"#{epoch}\",subwave_overlay_track_at=\"#{song_stamp}\":#{leadin_path}" else leadin_path end
         ignore(intro_queue.push(request.create(leadin)))
       end
@@ -2333,20 +2585,27 @@ def make_stream_outputs() =
   # Opus mandates 48 kHz internally, so this mount also costs a 44.1->48k
   # resample. application="audio" is the music tuning; 96 kbps is the
   # music-transparent default. When off, neither is built.
+  #
+  # Hard CBR (vbr="none", #2138): Icecast's <burst-size> is a byte count sized
+  # from this bitrate, so it holds bufferSeconds only if every second costs the
+  # same. Constrained VBR coded digital silence at ~1.6 kbps, so after an idle
+  # pause the burst reached back past the pause into stale music, and a new
+  # listener waited out the whole pause. CBR pads silence to the bitrate; Ogg
+  # framing adds ~1%, so the burst is a little under bufferSeconds.
   opus_shutdown =
     if opus_enabled() then
       obr = opus_bitrate()
       opus_enc =
         if obr <= 96 then
-          %opus(bitrate=96, samplerate=48000, channels=2, application="audio", vbr="constrained")
+          %opus(bitrate=96, samplerate=48000, channels=2, application="audio", vbr="none")
         elsif obr <= 128 then
-          %opus(bitrate=128, samplerate=48000, channels=2, application="audio", vbr="constrained")
+          %opus(bitrate=128, samplerate=48000, channels=2, application="audio", vbr="none")
         elsif obr <= 192 then
-          %opus(bitrate=192, samplerate=48000, channels=2, application="audio", vbr="constrained")
+          %opus(bitrate=192, samplerate=48000, channels=2, application="audio", vbr="none")
         elsif obr <= 256 then
-          %opus(bitrate=256, samplerate=48000, channels=2, application="audio", vbr="constrained")
+          %opus(bitrate=256, samplerate=48000, channels=2, application="audio", vbr="none")
         else
-          %opus(bitrate=320, samplerate=48000, channels=2, application="audio", vbr="constrained")
+          %opus(bitrate=320, samplerate=48000, channels=2, application="audio", vbr="none")
         end
       opus_out = output.icecast(
         opus_enc,
@@ -2614,6 +2873,38 @@ server.register(
   description="Consume a proto_subhttp completion outcome: ready / failed / pending",
   usage="subhttp_probe_status <probe-id>",
   fun(arg) -> take_subhttp_outcome(string.trim(arg))
+)
+
+# Whether this container can read a regular file. The controller asks with a
+# real file off its MUSIC_LIBRARY_PATH mount (music/library-mount.ts) and only
+# sends a local path once this says "yes", because the mixer is what opens the
+# file and the default compose files mount no library here. Read-only: `test`
+# stats the path and opens nothing, so a large file costs nothing. The timeout
+# bounds a hung mount, and an unanswered question reads "no", the safe side: the
+# track streams.
+server.register(
+  "path_readable",
+  description="Whether the mixer can read a regular file at this path: yes / no",
+  usage="path_readable <path>",
+  fun(arg) -> begin
+    path = process.quote(string.trim(arg))
+    try
+      if process.test(timeout=1., "test -f #{path} && test -r #{path}") then "yes" else "no" end
+    catch _ do
+      "no"
+    end
+  end
+)
+
+# Whether `jingles.reload` replaces the rotate's playlist between stingers
+# (#2367). Registered whatever the rotate, so "unknown command" here always
+# means a mixer older than the swap, never a mixer without a rotate: doctor
+# asks, and warns that a show's jingle list starts one stinger late.
+server.register(
+  "jingle_list_swap",
+  description="Whether jingles.reload replaces the playlist between stingers: yes",
+  usage="jingle_list_swap",
+  fun(_) -> "yes"
 )
 
 # What a skip would air next from dj_queue: "ready" (a resolved request is

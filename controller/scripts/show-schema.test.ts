@@ -16,6 +16,7 @@ const {
   SHOW_FILTER_VALUES_MAX,
   SHOW_NAME_MAX,
   SHOW_TAG_MAX,
+  SHOW_IMAGING_ALLOWLIST_MAX,
   SHOW_TOPIC_MAX,
   TAGS_PER_SHOW_LIMIT,
   migrateLegacyShowFields,
@@ -426,4 +427,27 @@ test('preparation references survive strict saves and lenient loads; duplicate f
   assert.ok(loaded, 'a hand-edited conflicting feature must not delete the entire show');
   assert.equal(loaded.preparationSkill, 'pick');
   assert.equal(loaded.segmentSkill, '');
+});
+
+test('show without allowlists parses to empty lists', () => {
+  const saved = strict();
+  assert.deepEqual(saved.allowedJingles, []);
+  assert.deepEqual(saved.allowedBeds, []);
+  const [loaded] = normalizeShows([show()], personaIds);
+  assert.deepEqual(loaded.allowedJingles, []);
+  assert.deepEqual(loaded.allowedBeds, []);
+});
+
+test('allowlist over the cap is refused', () => {
+  const many = Array.from({ length: SHOW_IMAGING_ALLOWLIST_MAX + 1 }, (_, i) => `jingle_${i}.wav`);
+  assert.throws(() => strict({ allowedJingles: many }), /allowedJingles/);
+  assert.throws(() => strict({ allowedBeds: many }), /allowedBeds/);
+  assert.deepEqual(strict({ allowedJingles: ['jingle_a.wav', 'jingle_a.wav'] }).allowedJingles, ['jingle_a.wav']);
+});
+
+test('load drops malformed allowlist entries', () => {
+  const rows = normalizeShows([show({ allowedBeds: [42, '  ', 'bed-x'], allowedJingles: [null, 'jingle_a.wav'] })], personaIds);
+  assert.equal(rows.length, 1);
+  assert.deepEqual(rows[0].allowedBeds, ['bed-x']);
+  assert.deepEqual(rows[0].allowedJingles, ['jingle_a.wav']);
 });

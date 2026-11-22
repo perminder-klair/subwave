@@ -25,6 +25,7 @@ import * as library from './library.js';
 import * as settings from '../settings.js';
 import * as subsonic from './subsonic.js';
 import { applyStrictLocks, hasEraBound, trackEnergy, type FilterTrack, type VocalMode, type YearRange } from './show-filter.js';
+import { excludesExplicit, withoutExplicit } from './explicit-policy.js';
 import { candidateCoverage } from './show-candidates.js';
 import { airableAnchorTracks } from './show-recency.js';
 import { applyKnownTrackCeiling } from './track-duration.js';
@@ -47,6 +48,7 @@ export type JourneyShow = {
   vocals?: string;
   minTrackLengthSeconds?: unknown;
   maxTrackSeconds?: unknown;
+  excludeExplicit?: boolean;
 };
 
 function vocalModeOf(raw: unknown): VocalMode | null {
@@ -100,7 +102,7 @@ export function showDestinationPool<T extends DestinationTrack>({
     };
     const placed = !!(locks.genres.length || locks.eras.length || locks.moods.length || locks.energies.length || locks.vocals);
     if (!placed) return null;
-    pool = applyStrictLocks(rows, locks, { starve: true });
+    pool = applyStrictLocks(withoutExplicit(rows, excludesExplicit(show)), locks, { starve: true });
     pool = applyTrackFloor(applyKnownTrackCeiling(pool, maxTrackSec), minTrackSec, { starve: true });
     if (excludedIds?.size) pool = pool.filter(track => !!track.id && !excludedIds.has(track.id));
   }

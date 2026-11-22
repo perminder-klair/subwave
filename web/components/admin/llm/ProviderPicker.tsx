@@ -30,7 +30,7 @@ interface ProviderPickerProps {
 export function ProviderPicker({ value, providerIds, label, env, keyAware = true, onChange, className }: ProviderPickerProps) {
   const status = (id: string) => providerStatus(id, env, keyAware);
   return (
-    <div role="radiogroup" aria-label={label} className={cn('grid gap-4', className)}>
+    <div role="radiogroup" aria-label={label} className={cn('@container grid gap-4', className)}>
       {groupProviders(providerIds).map(view => (
         <div key={view.group} className="grid gap-2" data-group={view.group}>
           <GroupHeading>{view.label}</GroupHeading>
@@ -59,9 +59,20 @@ function GroupHeading({ children }: { children: string }) {
   );
 }
 
+// Columns from the group's own size, against the picker's width (its
+// @container), so no row strands one card: two fill a row, three sit in a row
+// of three, and four go two by two until the picker has room for a row of four.
+// A longer group falls back to rows of three.
+const CARD_COLUMNS: Record<number, string> = {
+  2: 'grid-cols-2',
+  3: 'grid-cols-2 @md:grid-cols-3',
+  4: 'grid-cols-2 @2xl:grid-cols-4',
+};
+const cardColumns = (count: number) => CARD_COLUMNS[count] ?? 'grid-cols-2 @md:grid-cols-3';
+
 function ProviderCards({ view, value, status, onChange }: GroupProps) {
   return (
-    <div className="grid grid-cols-2 gap-2.5 md:grid-cols-3" data-layout="cards">
+    <div className={cn('grid gap-2.5', cardColumns(view.ids.length))} data-layout="cards">
       {view.ids.map(id => {
         const meta = PROVIDER_META[id];
         const active = value === id;

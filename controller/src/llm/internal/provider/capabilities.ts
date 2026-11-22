@@ -3,18 +3,33 @@
 // OpenRouter/compat/locca use construction-time controls in registry.ts instead.
 // Pure cfg mappings are pinned by controller/scripts/llm-pure.test.ts.
 
-import { OPENAI_COMPATIBLE_GATEWAYS, type GatewayReasoningRule, type OpenAICompatibleGateway } from '../../../schemas/providers.js';
+import type { ProviderOptions } from '@ai-sdk/provider-utils';
+import { OPENAI_COMPATIBLE_GATEWAYS, openaiCompatibleGateway, type GatewayReasoningRule, type OpenAICompatibleGateway } from '../../../schemas/providers.js';
+import {
+  MANUAL_THINKING_BUDGETS, MANUAL_THINKING_DEFAULT_BUDGET, claudeModelId, gemmaModelId, manualThinkingClaudeModel, normalizeReasoningEffort,
+  openaiReasoningModelId, reasoningEffortOffered, type ReasoningEffort,
+} from '../../../schemas/reasoning.js';
 
 interface ThinkingArgs {
   modelId: string;
   reasoning: boolean;
   forceNoThink: boolean;
+  // The operator's level (llm.reasoningEffort, #2296), already 'default' on a
+  // leg that can't express one (reasoningEffortOffered). Read only while
+  // reasoning is on; 'default' is today's "On" on every descriptor.
+  effort: ReasoningEffort;
 }
 
 // The subset of the SDK's reasoning levels SUB/WAVE emits: 'medium' is the
-// balanced "on", 'minimal' the floor for models that can't turn it off, 'none'
-// disables, undefined leaves the provider/model default alone.
-export type ReasoningLevel = 'none' | 'minimal' | 'medium';
+// balanced "on", 'low'/'high' the operator's levels, 'minimal' the floor for
+// models that can't turn it off, 'none' disables, undefined leaves the
+// provider/model default alone.
+export type ReasoningLevel = 'none' | 'minimal' | 'low' | 'medium' | 'high';
+
+// What "on" sends at the operator's level: their level, or under 'default' the
+// level this descriptor sent before the field existed (`today`).
+const onLevel = (effort: ReasoningEffort, today: ReasoningLevel | undefined): ReasoningLevel | undefined =>
+  (effort === 'default' ? today : effort);
 
 export interface ProviderCapabilities {
   // Ollama-served models ignore JSON-schema constrained decoding and emit prose,
@@ -105,20 +120,21 @@ export const REASONING_RULES: Record<GatewayReasoningRule, ProviderCapabilities[
   // replaced 'minimal' with 'none'. Keep the model-id gate — gpt-4-class models
   // 400 on any reasoning effort. forceNoThink is not factored: forced tools are
   // permitted while reasoning.
-  openaiModels: ({ modelId, reasoning }) =>
-    /^(o\d|gpt-5)/i.test(modelId)
-      ? (reasoning ? 'medium' : /^gpt-5\.\d/i.test(modelId) ? 'none' : 'minimal')
+  openaiModels: ({ modelId, reasoning, effort }) =>
+    openaiReasoningModelId(modelId)
+      ? (reasoning ? onLevel(effort, 'medium') : /^gpt-5\.\d/i.test(modelId) ? 'none' : 'minimal')
       : undefined,
   // 'minimal' when reasoning is off or a tool is forced, for every model id;
   // the gateway tolerates the field on all of its `vendor/model` ids. Requesty's.
-  minimalWhenOff: ({ reasoning, forceNoThink }) =>
-    (reasoning && !forceNoThink ? undefined : 'minimal'),
+  minimalWhenOff: ({ reasoning, forceNoThink, effort }) =>
+    (reasoning && !forceNoThink ? onLevel(effort, undefined) : 'minimal'),
   // A gateway that serializes the level to whatever vendor the `provider/model`
   // id resolves to. Gemma downstreams are the exception, same 400 as the google
   // entry (#1044), so omit the param for them. A thinking-mandatory Claude
   // downstream gets 'minimal' instead of 'none'. Vercel AI Gateway's.
-  vendorRouted: ({ modelId, reasoning, forceNoThink }) => {
-    if ((reasoning && !forceNoThink) || /(^|\/)gemma-/i.test(modelId)) return undefined;
+  vendorRouted: ({ modelId, reasoning, forceNoThink, effort }) => {
+    if (gemmaModelId(modelId)) return undefined;
+    if (reasoning && !forceNoThink) return onLevel(effort, undefined);
     return thinkingMandatoryModel(modelId) ? 'minimal' : 'none';
   },
 };
@@ -189,9 +205,12 @@ const CAPS: Record<string, ProviderCapabilities> = {
     // Thinking-mandatory generations 400 on 'none' and never get a forced tool
     // (forcedToolChoice), so their floor is 'minimal' — adaptive thinking at
     // effort low, the cheapest setting they accept.
-    reasoningLevel: ({ modelId, reasoning, forceNoThink }) => {
-      if (thinkingMandatoryModel(modelId)) return reasoning ? 'medium' : 'minimal';
-      return reasoning && !forceNoThink ? 'medium' : 'none';
+    // A level replaces 'medium' wherever "on" sends it. On a manual-thinking
+    // id every level, Default included (#2357), goes out as a fixed budget
+    // instead (anthropicThinkingBudget), never alongside this.
+    reasoningLevel: ({ modelId, reasoning, forceNoThink, effort }) => {
+      if (thinkingMandatoryModel(modelId)) return reasoning ? onLevel(effort, 'medium') : 'minimal';
+      return reasoning && !forceNoThink ? onLevel(effort, 'medium') : 'none';
     },
     discoverySteps: NATIVE_DISCOVERY_STEPS,
   },
@@ -203,8 +222,11 @@ const CAPS: Record<string, ProviderCapabilities> = {
     // through the gemini-2.5 path, so 'none' becomes thinkingBudget:0 and the API
     // 400s (#1044) — omit the param for Gemma. The gemma- test mirrors
     // @ai-sdk/google's own guard. Forced tools are permitted while reasoning.
-    reasoningLevel: ({ modelId, reasoning }) =>
-      (reasoning || /(^|\/)gemma-/i.test(modelId) ? undefined : 'none'),
+    // A level maps to thinkingLevel (Gemini 3) or a thinkingBudget share (2.5).
+    reasoningLevel: ({ modelId, reasoning, effort }) => {
+      if (gemmaModelId(modelId)) return undefined;
+      return reasoning ? onLevel(effort, undefined) : 'none';
+    },
     discoverySteps: NATIVE_DISCOVERY_STEPS,
     embeddingEndpoint: 'vendor',
   },
@@ -214,8 +236,9 @@ const CAPS: Record<string, ProviderCapabilities> = {
     // V4 hybrids think by default and thinking mode rejects tool_choice, so a
     // forced-tool leg must explicitly disable it. Reasoning on → undefined: the
     // hybrid default already thinks, and DeepSeek coerces 'medium' up to 'high'.
-    reasoningLevel: ({ reasoning, forceNoThink }) =>
-      (reasoning && !forceNoThink ? undefined : 'none'),
+    // A level becomes reasoning_effort (the SDK sends medium as high).
+    reasoningLevel: ({ reasoning, forceNoThink, effort }) =>
+      (reasoning && !forceNoThink ? onLevel(effort, undefined) : 'none'),
     discoverySteps: NATIVE_DISCOVERY_STEPS,
   },
   // OpenRouter reads `reasoning` only from model-construction settings (verified
@@ -256,10 +279,6 @@ export function capabilitiesFor(provider: string | undefined): ProviderCapabilit
   return (provider && CAPS[provider]) || DEFAULT_CAPS;
 }
 
-// A Claude model id: only ever served by Anthropic or a proxy/gateway in front
-// of it, which is what makes sending it a reasoning level safe.
-const CLAUDE_MODEL_RE = /(?:^|\/)claude-/i;
-
 // A hosted OpenAI-compatible endpoint gets a plain body (#1693): strict APIs
 // such as Mistral reject fields they do not know, so no reasoning level is
 // sent, leaving the service's default. The one exception is a Claude model
@@ -272,7 +291,10 @@ const CLAUDE_MODEL_RE = /(?:^|\/)claude-/i;
 // disabled (which 400 on 'none' through the proxy too).
 const HOSTED_COMPAT_CAPS: ProviderCapabilities = {
   ...DEFAULT_CAPS,
-  reasoningLevel: (a) => (CLAUDE_MODEL_RE.test(a.modelId) ? CAPS.anthropic.reasoningLevel(a) : undefined),
+  // A Claude id (claudeModelId: only ever served by Anthropic or a proxy in
+  // front of it, which is what makes a level safe) takes the operator's level
+  // as reasoning_effort; a proxy can't take a thinking budget.
+  reasoningLevel: (a) => (claudeModelId(a.modelId) ? CAPS.anthropic.reasoningLevel(a) : undefined),
 };
 
 // Hosted OpenAI-compatible APIs can provide native structured output and do not
@@ -420,6 +442,14 @@ export function samplingWithLocalKnobs(cfg: any, sampling: any): any {
   return sampling;
 }
 
+// The level this leg asks for while reasoning is on: llm.reasoningEffort where
+// the leg can express one (the same predicate the admin picker uses), else
+// 'default'. A level saved for another provider is kept but never read here.
+export function effectiveReasoningEffort(cfg: any): ReasoningEffort {
+  const rule = openaiCompatibleGateway(cfg?.provider)?.openaiCompatible.reasoning;
+  return reasoningEffortOffered(cfg, rule) ? normalizeReasoningEffort(cfg?.reasoningEffort) : 'default';
+}
+
 // The single chokepoint translating `llm.reasoning` into a portable per-call
 // level. undefined = omit the param.
 //
@@ -428,7 +458,9 @@ export function samplingWithLocalKnobs(cfg: any, sampling: any): any {
 // o-series/gpt-5 and Gemini permit it and leave it unchanged.
 //
 // Never reintroduce reasoning-related providerOptions alongside this — the SDK
-// does not merge them and the provider-specific block silently wins.
+// does not merge them and the provider-specific block silently wins. The one
+// providerOptions form (a manual Claude budget) goes out through llmCallOptions
+// with this unset.
 export function reasoningFor(
   cfg: any,
   { forceNoThink = false }: { forceNoThink?: boolean } = {},
@@ -437,7 +469,61 @@ export function reasoningFor(
     modelId: cfg?.model || '',
     reasoning: cfg?.reasoning === true,
     forceNoThink,
+    effort: effectiveReasoningEffort(cfg),
   });
+}
+
+// The fixed thinking budget for a native-Anthropic, manual-thinking Claude leg
+// (manualThinkingClaudeModel) at the operator's level, or null. Only while
+// reasoning is on and the call isn't forcing a tool (forceNoThink wins, as
+// Claude rejects a forced tool while thinking). 'default' gets
+// MANUAL_THINKING_DEFAULT_BUDGET, not the SDK's medium (19,200 tokens on a 64k
+// model): the one place Default is not today's "On" (#2357). Never for an
+// adaptive id, which answers a budget with a 400, nor through a proxy, which
+// only takes reasoning_effort.
+export function anthropicThinkingBudget(
+  cfg: any,
+  { forceNoThink = false }: { forceNoThink?: boolean } = {},
+): number | null {
+  if (cfg?.provider !== 'anthropic' || cfg?.reasoning !== true || forceNoThink) return null;
+  if (!manualThinkingClaudeModel(cfg?.model)) return null;
+  const effort = effectiveReasoningEffort(cfg);
+  return effort === 'default' ? MANUAL_THINKING_DEFAULT_BUDGET : MANUAL_THINKING_BUDGETS[effort];
+}
+
+// The construction-time reasoning effort for an OpenRouter leg with reasoning
+// on and a level set, or null (the model's default, as before the field). The
+// value is fixed at model build, so registry.ts keys the client cache on it.
+export function openRouterReasoningEffort(cfg: any): Exclude<ReasoningEffort, 'default'> | null {
+  if (cfg?.provider !== 'openrouter' || cfg?.reasoning !== true) return null;
+  const effort = effectiveReasoningEffort(cfg);
+  return effort === 'default' ? null : effort;
+}
+
+/**
+ * The per-call options every strategy call site spreads: the top-level
+ * `reasoning` level plus any providerOptions (Google safety thresholds, a
+ * manual Claude thinking budget). One helper, so two providerOptions spreads
+ * can never overwrite each other, and a budget never travels with a top-level
+ * level (the SDK would let the providerOptions block win silently).
+ * `reasoning` is always present, possibly undefined, as the call sites have
+ * always sent it.
+ */
+export function llmCallOptions(
+  cfg: any,
+  { forceNoThink = false }: { forceNoThink?: boolean } = {},
+): { reasoning: ReasoningLevel | undefined; providerOptions?: ProviderOptions } {
+  const providerOptions: ProviderOptions = {};
+  const merge = (block: ProviderOptions | undefined) => {
+    for (const [provider, opts] of Object.entries(block || {})) {
+      providerOptions[provider] = { ...(providerOptions[provider] || {}), ...opts };
+    }
+  };
+  merge(googleSafetyOptions(cfg).providerOptions as ProviderOptions | undefined);
+  const budget = anthropicThinkingBudget(cfg, { forceNoThink });
+  if (budget != null) merge({ anthropic: { thinking: { type: 'enabled', budgetTokens: budget } } });
+  const reasoning = budget != null ? undefined : reasoningFor(cfg, { forceNoThink });
+  return Object.keys(providerOptions).length ? { reasoning, providerOptions } : { reasoning };
 }
 
 const trimBaseUrl = (u: unknown): string => String(u || '').trim().replace(/\/+$/, '');

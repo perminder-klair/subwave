@@ -203,6 +203,21 @@ export interface MapProjectionStatus {
   meta: { algo: string; space: string; count: number; setAt: string } | null;
   audioVectors: number;
   stale: boolean;
+  // Absent from controllers older than #2314.
+  lastExit?: {
+    ok: boolean;
+    code: number | null;
+    signal: string | null;
+    at: string;
+    vectors: number;
+    error: string | null;
+    // Absent from controllers before the boot hold followed them.
+    oom?: boolean;
+    heapMb?: number | null;
+    failures?: number;
+  } | null;
+  lastError?: string | null;
+  bootRetryHeld?: boolean;
 }
 
 export interface LibraryData {
@@ -255,6 +270,10 @@ export interface TrackDetail {
     // `moods`. Scores are the full {mood: cosine} map.
     audioMoods: string[];
     audioMoodScores: Record<string, number> | null;
+    // Zero-shot instruments, vocal type and production style. CLAP guesses, for
+    // the operator to judge; scores are the full {label: cosine} map.
+    audioDescriptors: string[];
+    audioDescriptorScores: Record<string, number> | null;
     // Measured ending. null = not analysed.
     outro: { startMs: number; ending: 'fade' | 'cold'; lufs: number | null; bpm: number | null } | null;
   };
@@ -272,6 +291,8 @@ export interface TrackDetail {
 }
 
 const NO_GENRE = '—';
+
+const DEMO_INSTRUMENTS = ['piano', 'acoustic guitar', 'synthesizer', 'tabla', 'strings'];
 
 // Older controllers expose only `genre`; keep the scalar as a fallback.
 export function trackGenres(t: Pick<RawTrack, 'genres' | 'genre'>): string[] {
@@ -802,6 +823,12 @@ export function buildMockDetail(track: ObsTrack): TrackDetail {
         bpm: track.bpm,
       }
     : null;
+  const audioDescriptors = track.analysed
+    ? [DEMO_INSTRUMENTS[Math.floor(rng() * DEMO_INSTRUMENTS.length)]!]
+    : [];
+  const audioDescriptorScores = audioDescriptors.length
+    ? Object.fromEntries(audioDescriptors.map((m) => [m, Math.round((0.18 + rng() * 0.08) * 1000) / 1000]))
+    : null;
 
   return {
     track: {
@@ -835,6 +862,8 @@ export function buildMockDetail(track: ObsTrack): TrackDetail {
       keyRanges,
       audioMoods,
       audioMoodScores,
+      audioDescriptors,
+      audioDescriptorScores,
       outro,
     },
     textEmbedding: embeddingVector(seed, 768),

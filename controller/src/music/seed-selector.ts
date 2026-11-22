@@ -24,6 +24,9 @@ export interface SelectorOpts {
   // Every layer pulls from the full library by default, so this set is how
   // `--limit` is honoured: an id outside it is rejected whichever layer found it.
   untaggedPool?: Set<string>;
+  // Ids no layer may pick: the tracks the LLM already found untaggable with the
+  // same input, prompt and model (#2283, tag-library/tag-input.ts).
+  skip?: ReadonlySet<string>;
 }
 
 // Read per call, not at module load, so operator-added moods still match.
@@ -50,6 +53,7 @@ export async function selectSeeds(opts: SelectorOpts): Promise<SeedSelection> {
     if (chosen.size >= budget) return false;
     if (alreadyTagged.has(id)) return false;
     if (chosen.has(id)) return false;
+    if (opts.skip?.has(id)) return false;
     if (opts.untaggedPool && !opts.untaggedPool.has(id)) return false;
     chosen.add(id);
     layerCounts[label] = (layerCounts[label] ?? 0) + 1;
@@ -148,7 +152,7 @@ export async function selectSeeds(opts: SelectorOpts): Promise<SeedSelection> {
       ? [...opts.untaggedPool]
       : db.untaggedIds();
     const candidatePool = basePool
-      .filter(id => !chosen.has(id) && !alreadyTagged.has(id));
+      .filter(id => !chosen.has(id) && !alreadyTagged.has(id) && !opts.skip?.has(id));
     if (opts.embeddingForId) {
       const picks = kmeansSeedPicks(candidatePool, opts.embeddingForId, remaining);
       for (const id of picks) take('kmeans', id);

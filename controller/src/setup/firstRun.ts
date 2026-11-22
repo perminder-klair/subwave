@@ -11,6 +11,7 @@ import { config, NAVIDROME_ENV_ENABLED } from '../config.js';
 import { loadSetupConfig } from './config.js';
 import { currentSelection, readSelection, routerSelectionComplete } from './music-source.js';
 import type { MusicMode } from '../schemas/music-source.js';
+import { isHosted } from './hosted.js';
 
 export interface SetupStatus {
   needsSetup: boolean;
@@ -19,6 +20,9 @@ export interface SetupStatus {
   navidromeSource: 'env' | 'setup-config' | 'unset';
   // Which backend the station plays from (#692).
   musicMode: MusicMode;
+  // Run by SUB/WAVE Cloud (SUBWAVE_HOSTED): the wizard skips the LLM and voice
+  // steps, which the box agent manages (setup/hosted.ts).
+  hosted: boolean;
 }
 
 // Environment configuration only applies to a legacy single-station install.
@@ -39,6 +43,7 @@ export async function getSetupStatus(): Promise<SetupStatus> {
     setupCompletedAt: sc.setupCompletedAt || null,
     navidromeSource: !navidromeFilled ? 'unset' : envHasNavidrome() ? 'env' : 'setup-config',
     musicMode: selection.mode,
+    hosted: isHosted(),
   };
 }
 
@@ -53,5 +58,6 @@ export function getSetupStatusSync(): SetupStatus {
     setupCompletedAt: null,
     navidromeSource: selection.mode === 'router' || !connected ? 'unset' : envHasNavidrome() ? 'env' : 'setup-config',
     musicMode: selection.mode,
+    hosted: isHosted(),
   };
 }

@@ -60,8 +60,11 @@ import {
   SETTINGS_MP3_BITRATES,
   SETTINGS_OPUS_BITRATES,
   SETTINGS_SEARCH_PROVIDERS,
+  stripSecretControlChars,
 } from '../schemas/settings.js';
 import { EMBEDDING_PROVIDER_IDS, LLM_PROVIDER_IDS } from '../schemas/providers.js';
+import { REASONING_EFFORTS, isReasoningEffort } from '../schemas/reasoning.js';
+import { validateLlmBodyParams } from './compat-params.js';
 
 export { normalizeGeminiSafety } from '../schemas/settings.js';
 
@@ -112,7 +115,10 @@ const TONE_DIAL_PHRASES: Record<string, { low: string; high: string }> = {
   },
   localColour: {
     low: 'Keep it universal; skip local references and place-specific colour.',
-    high: 'Lean on the local setting (the town, the weather, the hour) as texture.',
+    // No weather here: links, idents and handoffs are given none (#471), so a
+    // dial that invited it had the DJ invent it ("the sun is blazing" under
+    // full cloud). The weather skill brings its own.
+    high: 'Lean on the local setting (the town, the hour) as texture.',
   },
   warmth: {
     low: 'Keep a cool, dry distance; let the music carry the warmth.',
@@ -400,8 +406,25 @@ export function applyLlmLegPatch(target: Record<string, unknown>, patch: unknown
   if (l.headers !== undefined) {
     target.headers = applyCustomHeadersPatch(target.headers, l.headers, label);
   }
+  // Extra request-body fields (#2296). Whole-list REPLACE, like headers: the
+  // editor always sends the full set. Reserved keys are refused in both.
+  if (l.bodyParams !== undefined) {
+    target.bodyParams = validateLlmBodyParams(l.bodyParams, `${label}.bodyParams`);
+  }
+  if (l.toolCallBodyParams !== undefined) {
+    target.toolCallBodyParams = validateLlmBodyParams(l.toolCallBodyParams, `${label}.toolCallBodyParams`);
+  }
   if (l.reasoning !== undefined) {
     target.reasoning = !!l.reasoning;
+  }
+  // The level "On" asks for (#2296). A bad value is a config error, like
+  // compatibleMode; it is stored whatever the provider, and read only where
+  // the leg can express a level (schemas/reasoning.ts).
+  if (l.reasoningEffort !== undefined) {
+    if (!isReasoningEffort(l.reasoningEffort)) {
+      throw new Error(`${label}.reasoningEffort must be one of ${REASONING_EFFORTS.map((e) => `"${e}"`).join(', ')}`);
+    }
+    target.reasoningEffort = l.reasoningEffort;
   }
   if (l.numCtx !== undefined) {
     target.numCtx = clampNumCtx(Number(l.numCtx), target.numCtx as number);
@@ -443,7 +466,7 @@ export function applyLlmLegPatch(target: Record<string, unknown>, patch: unknown
 // sentinel) and undefined leave it untouched.
 export function applyInlineKey(llmHost: { keys?: Record<string, string> }, provider: string, rawApiKey: unknown): void {
   if (rawApiKey === undefined || rawApiKey === 'set') return;
-  const v = String(rawApiKey);
+  const v = stripSecretControlChars(String(rawApiKey));
   if (v.length > 1000) throw new Error('llm.apiKey must be 0-1000 chars');
   if (!llmHost.keys || typeof llmHost.keys !== 'object') llmHost.keys = {};
   if (v) llmHost.keys[provider] = v;
@@ -575,7 +598,9 @@ export const TTS_CLOUD_PROVIDERS: readonly string[] = TTS_CLOUD_PROVIDER_VALUES;
 // Web-search backends. `duckduckgo` is free and keyless (useful only for
 // entity/definition queries); `tavily` and `brave` read SEARCH_API_KEY;
 // `searxng` is keyless self-hosted meta-search via settings.search.baseUrl;
-// `keenable` is keyless, and a Keenable key in SEARCH_API_KEY raises its limit.
+// `keenable` is keyless, and a Keenable key in SEARCH_API_KEY raises its limit;
+// `parallel` is keyless (anonymous MCP) and never reads SEARCH_API_KEY;
+// `firecrawl`, `outcrawl` and `specstream` read SEARCH_API_KEY.
 export const SEARCH_PROVIDERS = SETTINGS_SEARCH_PROVIDERS;
 
 // SEED mood vocabulary + each mood's CLAP sound-prompt. The operator edits the
@@ -904,9 +929,21 @@ export interface NormalizedShow {
    *  order and resume across airings. Inert without it. */
   playlistInOrder: boolean;
   excludedPlaylistIds: string[];
+  /** A clean show: tracks tagged explicit stay off air. Only a positive tag
+   *  counts. See music/explicit-policy.ts. */
+  excludeExplicit: boolean;
+  /** Album kinds (Library → Era) this show never plays, e.g. 'dj-mix'. */
+  excludedAlbumKinds: string[];
   /** Operator organisation tags. Filters the admin list; steers nothing on
    *  air, which is why resolveShow() does not carry them through. */
   tags: string[];
+  /** Jingle filenames / bed names the automatic draws may use on air. Empty =
+   *  every one. See broadcast/show-allowlist.ts. */
+  allowedJingles: string[];
+  allowedBeds: string[];
+  /** Listener-facing blurb (#2358). '' = unset; listener surfaces fall back to
+   *  `topic`. Never carried by resolveShow(): no model reads it. */
+  description: string;
 }
 
 // Dedup + cap over one already-plural list. The legacy singular fold lives ONLY
@@ -1007,6 +1044,8 @@ export const SEED_PERSONAS = [
     tagline: 'Late-night company and well-chosen records.',
     frequency: 'moderate',
     scriptLength: 'concise',
+    identMode: 'improvise',
+    identLines: [] as string[],
     soul: DJ_SOULS[0],
     language: '',
     avatar: '',
@@ -1018,6 +1057,8 @@ export const SEED_PERSONAS = [
     tagline: 'Small details, quiet rooms, one good image.',
     frequency: 'quiet',
     scriptLength: 'concise',
+    identMode: 'improvise',
+    identLines: [] as string[],
     soul: DJ_SOULS[1],
     language: '',
     avatar: '',
@@ -1029,6 +1070,8 @@ export const SEED_PERSONAS = [
     tagline: 'Says less, means more. Leaves space.',
     frequency: 'moderate',
     scriptLength: 'concise',
+    identMode: 'improvise',
+    identLines: [] as string[],
     soul: DJ_SOULS[3],
     language: '',
     avatar: '',

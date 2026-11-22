@@ -36,6 +36,8 @@ natural-language "sounds like ..." search and zero-shot mood scoring against
 the stored audio vectors possible.
 """
 
+import array
+import collections
 import contextlib
 import ctypes
 import importlib.util
@@ -130,7 +132,7 @@ VOCAL_ENABLED = os.environ.get("ANALYZE_VOCAL_ACTIVITY", "").strip().lower() in 
     "1", "true", "yes",
 )
 DEMUCS_SR = 44100
-DEMUCS_MODEL = os.environ.get("DEMUCS_MODEL", "").strip() or "htdemucs"
+DEFAULT_DEMUCS_MODEL = "htdemucs"
 
 
 def _env_float(name, default, minimum=None, maximum=None):
@@ -173,6 +175,38 @@ def demucs_overlap():
 
 
 DEMUCS_OVERLAP = demucs_overlap()
+# apply_model's random time shift, off: see separate() (#2237).
+DEMUCS_SHIFTS = 0
+
+
+def demucs_model(have_diffq=None):
+    """The Demucs checkpoint to load. Demucs names its quantised checkpoints
+    `*_q` (mdx_q, mdx_extra_q), and only diffq can unpack them. The heavy images
+    don't ship diffq (non-commercial licence, sdist-only build), so a `_q` name
+    would make demucs fatal() at load and switch vocal activity off for the run.
+    Swap it for the default instead, with one line saying so: the station keeps
+    its vocal ranges and stems. Nothing downstream keys on the model name: stems
+    are filed by source name, and both models write drums/bass/other/vocals.
+    Only when diffq is missing, though: a worker run outside the images with
+    diffq installed keeps the model it asked for. `have_diffq` is the test seam;
+    None probes with find_spec, which imports nothing."""
+    raw = os.environ.get("DEMUCS_MODEL", "").strip()
+    if not raw:
+        return DEFAULT_DEMUCS_MODEL
+    if raw.endswith("_q"):
+        if have_diffq is None:
+            have_diffq = importlib.util.find_spec("diffq") is not None
+        if not have_diffq:
+            # Runs at module load, before log() is defined — write stderr directly.
+            sys.stderr.write(
+                f"[analyze-worker] DEMUCS_MODEL={raw!r} is a quantised checkpoint, which needs "
+                f"diffq, and diffq is not installed; using {DEFAULT_DEMUCS_MODEL} instead\n"
+            )
+            return DEFAULT_DEMUCS_MODEL
+    return raw
+
+
+DEMUCS_MODEL = demucs_model()
 
 
 def _env_int(name, default, minimum=1):
@@ -220,7 +254,35 @@ ANALYZE_MAX_BYTES = _env_int("ANALYZE_MAX_BYTES", 12 * 1024 * 1024)
 # whole song's loudness fixes it — bleed sits far below the mix, real vocals
 # don't. Both tunable so operators can adapt to their masters' compression.
 VOCAL_STEM_REL = _env_float("VOCAL_STEM_REL", 0.15)  # x 90th-pct of vocal-stem RMS
-VOCAL_MIX_FLOOR = _env_float("VOCAL_MIX_FLOOR", 0.06)  # x 90th-pct of full-mix RMS
+# The mix floor is two values, one per window (#2237), each x 90th-pct of the
+# window's full-mix RMS.
+#
+# TAIL (the last OUTRO_SECONDS): 0.06, about -24 dB under the mix, read from
+# VOCAL_MIX_FLOOR as it always was. The tail also has TAIL_VOCAL_MIN_LOUD below.
+# It stays at 0.06 because at 0.15 one sung control's ending fell from 8.7 s
+# to 1.5 s, under the 5 s instrumental line, and no tail threshold has been
+# validated on real audio.
+#
+# HEAD (the first ANALYZE_SECONDS): 0.15, about -16.5 dB under the mix. At
+# 0.06 Demucs bleed on loud electronic and instrumental hip-hop masters, which
+# sits 8-14 dB under the mix, read as 13-27 s of singing on tracks labelled
+# instrumental. 0.15 comes from one 18-track sample (11 of those instrumentals,
+# 7 vocal controls) that NOBODY HAS LISTENED TO: unshifted, it brought the head
+# under 5 s on 4 of the 11 and kept the 6 controls that sing in their opening
+# sung, the quietest a rap vocal at 10.8 s (the 7th has no singing in its
+# first 40 s and reads instrumental before and after). Two of the 11 still sit just over the line (5.4, 5.7 s),
+# and a sung tail keeps one of the 4 vocal. A lead instrument
+# Demucs files as vocals at full level (a sax, a reed) sits where real voices
+# do, and no mix floor can tell the two apart.
+#
+# VOCAL_HEAD_MIX_FLOOR sets the head value. An operator who set VOCAL_MIX_FLOOR
+# before the split keeps that value on both windows unless they also set
+# VOCAL_HEAD_MIX_FLOOR, because it was their explicit choice for both.
+TAIL_VOCAL_MIX_FLOOR = _env_float("VOCAL_MIX_FLOOR", 0.06)
+HEAD_VOCAL_MIX_FLOOR = _env_float(
+    "VOCAL_HEAD_MIX_FLOOR",
+    TAIL_VOCAL_MIX_FLOOR if (os.environ.get("VOCAL_MIX_FLOOR") or "").strip() else 0.15,
+)
 # Absolute RMS floor for the TAIL detect() pass (feature: vocal-aware
 # transitions): a fading outro's separation bleed otherwise reads as artefact
 # "vocals". ~-40 dBFS — genuine sung tails sit well above it, bleed well
@@ -457,13 +519,176 @@ def capability_loss():
 
 # --- Torch device for the heavy models (CLAP / Demucs) ----------------------
 # ANALYZE_DEVICE ∈ auto (default) | cpu | cuda. `auto` picks cuda when torch
-# actually sees a GPU (the subwave-analyzer-cuda flavour on an NVIDIA host)
-# and cpu everywhere else — on the cpu-wheel images torch.cuda.is_available()
-# is always False, so existing installs behave exactly as before. A cuda
-# request without a visible GPU warns and falls back to cpu: device selection
-# must never fail an analysis pass. The torch import stays lazy — only the
-# heavy code paths call this, so the librosa-only venv never needs torch.
+# sees a GPU AND can run a kernel on it (the subwave-analyzer-cuda flavour on
+# an NVIDIA host), and cpu everywhere else — on the cpu-wheel images
+# torch.cuda.is_available() is always False, so existing installs behave
+# exactly as before. Device selection must never fail an analysis pass, so
+# both `auto` and an explicit `cuda` warn and fall back to cpu when the GPU is
+# not visible OR fails the self-test below.
+#
+# The self-test is the half `is_available()` cannot answer (#2280): it is True
+# for a card the wheel has no kernels for (a Pascal GTX 1060 under the cu128
+# build, which starts at sm_75), and loading CLAP or Demucs onto that card
+# succeeds too, because moving weights runs no kernel. The first real op then
+# fails with "no kernel image is available", once per track, inside handlers
+# that log and carry on — so a tag run reported ok while every embedding and
+# vocal pass failed. One tiny op, synchronised, finds it here instead, where
+# falling back costs nothing. The torch import stays lazy — only the heavy
+# code paths call this, so the librosa-only venv never needs torch.
+#
+# The card is tested once per process, and whatever that decides stays until
+# the worker exits. A failure that can clear (the card out of memory while a
+# co-resident TTS or LLM holds it) is not tested again mid-process: a tiny op
+# can pass while the real model still does not fit, and a model that fails to
+# load is lost for the run, which is worse than cpu. The warning says why the
+# test failed and, for out of memory, that restarting the analyzer once memory
+# is free puts it back on the GPU.
 _DEVICE = None
+
+# Compute capability → the CUDA image's architecture tag for that card. The
+# tag table in docs/internals/infrastructure.md (#aio-cuda-tags) is the one
+# place that maps a tag to a build; this only names the card's row in it.
+# scripts/check-publish-matrix.test.ts pins these names to the publish
+# matrix's arch_tags, so the warning never names an unpublished tag.
+_ARCH_TAGS = (
+    ((5, 0), "maxwell"),
+    ((6, 0), "pascal"),
+    ((7, 0), "volta"),
+    ((7, 5), "turing"),
+    ((8, 0), "ampere"),
+    ((8, 9), "ada"),
+    ((9, 0), "hopper"),
+    ((10, 0), "blackwell"),
+)
+
+
+def cuda_arch_tag(capability):
+    """The architecture tag for a (major, minor) compute capability, or None
+    for a card older than any build supports."""
+    tag = None
+    for floor, name in _ARCH_TAGS:
+        if tuple(capability) >= floor:
+            tag = name
+    return tag
+
+
+def cuda_arch_covered(capability, arch_list):
+    """Whether the wheel's arch list can run on this card: SASS for the same
+    major at or below its minor (sm_60 runs on sm_61), or PTX at or below its
+    capability, which the driver compiles. Advisory only: the self-test
+    decides cuda or cpu, and this names a failure torch's message didn't
+    (cuda_failure_kind), which picks the warning's advice."""
+    major, minor = capability
+    for arch in arch_list or ():
+        m = re.fullmatch(r"(sm|compute)_(\d+)(\d)[a-z]?", arch)
+        if not m:
+            continue
+        a_major, a_minor = int(m.group(2)), int(m.group(3))
+        if m.group(1) == "sm" and a_major == major and a_minor <= minor:
+            return True
+        if m.group(1) == "compute" and (a_major, a_minor) <= (major, minor):
+            return True
+    return False
+
+
+def cuda_self_test(torch):
+    """Run one tiny real op on the card. Returns None when it works, else the
+    exception. `is_available()` only says a device is visible; this says the
+    wheel has a kernel image the card can execute."""
+    x = None
+    try:
+        x = torch.ones(8, device="cuda")
+        x.mul_(2)
+        torch.cuda.synchronize()
+        if float(x.sum().item()) != 16.0:
+            raise RuntimeError("CUDA self-test returned a wrong result")
+        return None
+    except Exception as ex:  # noqa: BLE001 — any failure means "not usable"
+        # Drop the tensor, hand its cached block back to the driver, and
+        # return the exception without its traceback, whose frames would
+        # keep the tensor alive. Only str(ex) is ever logged. The CUDA context
+        # itself stays until the process exits: torch cannot release it.
+        x = None
+        try:
+            torch.cuda.empty_cache()
+        except Exception:  # noqa: BLE001 — freeing is best-effort
+            pass
+        return ex.with_traceback(None)
+
+
+def _cuda_probe(torch):
+    """(name, capability, arch_list) for card 0. Every probe is guarded: a
+    broken CUDA stack must not turn the fallback into the failure. An arch
+    list torch could not report is None (unknown), never an empty list."""
+    try:
+        name = torch.cuda.get_device_name(0)
+    except Exception:  # noqa: BLE001
+        name = "unknown GPU"
+    try:
+        cap = tuple(torch.cuda.get_device_capability(0))
+    except Exception:  # noqa: BLE001
+        cap = None
+    try:
+        arch_list = list(torch.cuda.get_arch_list())
+    except Exception:  # noqa: BLE001
+        arch_list = None
+    return name, cap, arch_list
+
+
+def cuda_failure_kind(error, cap, arch_list):
+    """Why a self-test failed: "no_kernel" (the wheel has no kernel image for
+    this card), "oom", "driver" or "other". torch's own message decides first;
+    the arch list only names a card the message didn't, and an unknown one
+    (None) names nothing."""
+    msg = str(error).lower()
+    if "no kernel image" in msg:
+        return "no_kernel"
+    if "out of memory" in msg or type(error).__name__ == "OutOfMemoryError":
+        return "oom"
+    if cap and arch_list is not None and not cuda_arch_covered(cap, arch_list):
+        return "no_kernel"
+    if "driver" in msg:
+        return "driver"
+    return "other"
+
+
+def _cuda_fallback_warning(probe, error, kind):
+    """One warning naming the card, what the wheel was built for, the error,
+    and what to do about it."""
+    name, cap, arch_list = probe
+    sm = f"sm_{cap[0]}{cap[1]}" if cap else "sm_unknown"
+    detail = f"{name}, capability {sm}; this torch is built for {arch_list or 'an unknown arch list'}"
+    if kind == "no_kernel":
+        tag = cuda_arch_tag(cap) if cap else None
+        if tag:
+            advice = (
+                f"this image has no kernels for {sm}: use the CUDA image's :{tag} tag "
+                f"(ANALYZER_CUDA_TAG={tag} in .env on the split stack; "
+                "docs/internals/infrastructure.md#aio-cuda-tags)"
+            )
+        elif cap:
+            advice = f"no published CUDA build supports {sm}"
+        else:
+            advice = (
+                "this image has no kernels for this card: "
+                "docs/internals/infrastructure.md#aio-cuda-tags names the build for each card"
+            )
+    elif kind == "oom":
+        advice = (
+            "the card had no free memory when the analyzer started, most likely "
+            "held by another process on it (a local TTS or LLM); analysis runs on "
+            "cpu for now, and restarting the analyzer once that memory is free "
+            "puts it back on the GPU"
+        )
+    elif kind == "driver":
+        advice = "check the NVIDIA driver supports this image's CUDA runtime"
+    else:
+        advice = "the card could not run a CUDA op"
+    return (
+        f"CUDA self-test failed on {detail}: {type(error).__name__}: {error}. "
+        f"{advice}. Falling back to cpu; CLAP and Demucs still run, but Demucs on cpu is slow "
+        "(tens of seconds a track). Set ANALYZE_DEVICE=cpu to skip this check."
+    )
 
 
 def resolve_device():
@@ -476,18 +701,25 @@ def resolve_device():
     if want not in ("auto", "cpu", "cuda"):
         log(f"ANALYZE_DEVICE={want} not recognised (auto|cpu|cuda); using auto")
         want = "auto"
+    failed = None
     if want != "cpu" and torch.cuda.is_available():
-        _DEVICE = "cuda"
-        log(f"analysis device: cuda ({torch.cuda.get_device_name(0)})")
-    else:
-        if want == "cuda":
-            log(
-                "ANALYZE_DEVICE=cuda but torch sees no CUDA device "
-                "(cpu-only wheels, no GPU exposed to the container, or missing "
-                "nvidia-container-toolkit); falling back to cpu"
-            )
-        _DEVICE = "cpu"
-        log("analysis device: cpu")
+        failed = cuda_self_test(torch)
+        if failed is None:
+            _DEVICE = "cuda"
+            log(f"analysis device: cuda ({torch.cuda.get_device_name(0)})")
+            return _DEVICE
+    if failed is not None:
+        probe = _cuda_probe(torch)
+        kind = cuda_failure_kind(failed, probe[1], probe[2])
+        log(_cuda_fallback_warning(probe, failed, kind))
+    elif want == "cuda":
+        log(
+            "ANALYZE_DEVICE=cuda but torch sees no CUDA device "
+            "(cpu-only wheels, no GPU exposed to the container, or missing "
+            "nvidia-container-toolkit); falling back to cpu"
+        )
+    _DEVICE = "cpu"
+    log("analysis device: cpu")
     return _DEVICE
 
 
@@ -570,7 +802,10 @@ def _release_models(idle_s=None):
 
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-            where = "GPU memory"
+            # A card that failed its self-test is visible too, but the models
+            # were on cpu: name where they actually were.
+            if _DEVICE == "cuda":
+                where = "GPU memory"
     except Exception:  # noqa: BLE001 — freeing is best-effort
         pass
     # Hand the freed tensor heap back to the OS. gc.collect() returns it to
@@ -1147,8 +1382,10 @@ def facet_tail(y_src, sr, offset, duration_s, librosa):
     a ranged read). `offset` is the window's absolute start in seconds and
     `duration_s` the file's duration. Returns
       {startMs, ending: 'fade'|'cold', lufs?, bpm?, beats?, bars?,
-       tail_silence_ms?, tail_start_ms?}
+       loudnessCurve?, tail_curve_unavailable?, tail_silence_ms?, tail_start_ms?}
     with all timestamps ABSOLUTE, or None when nothing is measurable.
+    `loudnessCurve` (loudness_curve) is the window's short-term loudness, for
+    the controller's audible-end cut of a fade; omitted without pyloudnorm.
 
     A track too short for a distinct outro returns only the edge-silence
     fields. Pure librosa (+ optional pyloudnorm), so this runs on the LEAN tier
@@ -1207,6 +1444,9 @@ def facet_tail(y_src, sr, offset, duration_s, librosa):
     # Tail loudness — comparable to the track's loudness_lufs, so consumers can
     # judge how hot the material under the next intro will actually be.
     lufs, _peak = measure_loudness(y_src, sr)
+    # Short-term loudness over the same window (tail v3), so the controller can
+    # cut a fade where it stops being audible. Omitted without pyloudnorm.
+    curve = loudness_curve(y_src, sr, offset)
 
     # Tail tempo + grid (absolute ms) — the truer anchor for bar-aligning the
     # exit than the leading window's tempo (outros drift/ritard).
@@ -1246,6 +1486,15 @@ def facet_tail(y_src, sr, offset, duration_s, librosa):
         out["beats"] = beats_ms
     if bars_ms:
         out["bars"] = bars_ms
+    if curve is not None:
+        out["loudnessCurve"] = curve
+    elif tail_loudness_curve_capable():
+        # Said, not left out (like loudness_curve_unavailable): an analyzer
+        # that cannot make the curve leaves it out, and the controller re-plans
+        # the tail when one can. This one could and its meter failed on this
+        # file, so asking again would only re-read it on every `--facets tail`
+        # pass. Lifted out of the outro below.
+        out["tail_curve_unavailable"] = "meter-failed"
     return out
 
 
@@ -1260,6 +1509,165 @@ def analyze_outro(path, librosa, duration_s, complete=None):
         return None
     y_src, sr, offset = window
     return facet_tail(y_src, sr, offset, duration_s, librosa)
+
+
+# ── tail placed from the stored edges (tail v2) ─────────────────────────────
+# The end-of-file window above is partly or wholly SILENT on a track that ends
+# in dead air: the ending reads as a fade (the silence is the decline), the
+# tail grid and tail vocals are measured on nothing, and an all-silent window
+# leaves the tail unmeasurable. The controller sends where the music stops
+# (`tail_window`: end_ms = decoded duration - trailing silence, both from the
+# whole-file `edges` facet) and the window ENDS there instead.
+
+def place_tail_window(end_ms):
+    """(offset_s, length_s) of the tail window that ends where the music
+    stops: the last OUTRO_SECONDS of music, or all of it on a shorter track."""
+    end_s = max(0.0, float(end_ms) / 1000.0)
+    offset = max(0.0, end_s - OUTRO_SECONDS)
+    return offset, end_s - offset
+
+
+def parse_tail_window(value):
+    """A request's `tail_window`, or None when it cannot be honoured (then the
+    tail falls back to the end-of-file window and is not marked placed)."""
+    if not isinstance(value, dict):
+        return None
+    end_ms, dur_ms = value.get("end_ms"), value.get("duration_ms")
+    if any(isinstance(v, bool) or not isinstance(v, int) for v in (end_ms, dur_ms)):
+        return None
+    if end_ms <= 0 or dur_ms < end_ms:
+        return None
+    return {"end_ms": end_ms, "duration_ms": dur_ms}
+
+
+def tail_window_from_edges(edges):
+    """The placement an `edges` facet answer gives, or None."""
+    if not isinstance(edges, dict) or edges.get("status") != "ok":
+        return None
+    data = edges.get("data") or {}
+    dur, tail = data.get("decoded_duration_ms"), data.get("edge_tail_ms")
+    if not isinstance(dur, (int, float)) or not isinstance(tail, (int, float)):
+        return None
+    return parse_tail_window({"end_ms": int(round(dur - tail)), "duration_ms": int(round(dur))})
+
+
+def placed_outro(window, placement, librosa):
+    """(outro, (offset_s, length_s)) for a window placed from the edges:
+    measured as if the file ended where the music does, with the trailing
+    silence taken from the edges. outro is None when the window reads silent."""
+    t_src, t_sr, t_off = window
+    end_s = placement["end_ms"] / 1000.0
+    outro = facet_tail(t_src, t_sr, t_off, end_s, librosa)
+    if outro is not None:
+        outro["tail_silence_ms"] = placement["duration_ms"] - placement["end_ms"]
+        outro["tail_start_ms"] = placement["end_ms"]
+    return outro, (t_off, end_s - t_off)
+
+
+def input_seek_is_exact(path):
+    """True when ffmpeg's INPUT seek lands on the exact sample for this file's
+    container: FLAC (frames carry sample numbers), Ogg (granule positions), WAV
+    and MP4/M4A (sample tables). MP3 and anything unrecognised are False:
+    ffmpeg's MP3 demuxer seeks through a 100-point Xing TOC or the average
+    bitrate, which is not guaranteed to land on the sample in a VBR file, and
+    every absolute timestamp the tail reports would move with it. The output
+    seek those get costs a decode from the start, on the few tracks that need
+    the stream at all."""
+    if not path:
+        return False
+    try:
+        with open(path, "rb") as f:
+            head = f.read(12)
+    except OSError:
+        return False
+    return (head[:4] in (b"fLaC", b"OggS")
+            or (head[:4] == b"RIFF" and head[8:12] == b"WAVE")
+            or head[4:8] == b"ftyp")
+
+
+def window_ffmpeg_args(src, offset_s, length_s, dest, input_seek=False):
+    """ffmpeg command decoding [offset, offset+length) of `src` to a stereo WAV
+    at DEMUCS_SR (the rate Demucs needs; the tail features resample from it).
+    An input seek skips straight to the window; an output seek decodes from
+    the start and discards up to it, which is exact for every format."""
+    seek = ["-ss", f"{offset_s:.3f}"]
+    return (["ffmpeg", "-hide_banner", "-nostdin", "-nostats", "-loglevel", "error", "-threads", "1"]
+            + (seek if input_seek else []) + ["-i", src] + ([] if input_seek else seek)
+            + ["-t", f"{length_s:.3f}", "-vn", "-ac", "2", "-ar", str(DEMUCS_SR), "-f", "wav", "-y", dest])
+
+
+def extract_tail_window(src, offset_s, length_s, input_seek=False):
+    """Decode just the tail window of `src` (the stream URL) into a temp WAV;
+    returns its path. Raises on failure, with any URL reduced to its host."""
+    if not shutil.which("ffmpeg"):
+        raise RuntimeError("ffmpeg not found")
+    fd, dest = tempfile.mkstemp(prefix="subwave-tail-", suffix=".wav")
+    os.close(fd)
+    try:
+        p = subprocess.run(window_ffmpeg_args(src, offset_s, length_s, dest, input_seek),
+                           stdin=subprocess.DEVNULL, capture_output=True, timeout=WHOLE_FILE_TIMEOUT_S)
+        if p.returncode != 0:
+            raise RuntimeError(f"tail window decode failed: {ffmpeg_failure_reason(p.stderr.decode('utf-8', 'replace'))}")
+        return dest
+    except BaseException:
+        try:
+            os.remove(dest)
+        except OSError:
+            pass
+        raise
+
+
+def extract_window_by_count(src, offset_s, length_s):
+    """Decode the whole of `src` from its start and keep the samples that
+    fall in [offset, offset+length), counted as decoded (the edges scan's
+    clock), into a temp WAV; returns its path. For a corrupt file whose
+    timestamps stop short of where its samples run, where every seek misses.
+    A window past the end of what decodes comes back short, not as an error."""
+    import wave
+
+    if not shutil.which("ffmpeg"):
+        raise RuntimeError("ffmpeg not found")
+    frame = 4  # stereo s16le
+    first = int(round(offset_s * DEMUCS_SR)) * frame
+    stop = first + int(round(length_s * DEMUCS_SR)) * frame
+    cmd = ["ffmpeg", "-hide_banner", "-nostdin", "-nostats", "-loglevel", "error", "-threads", "1",
+           "-i", src, "-map", "0:a:0", "-vn", "-ac", "2", "-ar", str(DEMUCS_SR), "-f", "s16le", "pipe:1"]
+    fd, dest = tempfile.mkstemp(prefix="subwave-tail-", suffix=".wav")
+    os.close(fd)
+    proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    timer = threading.Timer(WHOLE_FILE_TIMEOUT_S, proc.kill)
+    timer.start()
+    try:
+        pos, kept = 0, []
+        while pos < stop:
+            data = proc.stdout.read(_WHOLE_FILE_CHUNK)
+            if not data:
+                break
+            lo, hi = max(first - pos, 0), min(stop - pos, len(data))
+            if hi > lo:
+                kept.append(data[lo:hi])
+            pos += len(data)
+        # The window is in hand: the rest of the file is not needed.
+        proc.kill()
+        proc.wait()
+        with wave.open(dest, "wb") as w:
+            w.setnchannels(2)
+            w.setsampwidth(2)
+            w.setframerate(DEMUCS_SR)
+            w.writeframes(b"".join(kept))
+        return dest
+    except BaseException:
+        try:
+            os.remove(dest)
+        except OSError:
+            pass
+        raise
+    finally:
+        timer.cancel()
+        try:
+            proc.kill()
+        except OSError:
+            pass
 
 
 # Lazily loaded, at most once. None means "no embeddings this run" — either
@@ -1311,7 +1719,9 @@ def get_embedder(force=False):
 # while real vocals — a genuine fraction of the mix — still cross. Frames that
 # sustain above threshold merge into ranges (gaps <0.4s bridged so a breath
 # doesn't split a phrase); sub-300ms blips are dropped as separation artefacts.
-def vocal_ranges_from_rms(rms, mix_rms, sr, hop):
+# `mix_floor` is the window's own fraction (HEAD_ or TAIL_VOCAL_MIX_FLOOR):
+# required, so no caller can fall back to the other window's value.
+def vocal_ranges_from_rms(rms, mix_rms, sr, hop, mix_floor):
     import numpy as np
 
     if rms.size == 0:
@@ -1320,7 +1730,7 @@ def vocal_ranges_from_rms(rms, mix_rms, sr, hop):
     if loud <= 0:
         return []
     mix_loud = float(np.percentile(mix_rms, 90)) if mix_rms.size else 0.0
-    thr = max(VOCAL_STEM_REL * loud, VOCAL_MIX_FLOOR * mix_loud)
+    thr = max(VOCAL_STEM_REL * loud, mix_floor * mix_loud)
     # frames → seconds; librosa.frames_to_time's default is frames * hop / sr.
     times = np.arange(rms.size) * (hop / float(sr))
     active = rms >= thr
@@ -1395,15 +1805,21 @@ class VocalActivityDetector:
         with torch.no_grad():
             # apply_model moves the model + chunks to the device itself (this
             # is how the demucs CLI's -d flag works), so no .to() here.
+            # shifts=0 (#2237): demucs defaults to shifts=1, ONE prediction at a
+            # random, unseeded offset of up to 0.5 s. It averages nothing, so it
+            # buys no quality, but it moves the chunk boundaries on every call:
+            # the same file read 2.9 to 7.0 s of singing over five runs, across
+            # the 5 s instrumental line. Unshifted, one file gives one answer.
             est = apply_model(
-                self.model, wav.unsqueeze(0), device=resolve_device(), overlap=DEMUCS_OVERLAP
+                self.model, wav.unsqueeze(0), device=resolve_device(), overlap=DEMUCS_OVERLAP,
+                shifts=DEMUCS_SHIFTS,
             )[0]
         return {
             name: est[i].cpu().numpy()
             for i, name in enumerate(self.sources)
         }
 
-    def detect(self, stereo, sr, librosa, min_loud=0.0, stems=None):
+    def detect(self, stereo, sr, librosa, *, mix_floor, min_loud=0.0, stems=None):
         """audio: float32 array shaped (channels, N) at DEMUCS_SR. Returns a list of
         {startMs,endMs} where the isolated vocal stem is active — possibly empty
         (an instrumental). Raises on failure; the caller degrades to None.
@@ -1413,6 +1829,8 @@ class VocalActivityDetector:
         bleed (a vocal-free fading outro) can still emit artefact ranges — the
         absolute floor turns those into a clean []. 0.0 = off (the head window
         keeps its historical behaviour).
+        `mix_floor` is the window's mix floor (HEAD_ or TAIL_VOCAL_MIX_FLOOR,
+        see their definition for why they differ), keyword-only and required.
         `stems` (optional): a pre-computed separate() result for this window,
         so a caller that also caches stems pays for one separation, not two."""
         import numpy as np
@@ -1432,7 +1850,7 @@ class VocalActivityDetector:
         if float(np.percentile(rms, 90)) <= min_loud:
             return []
         mix_rms = librosa.feature.rms(y=mix, frame_length=2048, hop_length=hop)[0]
-        return vocal_ranges_from_rms(rms, mix_rms, sr, hop)
+        return vocal_ranges_from_rms(rms, mix_rms, sr, hop, mix_floor)
 
 
 def estimate_pace(y, sr, librosa, window_s=5.0):
@@ -1485,7 +1903,8 @@ def get_vocal_detector(force=False):
             _vocal_detector = d
             _maybe_start_idle_release()
         # BaseException, not Exception: demucs' fatal() raises SystemExit on an
-        # unusable model (e.g. a *_q quantized checkpoint without diffq), which
+        # unusable model (e.g. a quantised checkpoint named by its signature,
+        # which demucs_model() can't recognise, with no diffq installed), which
         # sails past `except Exception` and killed the whole worker — every
         # later request (bpm/key included) then 500'd "worker not ready".
         except BaseException as ex:  # noqa: BLE001 — degrade, never crash the worker
@@ -1527,6 +1946,86 @@ def stems_dir_to_write(stems_dir, require_marker):
     return None
 
 
+# The analyzer image runs as an unprivileged user with umask 022, so a plain
+# makedirs/open leaves what it shares with the controller at 755/644. Where the
+# controller is another user on that share (a remote analyzer, or NFS squashing
+# root to nobody), it then cannot delete inside stems/<id>/ when it evicts the
+# track. Shared folders get 777, the state bootstrap's rule for its folders
+# (docker/broadcast-entrypoint.sh), set explicitly so no umask can narrow them.
+# Shared files get 666 to match. That half is this module's choice, not the
+# bootstrap's, which sets 666 only on the two playlists: eviction needs just the
+# folder, and whoever can write the folder can already replace a file in it.
+# A refused chmod never stops a write, on a folder or a file: the entrypoint's
+# own rule (state_prepare_file's `chmod ... || true`), because the shares this is
+# for (ACL-only NFS, some NAS exports, FUSE) answer a mode change on SETATTR
+# with EPERM, ENOTSUP or ENOSYS. The item then keeps the mount's mode, and the
+# analyzer says so once per process, naming the path, so a cache that stays
+# 755 is explained in its own log. The warning keys on writability, never on
+# chmod's exit status (the entrypoint's state_writable_by_others): transitions/
+# is created root-owned 777, so it refuses this user on every render and is a
+# working config, which must neither warn nor spend the one line a real refusal needs.
+SHARED_DIR_MODE = 0o777
+SHARED_FILE_MODE = 0o666
+_shared_chmod_logged = False
+
+
+def _writable_by_others(path):
+    try:
+        return bool(os.stat(path).st_mode & 0o002)
+    except OSError:
+        return False
+
+
+def _shared_chmod(path, mode, shown_as=None):
+    global _shared_chmod_logged
+    try:
+        os.chmod(path, mode)
+    except OSError as err:
+        if _shared_chmod_logged or _writable_by_others(path):
+            return
+        _shared_chmod_logged = True
+        log(f"could not set mode {oct(mode)} on {shown_as or path} ({err.strerror or err}): "
+            "it keeps the mount's mode, and the write goes ahead (logged once)")
+
+
+def make_shared_dir(path):
+    """makedirs + an explicit 777 on the leaf. makedirs gives any missing
+    parent the umask's mode. For stems, stems_require_marker means the root
+    already exists, created 777 by the broadcast entrypoint or the controller's
+    marker setup, so only an older controller that sends no marker flag reaches
+    here with one missing. render_transition has no marker check: its out_dir
+    is transitions/, which the entrypoint creates 777 and which is the leaf
+    here anyway, so a parent can only be missing if the state dir itself is."""
+    os.makedirs(path, exist_ok=True)
+    _shared_chmod(path, SHARED_DIR_MODE)
+
+
+@contextlib.contextmanager
+def shared_output(path):
+    """Yields the temp path to write; on success sets 666 and renames it into
+    place atomically (the chmod comes first, so the final name never appears
+    at the umask's mode). On any failure, the write's or the rename's, the
+    temp file is removed, so a failed write costs the cache budget nothing,
+    and the error goes up to the caller, which degrades. A killed worker
+    cleans up nothing: its partial .tmp stays until the folder is evicted, or
+    until the clip sweep ages it out of transitions/.
+
+    The temp name is unique and created O_EXCL, because these folders are open
+    to everyone: a link planted at a predictable name would be written through
+    and chmodded (write_state_marker's mktemp is there for the same reason).
+    Not mkstemp itself: its 600 is what a refused chmod would then publish."""
+    tmp = f"{path}.{os.urandom(4).hex()}.tmp"
+    try:
+        os.close(os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666))
+        yield tmp
+        _shared_chmod(tmp, SHARED_FILE_MODE, shown_as=path)
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.remove(tmp)
+        raise
+
+
 def write_stems(stems, window, dest_dir):
     """Persist a separate() result as 16-bit FLAC at DEMUCS_SR into dest_dir
     as <window>-<stem>.flac (feature: stem-blend transitions — the cache that
@@ -1535,29 +2034,151 @@ def write_stems(stems, window, dest_dir):
     the render op to trust. Raises on failure; callers degrade."""
     import soundfile as sf
 
-    os.makedirs(dest_dir, exist_ok=True)
+    make_shared_dir(dest_dir)
     for name, data in stems.items():
         path = os.path.join(dest_dir, f"{window}-{name}.flac")
-        tmp = path + ".tmp"
-        sf.write(tmp, data.T, DEMUCS_SR, subtype="PCM_16", format="FLAC")
-        os.replace(tmp, path)
+        with shared_output(path) as tmp:
+            sf.write(tmp, data.T, DEMUCS_SR, subtype="PCM_16", format="FLAC")
 
 
-def write_tail_meta(dest_dir, tail_start_s, duration_s):
+def write_tail_meta(dest_dir, tail_start_s, duration_s, file_size=None):
     """Alignment sidecar for the cached tail stems. The tail window was cut at
     DECODED duration - OUTRO_SECONDS; render_transition must slice the bar
     grid against that exact offset. Re-deriving it from the library's tagged
     duration (an integer from Subsonic) disagrees by up to ~1s, which shifts
     the borrowed drum loop off the downbeat — so the true offset rides with
-    the stems and a render without it is a clean cache miss."""
-    path = os.path.join(dest_dir, "tail-meta.json")
-    tmp = path + ".tmp"
-    with open(tmp, "w") as f:
+    the stems and a render without it is a clean cache miss.
+    It is also the tail window's provenance stamp (#2238, see source_stamp):
+    `duration_sec` and, when known, the source's `file_size`."""
+    path = os.path.join(dest_dir, TAIL_META)
+    with shared_output(path) as tmp, open(tmp, "w") as f:
         json.dump({
             "tail_start_sec": round(float(tail_start_s), 3),
             "duration_sec": round(float(duration_s), 3),
+            "file_size": _positive_int(file_size),
         }, f)
-    os.replace(tmp, path)
+
+
+# Stem provenance (#2238). A track's stem dir is keyed by its id, and the id
+# outlives a change of audio (a file replaced in place, a dir handed back by
+# the orphan purge), while the two windows are written at different times: a
+# head-only pass, a tail-only pick-time pass, a tail that cannot be proven this
+# time. Each window therefore records the recording it was cut from, in its
+# own meta file, written LAST, after all of the window's stems:
+#   head-meta.json  {"file_size", "duration_sec"}
+#   tail-meta.json  {"tail_start_sec", "duration_sec", "file_size"}
+# Before a window is rewritten its own meta goes first (a write that dies part
+# way leaves no stamp vouching for a mixed set, and a failed write drops the
+# window outright), and the other window goes with it when its stamp names a
+# different recording. The controller judges with the same rule
+# (music/stem-provenance.ts sameRecording), keep the two in step. A dir from
+# before the stamps has no head-meta.json and a tail-meta.json without
+# file_size: unknown, which matches, so an upgrade changes nothing.
+HEAD_META = "head-meta.json"
+TAIL_META = "tail-meta.json"
+WINDOW_META = {"head": HEAD_META, "tail": TAIL_META}
+# Two readings of one file's decoded duration (a header probe, the placed
+# tail's whole-file decode) agree well inside this; the orphan purge's
+# SAME_AUDIO_TOLERANCE_SEC is the same 2 s.
+STAMP_DURATION_TOLERANCE_SEC = 2.0
+
+
+def _positive_int(v):
+    return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0 else None
+
+
+def _positive_float(v):
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0 else None
+
+
+def source_stamp(src_path, complete, duration_s, source_size=None):
+    """What a window records of the audio it was cut from: the source file's
+    size in bytes and its decoded duration.
+
+    `source_size` is the library's size for the file (the controller's
+    tracks.file_size, sent with stems_dir), and it is the stamp's size whenever
+    it is known: the raw stream's bytes are the file, so it holds for a capped
+    prefix and a tail cut from the stream, and it is the very figure the
+    controller checks a window against. Without it only a file proven whole
+    says either: a capped download's size is the cap's and its duration the
+    prefix's, so it stamps both unknown (None), which matches anything."""
+    row_size = _positive_int(source_size)
+    if complete is not True:
+        return {"file_size": row_size, "duration_sec": None}
+    size = row_size
+    if size is None:
+        try:
+            size = _positive_int(os.path.getsize(src_path)) if src_path else None
+        except OSError:
+            size = None
+    dur = _positive_float(duration_s)
+    return {"file_size": size, "duration_sec": round(dur, 3) if dur else None}
+
+
+def same_recording(a, b):
+    """Do two stamps name the same recording? Sizes decide when both are known
+    (byte-exact); else durations, within the tolerance; else nothing is known
+    and they match. Mirrors controller music/stem-provenance.ts sameRecording."""
+    sa, sb = _positive_int(a.get("file_size")), _positive_int(b.get("file_size"))
+    if sa is not None and sb is not None:
+        return sa == sb
+    da, db_ = _positive_float(a.get("duration_sec")), _positive_float(b.get("duration_sec"))
+    if da is not None and db_ is not None:
+        return abs(da - db_) <= STAMP_DURATION_TOLERANCE_SEC
+    return True
+
+
+def read_window_meta(dest_dir, window):
+    """A window's stamp: a dict, None when the file is absent, or "unreadable"."""
+    try:
+        with open(os.path.join(dest_dir, WINDOW_META[window])) as f:
+            meta = json.load(f)
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        return "unreadable"
+    return meta if isinstance(meta, dict) else "unreadable"
+
+
+def drop_window(dest_dir, window):
+    """Best-effort: remove a window's stems (any stem name: a non-default
+    DEMUCS_MODEL writes guitar and piano too) and its meta."""
+    prefix = f"{window}-"
+    try:
+        names = os.listdir(dest_dir)
+    except OSError:
+        return
+    for name in names:
+        if name == WINDOW_META[window] or (name.startswith(prefix) and name.endswith(".flac")):
+            with contextlib.suppress(OSError):
+                os.remove(os.path.join(dest_dir, name))
+
+
+def begin_window(dest_dir, window, stamp):
+    """Before `window` is rewritten: its own meta goes first (raises if it
+    cannot, so the write does not go ahead under an old stamp), and the other
+    window is dropped when its stamp is unreadable or names another recording.
+    A dir not made yet has nothing to clear."""
+    with contextlib.suppress(FileNotFoundError):
+        os.remove(os.path.join(dest_dir, WINDOW_META[window]))
+    other = "tail" if window == "head" else "head"
+    meta = read_window_meta(dest_dir, other)
+    if meta is None:
+        return
+    if meta == "unreadable" or not same_recording(stamp, meta):
+        log(f"stem cache: {other} stems in {os.path.basename(os.path.normpath(dest_dir))} "
+            f"were cut from another recording; dropped before the {window} rewrite")
+        drop_window(dest_dir, other)
+
+
+def write_head_meta(dest_dir, stamp):
+    """The head window's provenance stamp, written after its stems."""
+    path = os.path.join(dest_dir, HEAD_META)
+    with shared_output(path) as tmp, open(tmp, "w") as f:
+        json.dump({
+            "file_size": _positive_int(stamp.get("file_size")),
+            "duration_sec": _positive_float(stamp.get("duration_sec")),
+        }, f)
 
 
 def render_transition(req):
@@ -1768,11 +2389,10 @@ def render_transition(req):
     mix_buf[:e] *= ramp
     mix_buf[-e:] *= ramp[::-1]
 
-    os.makedirs(out_dir, exist_ok=True)
+    make_shared_dir(out_dir)
     out_path = os.path.join(out_dir, os.path.basename(clip_name))
-    tmp = out_path + ".tmp"
-    sf.write(tmp, mix_buf, sr, subtype="PCM_16", format="WAV")
-    os.replace(tmp, out_path)
+    with shared_output(out_path) as tmp:
+        sf.write(tmp, mix_buf, sr, subtype="PCM_16", format="WAV")
     return {
         "ok": True,
         "path": out_path,
@@ -1943,6 +2563,34 @@ def ensure_fast_decode(path, complete=None):
     return path, None
 
 
+# Stereo downmix of a multichannel decode, as the station airs it: Liquidsoap
+# (its ffmpeg decoder's float rematrix) gives fronts 1, centre and surrounds
+# 0.707, LFE nothing, unnormalised (a 5.1 test file: -15.5 LUFS through
+# Liquidsoap 2.4.6 and through ffmpeg's float `-ac 2`). Rows follow the
+# WAV/FLAC default channel order per count (what soundfile/librosa return):
+#   3 FL FR FC | 4 FL FR BL BR | 5 FL FR FC BL BR | 6 FL FR FC LFE BL BR
+#   7 FL FR FC LFE BC SL SR | 8 FL FR FC LFE BL BR SL SR
+# A back centre goes to both sides at 0.5 (0.707 into each back, 0.707 down).
+_K = 0.7071067811865476
+_DOWNMIX = {
+    3: ((1, 0, _K), (0, 1, _K)),
+    4: ((1, 0, _K, 0), (0, 1, 0, _K)),
+    5: ((1, 0, _K, _K, 0), (0, 1, _K, 0, _K)),
+    6: ((1, 0, _K, 0, _K, 0), (0, 1, _K, 0, 0, _K)),
+    7: ((1, 0, _K, 0, 0.5, _K, 0), (0, 1, _K, 0, 0.5, 0, _K)),
+    8: ((1, 0, _K, 0, _K, 0, _K, 0), (0, 1, _K, 0, 0, _K, 0, _K)),
+}
+
+
+def stereo_downmix(y):
+    """(2, n) for a (channels, n) decode of 3 to 8 channels, else `y` as is."""
+    import numpy as np
+
+    if getattr(y, "ndim", 1) < 2 or y.shape[0] not in _DOWNMIX:
+        return y
+    return np.asarray(_DOWNMIX[y.shape[0]], dtype=np.float64) @ np.asarray(y, dtype=np.float64)
+
+
 def measure_loudness(y, sr):
     """Integrated loudness (LUFS, ITU-R BS.1770 / EBU R128) + true-ish peak in
     dBFS over the decoded window. Accepts mono (n,) or librosa's multichannel
@@ -1952,9 +2600,13 @@ def measure_loudness(y, sr):
     (issue #998). Best-effort: pyloudnorm is an optional dep, so a missing
     import or any failure returns (None, None) and the caller simply omits the
     fields — every consumer treats NULL as "no loudness, behave as today"
-    (same contract as the CLAP embedding)."""
+    (same contract as the CLAP embedding). A decode of more than two channels
+    is measured as its stereo downmix (stereo_downmix): what airs, and
+    pyloudnorm refuses more than five channels ("Audio must have five channels
+    or less"), which left every 5.1 track with no loudness at all."""
     import numpy as np
 
+    y = stereo_downmix(y)
     try:
         import pyloudnorm as pyln
     except Exception as e:  # noqa: BLE001 — optional dependency
@@ -1978,6 +2630,84 @@ def measure_loudness(y, sr):
         return None, None
 
 
+# Short-term loudness curve of the tail window (tail v3). On a FADE ending the
+# silence trim cuts at the ABSOLUTE floor (SILENCE_DBFS), seconds after the
+# music stopped being audible; the controller cuts such an ending where the
+# curve last reaches a level RELATIVE to the track's own loudness instead
+# (music/silence-trim.ts). EBU R128 short-term: K-weighted mean square over a
+# 3 s window, channels summed (BS.1770 weights), -0.691 + 10*log10. One point
+# every 0.5 s, stamped at the END of the window it measures, absolute ms.
+LOUDNESS_CURVE_WINDOW_S = 3.0
+LOUDNESS_CURVE_STEP_MS = 500
+# Stored in tenths of a dB as ints (a tail of ~35 small ints per track, held
+# parsed for the whole library in the controller). Silence has no finite
+# loudness; it is stored at this floor (-100 LUFS), far under any audible end.
+LOUDNESS_CURVE_FLOOR_TENTHS = -1000
+
+
+def tail_loudness_curve_capable():
+    """Whether this worker can attach the tail's loudness curve (tail v3):
+    pyloudnorm present, and its meter exposing the K-weighting stages
+    loudness_curve() applies (a private attribute, so probed, never assumed).
+    The controller re-plans a placed tail stored without a curve only on
+    `True`, so an analyzer that cannot add one never re-reads it for nothing."""
+    try:
+        import pyloudnorm as pyln
+
+        stages = getattr(pyln.Meter(44100), "_filters", None)
+        return bool(stages) and all(hasattr(s, "apply_filter") for s in stages.values())
+    except Exception:  # noqa: BLE001 — absent or changed: not capable
+        return False
+
+
+def loudness_curve(y, sr, offset):
+    """{startMs, stepMs, lufs: [int tenths]} for a decoded window `y` (mono (n,)
+    or librosa's (channels, n)) starting at `offset` seconds into the file, or
+    None when pyloudnorm is unavailable or the meter fails (the caller then
+    omits it). A window shorter than 3 s gives an empty `lufs`."""
+    import numpy as np
+
+    try:
+        import pyloudnorm as pyln
+    except Exception as e:  # noqa: BLE001 — optional dependency
+        log(f"pyloudnorm unavailable, skipping the tail loudness curve: {e}")
+        return None
+    try:
+        data = np.asarray(y, dtype=np.float64)
+        data = data.T.copy() if data.ndim > 1 else data.reshape(-1, 1).copy()
+        n, channels = data.shape
+        # The meter's own K-weighting stages (high shelf + high pass at `sr`),
+        # the same filters integrated_loudness() applies.
+        meter = pyln.Meter(sr)
+        for stage in meter._filters.values():
+            for ch in range(channels):
+                data[:, ch] = stage.apply_filter(data[:, ch])
+        gains = [1.0, 1.0, 1.0, 1.41, 1.41]
+        win = int(round(LOUDNESS_CURVE_WINDOW_S * sr))
+        energy = np.zeros(n + 1, dtype=np.float64)
+        for ch in range(channels):
+            g = gains[ch] if ch < len(gains) else 1.0
+            energy[1:] += g * np.cumsum(data[:, ch] ** 2)
+        start_ms = int(round(offset * 1000.0 + LOUDNESS_CURVE_WINDOW_S * 1000.0))
+        lufs = []
+        i = 0
+        while True:
+            end = int(round((LOUDNESS_CURVE_WINDOW_S + i * LOUDNESS_CURVE_STEP_MS / 1000.0) * sr))
+            if end > n or end < win:
+                break
+            z = (energy[end] - energy[end - win]) / win
+            if z > 0 and np.isfinite(z):
+                v = int(round((-0.691 + 10.0 * float(np.log10(z))) * 10.0))
+                lufs.append(max(LOUDNESS_CURVE_FLOOR_TENTHS, v))
+            else:
+                lufs.append(LOUDNESS_CURVE_FLOOR_TENTHS)
+            i += 1
+        return {"startMs": start_ms, "stepMs": LOUDNESS_CURVE_STEP_MS, "lufs": lufs}
+    except Exception as e:  # noqa: BLE001 — the curve is best-effort
+        log(f"tail loudness curve failed: {e}")
+        return None
+
+
 def _path_loader(librosa, path):
     """`load(sr=, mono=, offset=, duration=)` over a local file — the shape the
     Demucs helpers take, so a non-file source can feed them later."""
@@ -1991,7 +2721,8 @@ def _path_loader(librosa, path):
     return load
 
 
-def demucs_head(detector, load, librosa, stems_dir=None, stems_require_marker=False, *, cache_errors=None):
+def demucs_head(detector, load, librosa, stems_dir=None, stems_require_marker=False, *, cache_errors=None,
+                stamp=None):
     """Demucs over the head window: vocal ranges (+ head stems when
     `stems_dir`). Returns (vocal_ranges | None, stems_cached | None).
     Best-effort exactly like the code it was lifted from: a failure logs and
@@ -2000,7 +2731,11 @@ def demucs_head(detector, load, librosa, stems_dir=None, stems_require_marker=Fa
     write (the share can drop out during a long separation): no marker, no
     write and stems_cached stays None, so the track is not stamped.
     Facet callers may collect cache_errors without losing successful vocals
-    or changing the flat caller's best-effort return values."""
+    or changing the flat caller's best-effort return values.
+    `stamp` (source_stamp) is the recording's provenance: a tail cut from
+    another recording is dropped before the head is written, and head-meta.json
+    goes in after the stems. A failed write drops the head window, so no mix of
+    two writes is left behind."""
     import numpy as np
 
     vocal_ranges = None
@@ -2009,14 +2744,21 @@ def demucs_head(detector, load, librosa, stems_dir=None, stems_require_marker=Fa
         ys, _srs = load(sr=DEMUCS_SR, mono=False, duration=ANALYZE_SECONDS)
         if ys is not None and np.size(ys) > 0:
             head_stems = detector.separate(ys)
-            vocal_ranges = detector.detect(ys, DEMUCS_SR, librosa, stems=head_stems)
+            vocal_ranges = detector.detect(
+                ys, DEMUCS_SR, librosa, mix_floor=HEAD_VOCAL_MIX_FLOOR, stems=head_stems
+            )
             stems_dir = stems_dir_to_write(stems_dir, stems_require_marker)
             if stems_dir:
+                stamp = stamp or source_stamp(None, None, None)
                 try:
+                    begin_window(stems_dir, "head", stamp)
                     write_stems(head_stems, "head", stems_dir)
+                    if stems_dir_to_write(stems_dir, stems_require_marker):
+                        write_head_meta(stems_dir, stamp)
                     stems_cached = True
                 except Exception as e:  # noqa: BLE001 — cache is best-effort
                     log(f"stem cache write (head) failed: {e}")
+                    drop_window(stems_dir, "head")
                     stems_cached = False
                     if cache_errors is not None:
                         cache_errors.append(e)
@@ -2026,7 +2768,8 @@ def demucs_head(detector, load, librosa, stems_dir=None, stems_require_marker=Fa
     return vocal_ranges, stems_cached
 
 
-def demucs_tail(detector, load, librosa, duration_s, outro, stems_dir=None, stems_require_marker=False, *, cache_errors=None):
+def demucs_tail(detector, load, librosa, duration_s, outro, stems_dir=None, stems_require_marker=False, *, cache_errors=None,
+                window=None, file_size=None, report=None):
     """Demucs over the outro window: writes ABSOLUTE `outro["vocalRanges"]`
     ([] = analysed instrumental tail) and the tail stems + tail-meta when
     `stems_dir`. Only call with an outro computed from a proven tail.
@@ -2034,27 +2777,42 @@ def demucs_tail(detector, load, librosa, duration_s, outro, stems_dir=None, stem
     on a fading outro. Returns True when the tail vocals were measured.
     With `stems_require_marker` the marker is re-checked before the tail stems
     and again before the tail meta, as in demucs_head. cache_errors collects
-    publication failures separately from the successful vocal measurement."""
+    publication failures separately from the successful vocal measurement.
+    `window` = (offset_s, length_s) of a tail placed from the edges; absent,
+    the window is the file's last OUTRO_SECONDS. `duration_s` is the decoded
+    file length either way (the tail meta records it).
+    Provenance (#2238, see source_stamp): the old tail-meta.json goes before
+    the new tail stems, a head cut from another recording is dropped, and the
+    new meta (with `file_size`, when the source is proven whole) goes in last.
+    A failed write drops the tail window. With `stems_dir`, `report` (a dict)
+    gets "tail_stems_landed": whether the tail stems and their meta landed."""
     import numpy as np
 
+    if report is not None and stems_dir:
+        report["tail_stems_landed"] = False
     try:
-        tail_offset = max(0.0, duration_s - OUTRO_SECONDS)
-        y_tail, _srt = load(sr=DEMUCS_SR, mono=False, offset=tail_offset, duration=OUTRO_SECONDS)
+        tail_offset, tail_len = window if window else (max(0.0, duration_s - OUTRO_SECONDS), OUTRO_SECONDS)
+        y_tail, _srt = load(sr=DEMUCS_SR, mono=False, offset=tail_offset, duration=tail_len)
         if y_tail is None or np.size(y_tail) == 0:
             return False
         tail_stems = detector.separate(y_tail)
         tail_vocals = detector.detect(
-            y_tail, DEMUCS_SR, librosa, min_loud=TAIL_VOCAL_MIN_LOUD, stems=tail_stems
+            y_tail, DEMUCS_SR, librosa, mix_floor=TAIL_VOCAL_MIX_FLOOR,
+            min_loud=TAIL_VOCAL_MIN_LOUD, stems=tail_stems
         )
         stems_dir = stems_dir_to_write(stems_dir, stems_require_marker)
         if stems_dir:
+            target = stems_dir
             try:
-                write_stems(tail_stems, "tail", stems_dir)
-                stems_dir = stems_dir_to_write(stems_dir, stems_require_marker)
-                if stems_dir:
-                    write_tail_meta(stems_dir, tail_offset, duration_s)
+                begin_window(target, "tail", {"file_size": file_size, "duration_sec": duration_s})
+                write_stems(tail_stems, "tail", target)
+                if stems_dir_to_write(target, stems_require_marker):
+                    write_tail_meta(target, tail_offset, duration_s, file_size=file_size)
+                    if report is not None:
+                        report["tail_stems_landed"] = True
             except Exception as e:  # noqa: BLE001 — cache is best-effort
                 log(f"stem cache write (tail) failed: {e}")
+                drop_window(target, "tail")
                 if cache_errors is not None:
                     cache_errors.append(e)
         shift_ms = tail_offset * 1000.0
@@ -2171,6 +2929,691 @@ def facet_loudness(y_src, sr):
     return out
 
 
+# --- Whole-file facets: `loudness` v2 and `edges` ----------------------------
+# facet_loudness above measures the decoded analysis WINDOW: the first
+# ANALYZE_SECONDS, resampled to ANALYZE_SR. That is the right input for bpm and
+# key and the wrong one for a playback gain: a quiet opening reads the whole
+# track as quiet, and the peak that caps the boost never sees the louder
+# passages after it, nor the inter-sample peaks the resample filters away. The
+# silence edges have the same blind spot: the head window cannot see past
+# ANALYZE_SECONDS and the tail window past ANALYZE_OUTRO_SECONDS, and the only
+# duration the controller has is the container tag.
+#
+# Both facets therefore read the WHOLE file at its native rate, in ONE ffmpeg
+# run whose memory does not grow with the file's length, apart from the
+# loudness curve's frames at two bytes per 100 ms (FrameLog; the log itself is
+# parsed a line at a time and dropped): the ebur128 filter prints integrated loudness, LRA,
+# sample and true peak (4x oversampled) on stderr, and the same decoded audio
+# leaves on stdout as float PCM, which EdgeScanner reads for the edges and the
+# exact decoded length. A request for both pays one decode. CPU only, about
+# 2-3 s for a typical track on one thread, linear in duration; the real cost
+# is reading the whole file (a FLAC is often 20-40 MB).
+
+# Version stamp the controller stores with whole-file loudness figures; a
+# window measurement carries none. Kept equal to the controller's
+# FACET_VERSIONS.loudness (library-db/facets.ts), the current version: bump
+# both together. Never its MIN_WHOLE_FILE_LOUDNESS_VERSION, the threshold
+# that says which stored versions are whole-file at all.
+WHOLE_FILE_LOUDNESS_VERSION = 2
+WHOLE_FILE_FACETS = ("loudness", "edges")
+# Below the BS.1770 absolute gate nothing counts: ffmpeg prints -70 LUFS for
+# digital silence. Treated as "no loudness", like measure_loudness's -inf.
+_WHOLE_LOUDNESS_FLOOR_LUFS = -69.9
+# Wall-clock bound for one whole-file run, seconds. 30-7200, warn-and-fall-back
+# like the sidecar (docker/analyzer/server.py), which passes its own reading
+# down; the controller's ANALYZE_WHOLE_FILE_TIMEOUT_MS waits 60 s past it.
+WHOLE_FILE_TIMEOUT_S = _env_float("ANALYZE_WHOLE_FILE_TIMEOUT_S", 900.0, minimum=30.0, maximum=7200.0)
+# PCM read size off ffmpeg's stdout (bytes): ~1.5 s of 44.1 kHz stereo float.
+_WHOLE_FILE_CHUNK = 1 << 19
+
+
+def parse_ebur128_summary(text):
+    """Integrated loudness, LRA, sample peak and true peak out of ffmpeg's
+    ebur128 summary (the block printed at the end of the run). A field is None
+    when absent or -inf. Pure, so it is tested without ffmpeg."""
+    # Only the final block counts: per-frame lines are kept out of the log
+    # (framelog=verbose), but one must never be read as the result.
+    summary = text[text.rfind("Summary:"):] if "Summary:" in text else text
+
+    def grab(pattern):
+        m = re.search(pattern, summary)
+        if not m or m.group(1) in ("-inf", "inf", "nan"):
+            return None
+        try:
+            return float(m.group(1))
+        except ValueError:
+            return None
+
+    num = r"(-?inf|nan|-?[\d.]+)"
+    lufs = grab(r"Integrated loudness:\s*\n\s*I:\s*" + num + r"\s*LUFS")
+    lra = grab(r"Loudness range:\s*\n\s*LRA:\s*" + num + r"\s*LU")
+    sample_peak = grab(r"Sample peak:\s*\n\s*Peak:\s*" + num + r"\s*dBFS")
+    true_peak = grab(r"True peak:\s*\n\s*Peak:\s*" + num + r"\s*dBFS")
+    if lufs is not None and lufs <= _WHOLE_LOUDNESS_FLOOR_LUFS:
+        lufs = None
+    return {"loudness_lufs": lufs, "lra_lu": lra, "sample_peak_db": sample_peak, "true_peak_db": true_peak}
+
+
+# The loudness curve (loudness v2, `loudness_curve`): the ebur128 filter of the
+# same decode prints a short-term loudness S every 100 ms (EBU R128: K-weighted,
+# 3 s window, stamped at the END of the window) at the verbose log level; the
+# summary above is all the facet kept until now. Stored raw, so every level
+# feature (fade or cold ending, outro start, an energy envelope) becomes a
+# controller computation on the stored curve, with no re-decode:
+#   whole  the whole track, one point a second (coarse shape);
+#   head   from 3 s (the first full window) to 30 s after the music starts;
+#   tail   from 30 s before the music stops to 5 s after it, both every 0.5 s.
+# "Starts"/"stops" = the first/last point above the BS.1770 absolute gate
+# (-70 LUFS), so a long silent tail (a hidden track) does not leave the fine
+# window on silence. Points are tenths of a dB as ints, silence (S below the
+# floor, -inf, nan, or the filter's -120.7 before its window fills) at the floor.
+# The whole-file pass measures at most at this rate (measure_whole_file).
+MEASURE_MAX_RATE = 48000
+_PROBE_TIMEOUT_S = 30
+
+
+# What an ffprobe of the header says about the first audio stream. Each field
+# is None when unknown.
+AudioProbe = collections.namedtuple("AudioProbe", "rate channels duration_ms")
+_NO_PROBE = AudioProbe(None, None, None)
+# ffprobe's warning when it has no length in the header and guesses one from
+# the bitrate (a VBR MP3 without a Xing frame): too loose to judge a decode by.
+_ESTIMATED_DURATION = "Estimating duration from bitrate"
+
+
+def parse_probe(stdout, stderr=""):
+    """AudioProbe out of `ffprobe -of json` output. The duration is the
+    stream's, else the container's, and None when ffprobe only estimated it.
+    Pure."""
+    try:
+        info = json.loads(stdout or "{}")
+    except ValueError:
+        return _NO_PROBE
+    streams = info.get("streams") if isinstance(info, dict) else None
+    stream = streams[0] if isinstance(streams, list) and streams and isinstance(streams[0], dict) else {}
+    container = info.get("format") if isinstance(info, dict) and isinstance(info.get("format"), dict) else {}
+
+    def whole(v):
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return None
+
+    def millis(v):
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return None
+        return int(round(f * 1000.0)) if math.isfinite(f) and f > 0 else None
+
+    duration_ms = None
+    if _ESTIMATED_DURATION not in (stderr or ""):
+        duration_ms = millis(stream.get("duration"))
+        if duration_ms is None:
+            duration_ms = millis(container.get("duration"))
+    return AudioProbe(whole(stream.get("sample_rate")), whole(stream.get("channels")), duration_ms)
+
+
+def probe_audio_format(src, limit=None):
+    """AudioProbe of the first audio stream (ffprobe, the header only). Every
+    field is None on any failure, and the caller then measures the file as it
+    is, as it did before. Never logs ffprobe's output (a URL carries
+    credentials)."""
+    if not shutil.which("ffprobe"):
+        return _NO_PROBE
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "warning", "-select_streams", "a:0",
+             "-show_entries", "stream=sample_rate,channels,duration:format=duration", "-of", "json", src],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, errors="replace",
+            timeout=min(_PROBE_TIMEOUT_S, limit or _PROBE_TIMEOUT_S))
+    except (OSError, subprocess.SubprocessError):
+        return _NO_PROBE
+    if r.returncode != 0:
+        return _NO_PROBE
+    return parse_probe(r.stdout, r.stderr)
+
+
+# On a read of unknown length (measure_whole_file), a decode that ends this
+# far short of the length in the header was cut off: encoder delay, padding
+# and edit lists account for tens of milliseconds, never seconds.
+_SHORTFALL_MIN_MS = 5000
+_SHORTFALL_SHARE = 0.02
+
+
+def decoded_short_of(probed_ms, decoded_ms):
+    """True when a decode of `decoded_ms` fell well short of the header's
+    `probed_ms`. Unknown either way is not short. Pure."""
+    if not probed_ms or decoded_ms is None:
+        return False
+    return probed_ms - decoded_ms > max(_SHORTFALL_MIN_MS, _SHORTFALL_SHARE * probed_ms)
+
+
+WHOLE_CURVE_STEP_MS = 1000
+END_CURVE_STEP_MS = 500
+END_CURVE_SPAN_MS = 30_000
+END_CURVE_PAST_END_MS = 5_000
+CURVE_WINDOW_MS = 3000
+CURVE_FLOOR_TENTHS = -1000
+_CURVE_GATE_TENTHS = -700
+_EBUR128_FRAME_RE = re.compile(r"\bt:\s*([0-9.]+)\s+TARGET:.*?\bS:\s*(-?inf|nan|-?[0-9.]+)")
+
+
+def parse_ebur128_frame(line):
+    """(index, tenths) of one per-frame line's short-term loudness, index = t
+    in 100 ms steps (ffmpeg stamps t just under each tenth); None for any
+    other line. Pure."""
+    m = _EBUR128_FRAME_RE.search(line or "")
+    if not m:
+        return None
+    try:
+        idx = int(round(float(m.group(1)) * 10.0))
+        raw = m.group(2)
+        v = None if raw in ("-inf", "inf", "nan") else float(raw)
+    except ValueError:
+        return None
+    return idx, CURVE_FLOOR_TENTHS if v is None else max(CURVE_FLOOR_TENTHS, int(round(v * 10.0)))
+
+
+class FrameLog:
+    """The per-frame short-term loudness of one run, two bytes a frame (a
+    6 h set is ~430 KB, where a dict of Python ints ran to tens of MB). Reads
+    like the {index: tenths} dict loudness_curve_from_frames takes. Frames
+    past _MAX_INDEX (48 h) are dropped, so a corrupt timestamp cannot make it
+    allocate without bound."""
+
+    _MISSING = -32768
+    _MAX_INDEX = 48 * 3600 * 10
+
+    def __init__(self):
+        self._v = array.array("h")
+        self._count = 0
+
+    def __setitem__(self, idx, tenths):
+        if idx < 0 or idx > self._MAX_INDEX:
+            return
+        if idx >= len(self._v):
+            self._v.extend([self._MISSING] * (idx + 1 - len(self._v)))
+        if self._v[idx] == self._MISSING:
+            self._count += 1
+        self._v[idx] = max(-32767, min(32767, tenths))
+
+    def __contains__(self, idx):
+        return 0 <= idx < len(self._v) and self._v[idx] != self._MISSING
+
+    def __getitem__(self, idx):
+        if idx not in self:
+            raise KeyError(idx)
+        return self._v[idx]
+
+    def __iter__(self):
+        return (i for i, v in enumerate(self._v) if v != self._MISSING)
+
+    def __len__(self):
+        return self._count
+
+
+def loudness_curve_from_frames(frames):
+    """{whole, head, tail}: each {startMs, stepMs, lufs: [int tenths]} (head
+    and tail absent when nothing rises above the gate), or None without a full
+    window. Pure: the whole-file answer's `loudness_curve`."""
+    first_idx = CURVE_WINDOW_MS // 100
+    if not frames:
+        # No per-frame line at all: the log level or the build did not print
+        # them. None: the answer says so (`loudness_curve_unavailable`).
+        return None
+    last = max(frames)
+    if last < first_idx:
+        # Shorter than one full window: measured, and nothing to plot.
+        return {"whole": {"startMs": CURVE_WINDOW_MS, "stepMs": WHOLE_CURVE_STEP_MS, "lufs": []}}
+
+    def at(i):
+        if i in frames:
+            return frames[i]
+        for j in (i - 1, i + 1):  # a frame stamped a hair off its tenth
+            if j in frames:
+                return frames[j]
+        return CURVE_FLOOR_TENTHS
+
+    def series(start_idx, end_idx, step_ms):
+        step = step_ms // 100
+        start_idx = -(-start_idx // step) * step  # onto the step grid
+        start_idx = max(start_idx, -(-first_idx // step) * step)
+        pts = [at(i) for i in range(start_idx, end_idx + 1, step)]
+        return {"startMs": start_idx * 100, "stepMs": step_ms, "lufs": pts}
+
+    curve = {"whole": series(first_idx, last, WHOLE_CURVE_STEP_MS)}
+    loud = [i for i in range(first_idx, last + 1) if at(i) > _CURVE_GATE_TENTHS]
+    if loud:
+        span, past = END_CURVE_SPAN_MS // 100, END_CURVE_PAST_END_MS // 100
+        curve["head"] = series(first_idx, min(last, loud[0] + span), END_CURVE_STEP_MS)
+        curve["tail"] = series(max(first_idx, loud[-1] - span), min(last, loud[-1] + past), END_CURVE_STEP_MS)
+    return curve
+
+
+def parse_output_rate(text):
+    """Sample rate of the PCM ffmpeg writes (the OUTPUT stream's: the file's
+    own rate, or MEASURE_MAX_RATE above it). None when not printed."""
+    out = text[text.find("Output #0"):] if "Output #0" in text else ""
+    m = re.search(r"Audio: pcm_f32le[^\n]*?,\s*(\d+) Hz", out)
+    return int(m.group(1)) if m else None
+
+
+# ffmpeg ends every failure with the same generic line ("Conversion failed!"),
+# the cause is earlier. The first line naming an error is the useful one; the
+# last line stays as the fallback.
+_FFMPEG_ERROR_HINTS = ("error", "invalid", "unable", "no such", "not found", "failed", "refused", "denied", "server returned")
+
+# A stream URL carries the music server's credentials in its query string
+# (Subsonic u/t/s: a token+salt pair is replayable until the password
+# changes), or in its userinfo (user:pass@). ffmpeg echoes its input URL in
+# errors, and these messages reach run logs and the admin UI, so every URL is
+# cut to scheme + host first. The one redaction rule: the sidecar quotes only
+# what the worker has already passed through it (RedactingStream).
+_URL_RE = re.compile(r"(https?://)(?:[^@/\s?#]*@)?([^/\s?#]+)[^\s]*", re.IGNORECASE)
+
+
+def redact_urls(text):
+    return _URL_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}/…", text or "")
+
+
+class RedactingStream:
+    """A text stream whose every line leaves through redact_urls. The
+    one-shot lane's stderr: the sidecar quotes its tail when the worker gives
+    no answer, so a traceback that names a stream URL must not carry its
+    credentials. Line-buffered, so a URL split across writes is still cut."""
+
+    def __init__(self, stream):
+        self._stream = stream
+        self._pending = ""
+
+    def write(self, text):
+        self._pending += text
+        *lines, self._pending = self._pending.split("\n")
+        for line in lines:
+            self._stream.write(redact_urls(line) + "\n")
+        return len(text)
+
+    def flush(self):
+        if self._pending:
+            self._stream.write(redact_urls(self._pending))
+            self._pending = ""
+        self._stream.flush()
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+
+def ffmpeg_failure_reason(stderr):
+    lines = [l.strip() for l in redact_urls(stderr or "").splitlines() if l.strip()]
+    if not lines:
+        return "no output"
+    generic = {"conversion failed!"}
+    for l in lines:
+        low = l.lower()
+        if low not in generic and any(h in low for h in _FFMPEG_ERROR_HINTS):
+            return l[:300] if l == lines[-1] else f"{l[:300]} (… {lines[-1][:120]})"
+    return lines[-1][:300]
+
+
+class FfmpegLog:
+    """ffmpeg's stderr for one whole-file run, fed a line at a time on the
+    drain thread. At the verbose level ebur128 logs ~2 KB a second of audio, so
+    the log itself is never kept: only what the pass reads from it. The frames
+    (FrameLog), the summary block, the output header and its PCM stream line
+    (the rate; a long tag such as lyrics can put many metadata lines between
+    them), the first line saying the input ended early (`input_error`), and
+    what ffmpeg_failure_reason needs: the first line naming an error, and a
+    short tail."""
+
+    _TAIL_LINES = 40
+    _SUMMARY_LINES = 40
+    _PCM_STREAM_RE = re.compile(r"Audio: pcm_f32le\b")
+    # ffmpeg's own messages start with `[component @ 0x…] ` (two of them when
+    # the component has a parent). Everything else is the header dump, whose
+    # Metadata blocks print the file's tags verbatim, so the read and the
+    # summary are judged only on these.
+    _COMPONENT_RE = re.compile(r"(?:\[[^\[\]]+ @ 0x[0-9a-fA-F]+\] )+")
+    # The summary block: ebur128's own line, never a tag that says "Summary:".
+    # The figures follow it unprefixed, printed with it in one message.
+    _SUMMARY_RE = re.compile(r"\[Parsed_ebur128_\d+ @ 0x[0-9a-fA-F]+\] Summary:")
+    # A read that ended before the input did. ffmpeg logs it and still exits
+    # 0 with what it decoded (no -xerror), so the exit code alone would store
+    # a cut-off stream as a whole-file measurement.
+    _PREMATURE_RE = re.compile(r"stream ends prematurely at \d+, should be (\d+)", re.IGNORECASE)
+    _INPUT_ERRORS = ("input/output error", "connection reset by peer", "connection timed out")
+    # ...except a server that sent no Content-Length: ffmpeg expects 2^64 - 1
+    # bytes, so even a COMPLETE read ends with "Stream ends prematurely ...,
+    # should be 18446744073709551615" and the "Input/output error" that
+    # follows it. Those say nothing; decoded_short_of judges that read
+    # (`length_unknown`).
+    _UNKNOWN_LENGTH = str(2 ** 64 - 1)
+
+    def __init__(self, src=None):
+        self.frames = FrameLog()
+        self.input_error = None
+        self.length_unknown = False
+        # ffmpeg 5.1 reports a read error on the input as `<input>: <error>`
+        # (6.1 on, prefixed like any other message).
+        self._input_prefix = f"{src}: " if src else None
+        self._summary = []
+        self._output = []
+        self._in_output = False
+        self._first_hint = None
+        self._tail = collections.deque(maxlen=self._TAIL_LINES)
+
+    def _message(self, line):
+        """The text of one of ffmpeg's own messages, past its prefix; None for
+        the header dump (a tag's text included)."""
+        m = self._COMPONENT_RE.match(line)
+        if m:
+            return line[m.end():]
+        if self._input_prefix and line.startswith(self._input_prefix):
+            return line[len(self._input_prefix):]
+        return None
+
+    def feed(self, line):
+        line = line.rstrip("\r\n")
+        frame = parse_ebur128_frame(line)
+        if frame is not None:
+            self.frames[frame[0]] = frame[1]
+            return
+        message = self._message(line)
+        if message is not None:
+            low = message.lower()
+            premature = self._PREMATURE_RE.search(message)
+            if premature and premature.group(1) == self._UNKNOWN_LENGTH:
+                self.length_unknown = True
+            elif self.input_error is None and (premature or (
+                    any(h in low for h in self._INPUT_ERRORS) and
+                    not (self.length_unknown and "input/output error" in low))):
+                self.input_error = redact_urls(line.strip())[:300]
+        if self._SUMMARY_RE.match(line):
+            self._summary = [line]
+        elif self._summary and len(self._summary) < self._SUMMARY_LINES:
+            self._summary.append(line)
+        if not self._output and "Output #0" in line:
+            self._output.append(line)
+            self._in_output = True
+        elif self._in_output and self._PCM_STREAM_RE.search(line):
+            self._output.append(line)
+            self._in_output = False
+        low = line.strip().lower()
+        if self._first_hint is None and low and low != "conversion failed!" and \
+                any(h in low for h in _FFMPEG_ERROR_HINTS):
+            self._first_hint = line
+        if low:
+            self._tail.append(line)
+
+    def summary_text(self):
+        return "\n".join(self._summary)
+
+    def output_text(self):
+        return "\n".join(self._output)
+
+    def failure_text(self):
+        """Enough of the log for ffmpeg_failure_reason: the first line naming
+        an error (if it has left the tail), then the tail."""
+        head = [self._first_hint] if self._first_hint is not None and self._first_hint not in self._tail else []
+        return "\n".join(head + list(self._tail))
+
+
+class EdgeScanner:
+    """Streaming silence edges over interleaved float PCM: the first and last
+    sample frame whose peak (over its channels) reaches the ABSOLUTE
+    SILENCE_DBFS floor — the same floor silence_edges_ms uses, never a level
+    relative to the track — and the number of frames decoded. Constant memory,
+    and the answer does not depend on how the stream is chunked."""
+
+    def __init__(self, channels=2, floor_dbfs=None):
+        self.channels = int(channels)
+        self.thr = 10.0 ** ((SILENCE_DBFS if floor_dbfs is None else floor_dbfs) / 20.0)
+        self.frames = 0
+        self.first = None
+        self.last = None
+        self._carry = None
+
+    def feed(self, buf):
+        import numpy as np
+
+        buf = np.asarray(buf, dtype=np.float32).reshape(-1)
+        if self._carry is not None and self._carry.size:
+            buf = np.concatenate([self._carry, buf])
+        whole = (buf.size // self.channels) * self.channels
+        self._carry = buf[whole:].copy()
+        if whole == 0:
+            return
+        peaks = np.max(np.abs(buf[:whole].reshape(-1, self.channels)), axis=1)
+        loud = np.flatnonzero(peaks >= self.thr)
+        if loud.size:
+            if self.first is None:
+                self.first = self.frames + int(loud[0])
+            self.last = self.frames + int(loud[-1])
+        self.frames += peaks.size
+
+    def result(self, sr):
+        """(lead_ms, tail_ms, duration_ms): lead and tail are None when no
+        frame reaches the floor (a silent file says nothing about where music
+        would start); the duration is always the decoded length."""
+        dur_ms = int(round(self.frames * 1000.0 / sr)) if sr else 0
+        if self.first is None:
+            return (None, None, dur_ms)
+        lead_ms = int(round(self.first * 1000.0 / sr))
+        tail_ms = int(round((self.frames - (self.last + 1)) * 1000.0 / sr))
+        return (max(0, lead_ms), max(0, tail_ms), dur_ms)
+
+
+def measure_whole_file(src, loudness=True, edges_wanted=True, timeout_s=None):
+    """One ffmpeg pass over the whole of `src` (a URL or a local path) at its
+    native rate, as it airs: stereo, capped at MEASURE_MAX_RATE (48 kHz). Returns {"loudness": {loudness_lufs, lra_lu, sample_peak_db,
+    true_peak_db} | None, "edges": (lead_ms, tail_ms, duration_ms) | None,
+    "seconds"}. The four loudness figures are all set or all None (digital
+    silence), never some without the others. Raises on any ffmpeg failure, and on
+    an input that ended early (ffmpeg logged a premature end or an I/O error,
+    or a read of unknown length decoded well short of the header's length:
+    decoded_short_of), so the caller records an attempt instead of a
+    measurement."""
+    import numpy as np
+
+    if not shutil.which("ffmpeg"):
+        raise RuntimeError("ffmpeg not found")
+    limit = timeout_s or WHOLE_FILE_TIMEOUT_S
+    cmd = ["ffmpeg", "-hide_banner", "-nostdin", "-nostats", "-threads", "1",
+           "-i", src, "-map", "0:a:0", "-vn"]
+    # Measured as it airs: stereo, at 48 kHz at most. Both come from a probe
+    # of the header first, and a file already stereo (or mono) at 48 kHz or
+    # below runs exactly the command it always did (a mono file's edges are
+    # judged on the upmix it airs as, below); a failed probe measures the file
+    # as it is, as before.
+    # - More than two channels (a 5.1 FLAC): ebur128 weights all six, while
+    #   the station airs Liquidsoap's stereo downmix, so the figure read about
+    #   4 dB louder than the air. The downmix runs in float (sample_fmts=dbl):
+    #   ffmpeg normalises a downmix only into integer samples, which read 7.6
+    #   dB under Liquidsoap's (fronts 1, centre and surrounds 0.707, no LFE,
+    #   unnormalised). Mono needs nothing: ebur128 reads it as Liquidsoap's
+    #   upmix airs it (within 0.1 dB).
+    # - Above 48 kHz: ebur128 takes any rate, so a DSD source decoded at
+    #   352.8 kHz had its ultrasonic noise (the DSD noise shaping) K-weighted
+    #   into the reading: a fade levelled off near -27 LUFS instead of falling
+    #   to silence, and the edges scan found no silence at either end. ffmpeg
+    #   5.1 cannot negotiate a LIST of rates (aformat with several
+    #   sample_rates fails with "Error reinitializing filters" on a 96 kHz
+    #   input), hence the probe and one fixed target.
+    filters = []
+    probe = probe_audio_format(src, limit)
+    rate, channels = probe.rate, probe.channels
+    if channels is not None and channels > 2:
+        filters.append("aformat=sample_fmts=dbl:channel_layouts=stereo")
+    if rate is not None and rate > MEASURE_MAX_RATE:
+        filters.append(f"aresample={MEASURE_MAX_RATE}")
+    if loudness:
+        # framelog=verbose, NOT quiet: `quiet` only exists from ffmpeg 6, and
+        # 5.1 (Debian bookworm, the analyzer image) rejects the whole filter.
+        # The per-frame lines sit at the verbose level, so the run logs at it:
+        # they are the loudness curve (loudness_curve_from_frames). ~150 bytes
+        # every 100 ms, parsed a line at a time as they arrive (FfmpegLog),
+        # never held whole.
+        cmd[1:1] = ["-loglevel", "verbose"]
+        filters.append("ebur128=peak=sample+true:framelog=verbose")
+    if filters:
+        cmd += ["-af", ",".join(filters)]
+    # The PCM the edges are judged on: float at the measured rate, stereo as it
+    # airs. A surround file is already downmixed above. A mono file is upmixed
+    # by `-ac 2` at 0.707 a side (-3.01 dB), which is what Liquidsoap airs it
+    # as: on 2.4.6 a mono FLAC, MP3 or WAV peaking at -24.1 dBFS airs at -27.1
+    # on each side. So a mono file's edges are judged 3 dB under its own
+    # samples, at the level a listener hears.
+    if edges_wanted:
+        cmd += ["-ac", "2", "-f", "f32le", "pipe:1"]
+    else:
+        cmd += ["-f", "null", "-"]
+
+    t0 = time.monotonic()
+    proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    log = FfmpegLog(src)
+
+    # stderr drains on its own thread: a chatty decoder must never block the
+    # PCM pipe (or the reverse) and deadlock the pass. Each line is parsed as
+    # it arrives and dropped (FfmpegLog), so memory does not grow with the
+    # file's length; a line is read at most 64 KB at a time.
+    def drain_log():
+        for raw in iter(lambda: proc.stderr.readline(1 << 16), b""):
+            log.feed(raw.decode("utf-8", errors="replace"))
+    drain = threading.Thread(target=drain_log, daemon=True)
+    drain.start()
+    timed_out = threading.Event()
+
+    def kill():
+        timed_out.set()
+        try:
+            proc.kill()
+        except OSError:
+            pass
+    timer = threading.Timer(limit, kill)
+    timer.start()
+    scanner = EdgeScanner(channels=2) if edges_wanted else None
+    try:
+        if scanner is not None:
+            pending = b""
+            while True:
+                data = proc.stdout.read(_WHOLE_FILE_CHUNK)
+                if not data:
+                    break
+                data = pending + data
+                usable = len(data) - (len(data) % 4)
+                pending = data[usable:]
+                if usable:
+                    scanner.feed(np.frombuffer(data[:usable], dtype="<f4"))
+        else:
+            proc.stdout.read()
+        code = proc.wait()
+    finally:
+        timer.cancel()
+        drain.join(timeout=5)
+    if timed_out.is_set():
+        raise RuntimeError(f"whole-file pass timed out after {limit:.0f}s")
+    if drain.is_alive():
+        # ffmpeg has exited, so its stderr is closed: a reader still going
+        # would leave the figures below half read.
+        raise RuntimeError("ffmpeg's log was still being read after it exited")
+    if code != 0:
+        raise RuntimeError(f"ffmpeg exited {code}: {ffmpeg_failure_reason(log.failure_text())}")
+    # A cut-off input still exits 0 with what it decoded. Stored, it would be
+    # a whole-file figure for part of the file (and a decoded length that
+    # ends the track early), which nothing that measures less may replace:
+    # fail instead, so the next run reads it again.
+    if log.input_error is not None:
+        raise RuntimeError(f"the input ended early: {log.input_error}")
+
+    out = {"loudness": None, "edges": None, "seconds": round(time.monotonic() - t0, 2)}
+    if loudness:
+        summary = log.summary_text()
+        if "Summary:" not in summary:
+            raise RuntimeError("ffmpeg printed no ebur128 summary")
+        fig = parse_ebur128_summary(summary)
+        # One measurement: integrated loudness, true peak, sample peak and LRA
+        # go together or not at all (a loudness without its peak would let a
+        # boost through with no ceiling). Digital silence has neither loudness
+        # nor peak, so all four are None; a summary short of a figure for real
+        # audio is a failed run, not a silent file.
+        if fig["loudness_lufs"] is None or fig["true_peak_db"] is None:
+            fig = dict.fromkeys(fig)
+        elif fig["sample_peak_db"] is None or fig["lra_lu"] is None:
+            raise RuntimeError("ffmpeg's ebur128 summary is missing a figure")
+        fig["loudness_curve"] = loudness_curve_from_frames(log.frames)
+        out["loudness"] = fig
+    if scanner is not None:
+        sr = parse_output_rate(log.output_text())
+        if not sr:
+            raise RuntimeError("ffmpeg did not report the output sample rate")
+        out["edges"] = scanner.result(sr)
+    # The second net, for a read of unknown length (a server that sent no
+    # Content-Length), where the first says nothing: the decode against the
+    # header's length. Only there. A read whose length was known logs its own
+    # cut (the first net), and a local copy is whole, so a decode short of the
+    # header there is the file itself (truncated on disk, a stale Xing frame),
+    # which is what airs, so it is measured. The edges count the decoded
+    # samples; without them the last 100 ms frame does.
+    if out["edges"] is not None:
+        decoded_ms = out["edges"][2]
+    else:
+        decoded_ms = max(log.frames) * 100 if len(log.frames) else None
+    if log.length_unknown and decoded_short_of(probe.duration_ms, decoded_ms):
+        raise RuntimeError(
+            f"the input ended early: decoded {decoded_ms / 1000:.1f} s of the {probe.duration_ms / 1000:.1f} s "
+            "its header gives")
+    return out
+
+
+def whole_file_input(path, complete, url):
+    """What the whole-file facets read: a local copy only when it is known to
+    hold the WHOLE file, otherwise the stream URL (ffmpeg reads it start to
+    end, never capped). None when there is neither."""
+    if path and complete is True:
+        return path
+    return url or None
+
+
+def whole_file_facets(src, wanted):
+    """Answer the whole-file facets in `wanted` from one decode of `src`."""
+    names = [f for f in WHOLE_FILE_FACETS if f in wanted]
+    if not names:
+        return {}
+    if not src:
+        return {f: _unmeasurable("no-whole-file-source") for f in names}
+    try:
+        m = measure_whole_file(src, loudness="loudness" in names, edges_wanted="edges" in names)
+    except Exception as e:  # noqa: BLE001 — one decode, so one failure for both
+        return {f: _failed(e) for f in names}
+    out = {}
+    if "loudness" in names:
+        fig = m.get("loudness") or {}
+        if any(fig.get(k) is None for k in ("loudness_lufs", "true_peak_db", "sample_peak_db", "lra_lu")):
+            out["loudness"] = _unmeasurable("silent")
+        else:
+            data = {"loudness_lufs": fig["loudness_lufs"], "peak_db": fig["true_peak_db"],
+                    "sample_peak_db": fig["sample_peak_db"], "lra_lu": fig["lra_lu"]}
+            if fig.get("loudness_curve") is not None:
+                data["loudness_curve"] = fig["loudness_curve"]
+            else:
+                # Said, not left out: an analyzer that predates the curve
+                # leaves it out, and the controller re-plans that figure for
+                # one. This analyzer ran and had none to give (ffmpeg printed
+                # no frame line), so asking again would only re-read the file.
+                data["loudness_curve_unavailable"] = "no-frames"
+            data["loudness_version"] = WHOLE_FILE_LOUDNESS_VERSION
+            out["loudness"] = _ok(data)
+    if "edges" in names:
+        lead, tail, dur = m.get("edges") or (None, None, 0)
+        if not dur:
+            out["edges"] = _failed("decoded empty audio")
+        elif lead is None:
+            out["edges"] = _unmeasurable("silent-file")
+        else:
+            out["edges"] = _ok({"edge_lead_ms": lead, "edge_tail_ms": tail, "decoded_duration_ms": dur})
+    return out
+
+
 # Field order of analyze()'s flat response, kept stable across the facet split
 # so the emitted JSON is unchanged. Unknown keys (none today) go last.
 _RESULT_ORDER = (
@@ -2178,13 +3621,14 @@ _RESULT_ORDER = (
     "lead_silence_ms", "tail_silence_ms", "tail_start_ms",
     "loudness_lufs", "peak_db",
     "sections", "pace_curve", "beats", "bars", "key_ranges",
-    "outro", "vocal_ranges", "audio_embedding", "stems_cached",
+    "outro", "vocal_ranges", "audio_embedding", "stems_cached", "tail_stems_landed",
 )
 
 
 def analyze(
     librosa, url=None, path=None, embed=None, vocal=None, complete=None,
     stems_dir=None, embedding_only=False, stems_require_marker=False,
+    tail_window=None, stream_url=None, source_size=None,
 ):
     import numpy as np
 
@@ -2206,6 +3650,8 @@ def analyze(
     audio_embedding = None
     vocal_ranges = None
     outro = None
+    tail_report = {}
+    placement = placed_src = tail_span = None
     try:
         if owned:
             path, complete = fetch_audio(url)
@@ -2260,7 +3706,23 @@ def analyze(
         # a pre-decoded WAV defeats that check (its duration IS the decodable
         # length, so the tail always decodes full) — skip outro rather than
         # risk measuring mid-song audio as the ending.
-        if complete is not False and (complete is True or decoded_tmp is None):
+        # A placement (where the music stops, from the stored edges) moves the
+        # tail window there, exactly as the facet protocol does; the window is
+        # read in place from a complete copy, else decoded from the stream.
+        placement = None if embedding_only else parse_tail_window(tail_window)
+        if placement is not None:
+            placed_src = FileSource(src_path, complete=complete, stream_url=stream_url or url)
+            placed_src.path, placed_src.decoded_tmp, placed_src.duration_s = path, decoded_tmp, duration_s
+            try:
+                window = placed_src.tail(librosa, placement)
+                if isinstance(window, str):
+                    log(f"placed tail not measured: {window}")
+                else:
+                    outro, tail_span = placed_outro(window, placement, librosa)
+            except Exception as e:  # noqa: BLE001 — outro is best-effort
+                log(f"outro analysis failed: {e}")
+                outro = None
+        elif complete is not False and (complete is True or decoded_tmp is None):
             try:
                 outro = analyze_outro(path, librosa, duration_s, complete)
             except Exception as e:  # noqa: BLE001 — outro is best-effort
@@ -2278,9 +3740,12 @@ def analyze(
         detector = None if vocal is False else get_vocal_detector(force=vocal is True or bool(stems_dir))
         stems_cached = None
         load = _path_loader(librosa, path)
+        # Provenance of the stems this request writes (#2238): the source as
+        # downloaded or handed over, never the fast-decode WAV.
+        stamp = source_stamp(src_path, complete, duration_s, source_size) if stems_dir else None
         if detector is not None:
             vocal_ranges, stems_cached = demucs_head(
-                detector, load, librosa, stems_dir, stems_require_marker
+                detector, load, librosa, stems_dir, stems_require_marker, stamp=stamp
             )
         # Tail vocal activity (feature: vocal-aware transitions) — the outro
         # window gets its own Demucs pass so transitions know whether the
@@ -2288,12 +3753,21 @@ def analyze(
         # outro non-None already proves the file is complete and long enough
         # for a distinct tail (see demucs_tail).
         if detector is not None and outro is not None and "startMs" in outro:
-            demucs_tail(detector, load, librosa, duration_s, outro, stems_dir, stems_require_marker)
+            stem_size = stamp["file_size"] if stamp else None
+            if tail_span:
+                demucs_tail(detector, lambda **kw: placed_src.load_tail(librosa, **kw), librosa,
+                            placement["duration_ms"] / 1000.0, outro, stems_dir, stems_require_marker,
+                            window=tail_span, file_size=stem_size, report=tail_report)
+            else:
+                demucs_tail(detector, load, librosa, duration_s, outro, stems_dir, stems_require_marker,
+                            file_size=stem_size, report=tail_report)
             # The share went away during the pass: report no stems_cached so
             # the controller does not stamp a track whose stems are incomplete.
             if stems_dir and stems_dir_to_write(stems_dir, stems_require_marker) is None:
                 stems_cached = None
     finally:
+        if placed_src is not None:
+            placed_src.close_window()
         if decoded_tmp is not None:
             try:
                 os.remove(decoded_tmp)
@@ -2320,6 +3794,14 @@ def analyze(
     # (only ever fed a window proven to reach the end of the file) and lifted
     # out of the outro dict HERE so outro_json never carries it. Omitted when
     # not measured — absence means "no silence signal, behave as today".
+    # "edges" says the placement was used, measured or not: a placed window
+    # that reads silent is a settled answer (the tail row stops being due). It
+    # is not the v2 stamp: the controller stamps tail_version 2 only with a
+    # tail measured on that window (library-db upsertTrackAnalysis).
+    if tail_span:
+        result["tail_window"] = "edges"
+    if outro is not None and "tail_curve_unavailable" in outro:
+        result["tail_curve_unavailable"] = outro.pop("tail_curve_unavailable")
     if outro is not None and "tail_silence_ms" in outro:
         result["tail_silence_ms"] = outro.pop("tail_silence_ms")
         if "tail_start_ms" in outro:
@@ -2343,6 +3825,13 @@ def analyze(
     # stems written (tail rides along when the outro was computable).
     if stems_cached is not None:
         result["stems_cached"] = stems_cached
+        # Whether the tail stems landed, only when the tail was proven (it was
+        # separated): False tells the controller the set is head-only although
+        # it could have had a tail, so it may retry (stem-stamp-policy.ts). A
+        # key of its own: an older analyzer never sends it, so a controller
+        # reading it never mistakes "no tail to cut" for a miss.
+        if "tail_stems_landed" in tail_report:
+            result["tail_stems_landed"] = tail_report["tail_stems_landed"]
     ordered = {k: result[k] for k in _RESULT_ORDER if k in result}
     ordered.update((k, v) for k, v in result.items() if k not in ordered)
     return ordered
@@ -2355,7 +3844,7 @@ def analyze(
 # A request without `facets` keeps analyze()'s flat response, byte for byte.
 # ---------------------------------------------------------------------------
 
-FACET_NAMES = ("head", "loudness", "tail", "clap", "vocal", "stems")
+FACET_NAMES = ("head", "loudness", "tail", "clap", "vocal", "stems", "edges")
 
 
 class FacetRequestError(ValueError):
@@ -2371,7 +3860,7 @@ class FileSource:
     `complete` follows analyze()'s meaning: True = the file is whole, False =
     the cap truncated it, None = unknown (old caller)."""
 
-    def __init__(self, path, complete=None, owned=False, kind="path"):
+    def __init__(self, path, complete=None, owned=False, kind="path", stream_url=None):
         self.src_path = path
         self.path = path
         self.complete = complete
@@ -2379,14 +3868,19 @@ class FileSource:
         self.kind = kind
         self.decoded_tmp = None
         self.duration_s = 0.0
+        # The music server's stream URL, for a placed tail window this copy
+        # cannot prove it reaches (tail()); and the window decoded from it.
+        self.stream_url = stream_url
+        self.window_tmp = None
+        self.window_base_s = 0.0
 
     @classmethod
-    def from_request(cls, url=None, path=None, complete=None):
+    def from_request(cls, url=None, path=None, complete=None, stream_url=None):
         if path:
-            return cls(path, complete=complete, owned=False, kind="path")
+            return cls(path, complete=complete, owned=False, kind="path", stream_url=stream_url or url)
         if url:
             fetched, complete = fetch_audio(url)
-            return cls(fetched, complete=complete, owned=True, kind="capped-download")
+            return cls(fetched, complete=complete, owned=True, kind="capped-download", stream_url=stream_url or url)
         raise FacetRequestError("missing url or path")
 
     def open(self, librosa):
@@ -2403,9 +3897,17 @@ class FileSource:
     def load(self, librosa, sr, mono, offset=0.0, duration=None):
         return _path_loader(librosa, self.path)(sr=sr, mono=mono, offset=offset, duration=duration)
 
-    def tail(self, librosa):
+    def tail(self, librosa, placement=None):
         """(y_src, sr, offset) for a window PROVEN to reach the end of the
-        file, or a string reason why the end can't be proven."""
+        file, or a string reason why the end can't be proven.
+
+        With a `placement` (parse_tail_window) the window ends where the music
+        stops instead. The end is then proven by the edges that placed it, so
+        a copy known to be complete is read in place, and any other copy (the
+        byte-capped download, an unprovable pre-decode) has just the window
+        decoded from the stream URL; load_tail() reads the same window."""
+        if placement is not None:
+            return self._placed_tail(librosa, placement)
         if self.complete is False:
             return "capped-download"
         # A pre-decoded WAV's length IS the decodable length, so the short-
@@ -2415,6 +3917,54 @@ class FileSource:
             return "unknown-completeness"
         window = decode_tail(self.path, librosa, self.duration_s, self.complete)
         return window if window is not None else "tail-not-reached"
+
+    def _placed_tail(self, librosa, placement):
+        import numpy as np
+
+        offset, length = place_tail_window(placement["end_ms"])
+        in_place = self.complete is True
+        if not in_place:
+            if not self.stream_url:
+                return "capped-download"
+            self.window_tmp = extract_tail_window(self.stream_url, offset, length,
+                                                  input_seek=input_seek_is_exact(self.src_path))
+            self.window_base_s = offset
+        def short(y):
+            return y is None or np.shape(y)[-1] < ANALYZE_SR * length * 0.6
+
+        y_src, sr = self.load_tail(librosa, sr=ANALYZE_SR, mono=False, offset=offset, duration=length)
+        # A damaged file can read short where the edges scan, which placed
+        # this window, read it whole. Two ffmpeg fallbacks, from the same
+        # copy: a seek (resyncs past bad frame headers), then counting decoded
+        # samples (for timestamps that stop short of where the samples run,
+        # where every seek misses).
+        src = self.src_path if in_place else self.stream_url
+        fallbacks = ([lambda: extract_tail_window(src, offset, length, input_seek=input_seek_is_exact(src))]
+                     if in_place else [])
+        fallbacks.append(lambda: extract_window_by_count(src, offset, length))
+        for fallback in fallbacks:
+            if not short(y_src):
+                break
+            self.close_window()
+            try:
+                self.window_tmp = fallback()
+                self.window_base_s = offset
+                y_src, sr = self.load_tail(librosa, sr=ANALYZE_SR, mono=False, offset=offset, duration=length)
+            except Exception as e:  # noqa: BLE001 — answered as not reached
+                self.close_window()
+                log(f"placed tail: ffmpeg window failed: {e}")
+                y_src = None
+        if short(y_src):
+            return "tail-not-reached"
+        return y_src, sr, offset
+
+    def load_tail(self, librosa, sr, mono, offset=0.0, duration=None):
+        """load() for the tail window: the decoded window when one was
+        extracted (its time zero is the window's start), else the file."""
+        if self.window_tmp is None:
+            return self.load(librosa, sr=sr, mono=mono, offset=offset, duration=duration)
+        return _path_loader(librosa, self.window_tmp)(
+            sr=sr, mono=mono, offset=max(0.0, offset - self.window_base_s), duration=duration)
 
     def clap_windows(self, librosa):
         return (y48 for _offset, y48 in iter_clap_windows(self.path, librosa, self.duration_s))
@@ -2427,7 +3977,17 @@ class FileSource:
             "predecoded": self.decoded_tmp is not None,
         }
 
+    def close_window(self):
+        """Remove the tail window decoded from the stream, if any."""
+        if self.window_tmp is not None:
+            try:
+                os.remove(self.window_tmp)
+            except OSError:
+                pass
+            self.window_tmp = None
+
     def close(self):
+        self.close_window()
         if self.decoded_tmp is not None:
             try:
                 os.remove(self.decoded_tmp)
@@ -2468,7 +4028,22 @@ def _failed(e):
     return {"status": "failed", "reason": str(e)[:500]}
 
 
-def analyze_facets(librosa, source, facets, stems_dir=None, want_tail_vocals=False, stems_require_marker=False):
+STEM_WINDOWS = ("head", "tail")
+
+
+def parse_stems_windows(raw):
+    """The windows a `stems` facet request asks to separate (`stems_windows`):
+    a non-empty list drawn from head and tail. Anything else, absent included,
+    is None, which separates both windows as before. Lenient on purpose: a
+    malformed value costs the old behaviour (a head separation the cache may
+    not need), never a refused request."""
+    if not isinstance(raw, list) or not raw or not all(w in STEM_WINDOWS for w in raw):
+        return None
+    return [w for w in STEM_WINDOWS if w in raw]
+
+
+def analyze_facets(librosa, source, facets, stems_dir=None, want_tail_vocals=False, stems_require_marker=False,
+                   whole_input=None, tail_window=None, stems_windows=None, source_size=None):
     """Compute exactly `facets` from an opened source. Each facet answers on
     its own: ok + data, unmeasurable + reason (this file can't give it at this
     version), unavailable + reason (this engine can't: no CLAP / no Demucs), or
@@ -2485,14 +4060,39 @@ def analyze_facets(librosa, source, facets, stems_dir=None, want_tail_vocals=Fal
     With `stems_require_marker` a stems root without the marker (a share not
     mounted here) gets no stem writes, and `stems` answers unavailable rather
     than ok/failed, so the controller leaves the track unstamped; the marker
-    is re-checked before each write, as in analyze()."""
+    is re-checked before each write, as in analyze().
+
+    `whole_input` (a URL or a complete local path, see whole_file_input) is
+    what the whole-file facets read: `edges` always, and `loudness`, which is
+    then measured over the whole file at its native rate (v2). Without it
+    `loudness` keeps the analysis window's figures (an older controller sends
+    no stream URL) and `edges` is unmeasurable.
+
+    `tail_window` (parse_tail_window: where the music stops, from the stored
+    edges) places the tail window, and the Demucs tail with it, so it ends at
+    the music instead of the file; edges measured in this same request place
+    it too. A placed tail answers `tail_window: "edges"` and takes its
+    trailing-silence fields from the edges.
+
+    `stems_windows` (parse_stems_windows; None = both) names the windows the
+    `stems` facet separates. Pick-time stems asks for the tail alone when the
+    head is already cached (#2253), which saves a Demucs pass over the head.
+    The `vocal` facet still needs the head, so asked for with it the head is
+    separated (its stems written only when asked for). A tail-only answer is
+    ok once the tail stems are written, and carries no `stems_cached` (that
+    key is the head's)."""
     out = {}
     wanted = set(facets)
+    whole_wanted = [f for f in WHOLE_FILE_FACETS if f in wanted and (f != "loudness" or whole_input)]
+    if whole_wanted:
+        out.update(whole_file_facets(whole_input, whole_wanted))
+    placement = tail_window_from_edges(out.get("edges")) or parse_tail_window(tail_window)
 
     # Head window, decoded once with channels: head works off the mono
     # downmix, loudness off the real channels (issue #998).
     y_src = y = sr = None
-    if wanted & {"head", "loudness"}:
+    window = {"head"} | ({"loudness"} if "loudness" not in out else set())
+    if wanted & window:
         try:
             y_src, sr = source.load(librosa, sr=ANALYZE_SR, mono=False, duration=ANALYZE_SECONDS)
             y = librosa.to_mono(y_src) if y_src is not None else None
@@ -2500,17 +4100,22 @@ def analyze_facets(librosa, source, facets, stems_dir=None, want_tail_vocals=Fal
                 raise RuntimeError("decoded empty audio")
         except Exception as e:  # noqa: BLE001 — independent windows may still decode
             for name in ("head", "loudness"):
-                if name in wanted:
+                if name in wanted and name not in out:
                     out[name] = _failed(e)
 
     # Tail: needed for the tail facet itself and to gate the Demucs tail pass.
     outro = None
     tail_reason = None
+    tail_span = None  # (offset_s, length_s) of a placed window
     if wanted & {"tail", "vocal", "stems"}:
         try:
-            window = source.tail(librosa)
+            window = source.tail(librosa, placement) if placement else source.tail(librosa)
             if isinstance(window, str):
                 tail_reason = window
+            elif placement:
+                outro, tail_span = placed_outro(window, placement, librosa)
+                if outro is None:
+                    tail_reason = "silent-tail-window"
             else:
                 t_src, t_sr, t_off = window
                 outro = facet_tail(t_src, t_sr, t_off, source.duration_s, librosa)
@@ -2534,19 +4139,32 @@ def analyze_facets(librosa, source, facets, stems_dir=None, want_tail_vocals=Fal
                     out[f] = _unavailable(why)
         else:
             load = lambda **kw: source.load(librosa, **kw)  # noqa: E731
+            tail_load = (lambda **kw: source.load_tail(librosa, **kw)) if tail_span else load  # noqa: E731
+            tail_dur = placement["duration_ms"] / 1000.0 if tail_span else source.duration_s
             stem_target = stems_dir if "stems" in wanted else None
             share_ok = stems_dir_to_write(stem_target, stems_require_marker) is not None
             if not share_ok:
                 stem_target = None
+            windows = STEM_WINDOWS if stems_windows is None else stems_windows
+            skip_head_stems = "head" not in windows
             cache_errors = []
-            vocal_ranges, stems_cached = demucs_head(
-                detector, load, librosa, stem_target, stems_require_marker, cache_errors=cache_errors
-            )
+            stems_cached = None
+            # Provenance of the stems written here (#2238, source_stamp).
+            stamp = source_stamp(getattr(source, "src_path", None), getattr(source, "complete", None),
+                                 getattr(source, "duration_s", None), source_size)
+            tail_report = {}
+            if "vocal" in wanted or not skip_head_stems:
+                vocal_ranges, stems_cached = demucs_head(
+                    detector, load, librosa, None if skip_head_stems else stem_target,
+                    stems_require_marker, cache_errors=cache_errors, stamp=stamp,
+                )
             tail_vocals = False
-            if outro is not None and "startMs" in outro:
+            if outro is not None and "startMs" in outro and ("tail" in windows or "vocal" in wanted):
                 tail_vocals = demucs_tail(
-                    detector, load, librosa, source.duration_s, outro, stem_target, stems_require_marker,
-                    cache_errors=cache_errors,
+                    detector, tail_load, librosa, tail_dur, outro,
+                    stem_target if "tail" in windows else None, stems_require_marker,
+                    cache_errors=cache_errors, window=tail_span,
+                    file_size=stamp["file_size"], report=tail_report,
                 )
             if stem_target and stems_dir_to_write(stem_target, stems_require_marker) is None:
                 share_ok = False
@@ -2557,6 +4175,10 @@ def analyze_facets(librosa, source, facets, stems_dir=None, want_tail_vocals=Fal
                     data = {"vocal_ranges": vocal_ranges}
                     if tail_vocals:
                         data["tail_vocal_ranges"] = outro["vocalRanges"]
+                        # Which window they describe: the controller merges
+                        # them only into an outro on the same one.
+                        if tail_span:
+                            data["tail_window"] = "edges"
                     out["vocal"] = _ok(data)
             if "stems" in wanted:
                 if not stems_dir:
@@ -2567,17 +4189,37 @@ def analyze_facets(librosa, source, facets, stems_dir=None, want_tail_vocals=Fal
                     )
                 elif cache_errors:
                     out["stems"] = _failed(cache_errors[0])
+                elif skip_head_stems:
+                    # Tail alone: ok only once its stems are on the share.
+                    if outro is None or "startMs" not in outro:
+                        out["stems"] = _unmeasurable(tail_reason or "tail-not-measured")
+                    elif not tail_report.get("tail_stems_landed"):
+                        out["stems"] = _failed("tail separation failed (see analyzer log)")
+                    else:
+                        out["stems"] = _ok({"tail_stems": True, "tail_stems_landed": True})
                 elif stems_cached is None:
                     out["stems"] = _failed("separation failed (see analyzer log)")
                 else:
-                    out["stems"] = _ok({"stems_cached": stems_cached, "tail_stems": tail_vocals})
+                    # tail_stems_landed only when the tail was proven and asked
+                    # for: False = it could have landed and did not, which the
+                    # controller retries (stem-stamp-policy.ts); absent = no
+                    # tail to cut (an unproven tail), nothing to retry.
+                    # tail_stems keeps its old meaning (the tail separated).
+                    data = {"stems_cached": stems_cached, "tail_stems": tail_vocals}
+                    if "tail_stems_landed" in tail_report:
+                        data["tail_stems_landed"] = tail_report["tail_stems_landed"]
+                    out["stems"] = _ok(data)
 
     if "tail" in wanted and want_tail_vocals and outro is not None and "startMs" in outro \
             and not (wanted & {"vocal", "stems"}):
         detector = get_vocal_detector(force=True)
         if detector is not None:
-            demucs_tail(detector, lambda **kw: source.load(librosa, **kw), librosa,
-                        source.duration_s, outro)
+            if tail_span:
+                demucs_tail(detector, lambda **kw: source.load_tail(librosa, **kw), librosa,
+                            placement["duration_ms"] / 1000.0, outro, window=tail_span)
+            else:
+                demucs_tail(detector, lambda **kw: source.load(librosa, **kw), librosa,
+                            source.duration_s, outro)
 
     if "tail" in wanted and "tail" not in out:
         if outro is None:
@@ -2589,6 +4231,10 @@ def analyze_facets(librosa, source, facets, stems_dir=None, want_tail_vocals=Fal
                 lifted["tail_silence_ms"] = data.pop("tail_silence_ms")
                 if "tail_start_ms" in data:
                     lifted["tail_start_ms"] = data.pop("tail_start_ms")
+            if "tail_curve_unavailable" in data:
+                lifted["tail_curve_unavailable"] = data.pop("tail_curve_unavailable")
+            if tail_span:
+                lifted["tail_window"] = "edges"
             out["tail"] = _ok({**lifted, **({"outro": data} if data else {})})
 
     if "head" in wanted and "head" not in out:
@@ -2628,19 +4274,61 @@ def analyze_facet_request(librosa, req):
     Raises FacetRequestError for a malformed request. Fetch / source-open
     failures fail the request; window failures stay inside their facets."""
     facets = parse_facets(req.get("facets"))
-    source = FileSource.from_request(url=req.get("url"), path=req.get("path"), complete=req.get("complete"))
+    # The whole-file facets stream the music server's URL (or read a local
+    # copy known to be complete); `stream_url` rides along with a path request.
+    whole_input = whole_file_input(req.get("path"), req.get("complete"), req.get("stream_url") or req.get("url"))
+    if all(f in WHOLE_FILE_FACETS for f in facets):
+        # Nothing here needs the capped download the window facets decode:
+        # fetching it would read up to ANALYZE_MAX_BYTES for no use.
+        result = whole_file_facets(whole_input, facets)
+        edges = result.get("edges") or {}
+        dur_ms = (edges.get("data") or {}).get("decoded_duration_ms")
+        return {
+            "facets": {name: result[name] for name in FACET_NAMES if name in result},
+            "source": {"kind": "whole-file", "duration_s": round(dur_ms / 1000.0, 3) if dur_ms else None,
+                       "complete": True},
+        }
+    source = FileSource.from_request(url=req.get("url"), path=req.get("path"), complete=req.get("complete"),
+                                     stream_url=req.get("stream_url"))
     try:
         source.open(librosa)
         result = analyze_facets(
             librosa, source, facets, stems_dir=req.get("stems_dir"),
             want_tail_vocals=req.get("tail_vocals") is True,
             stems_require_marker=req.get("stems_require_marker") is True,
+            whole_input=whole_input,
+            tail_window=req.get("tail_window"),
+            stems_windows=parse_stems_windows(req.get("stems_windows")),
+            source_size=req.get("source_size"),
         )
         return {"facets": result, "source": source.describe()}
     finally:
         source.close()
 
+def whole_file_once(stream_in, stream_out):
+    """One-shot whole-file lane: `analyze_worker.py --whole-file` reads ONE
+    facet request (whole-file facets only) from stdin and prints one answer
+    line. No librosa and no model are imported, so it starts in tens of
+    milliseconds and the sidecar can run many side by side, outside the pool
+    whose workers hold CLAP/Demucs."""
+    try:
+        req = json.loads(stream_in.readline() or "{}")
+        facets = parse_facets(req.get("facets"))
+        if not all(f in WHOLE_FILE_FACETS for f in facets):
+            raise FacetRequestError(f"--whole-file serves only the whole-file facets ({', '.join(WHOLE_FILE_FACETS)})")
+        out = {"ok": True, **analyze_facet_request(None, req)}
+    except Exception as e:  # noqa: BLE001 — reported, never a traceback
+        out = {"ok": False, "error": redact_urls(str(e))[:500]}
+    stream_out.write(json.dumps(out) + "\n")
+    stream_out.flush()
+
+
 def main():
+    if len(sys.argv) >= 2 and sys.argv[1] == "--whole-file":
+        sys.stderr = RedactingStream(sys.stderr)
+        whole_file_once(sys.stdin, sys.stdout)
+        return
+
     try:
         import librosa  # noqa: F401
         import numpy  # noqa: F401
@@ -2698,6 +4386,17 @@ def main():
         "text_embedding_capable": text_capable,
         # Version signal: this worker understands {"facets": [...]} requests.
         "facets_capable": True,
+        # The whole-file facets (loudness v2, edges) need an ffmpeg binary;
+        # older workers never emit the key.
+        "whole_file_capable": shutil.which("ffmpeg") is not None,
+        # Version signal: whole-file loudness answers carry `loudness_curve`.
+        # Older workers never emit the key; the controller re-plans a v2
+        # figure stored without a curve only on `=== true`.
+        "loudness_curve_capable": shutil.which("ffmpeg") is not None,
+        # Version signal: tail answers carry the short-term loudness curve
+        # (tail v3). Older workers never emit the key; the controller re-plans
+        # a placed tail stored without a curve only on `=== true`.
+        "tail_loudness_curve_capable": tail_loudness_curve_capable(),
     })
 
     for line in sys.stdin:
@@ -2772,6 +4471,8 @@ def main():
                     complete=req.get("complete"), stems_dir=req.get("stems_dir"),
                     embedding_only=req.get("embedding_only") is True,
                     stems_require_marker=req.get("stems_require_marker") is True,
+                    tail_window=req.get("tail_window"), stream_url=req.get("stream_url"),
+                    source_size=req.get("source_size"),
                 )
                 # If a getter stamped the clock, this request DID use a model —
                 # re-stamp so the countdown starts from the end of the work, not

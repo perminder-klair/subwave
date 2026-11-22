@@ -62,6 +62,8 @@ interface ProgrammePlan {
 interface ProgrammeEpisode {
   status: 'pending' | 'ok' | 'fallback';
   preparationSubject?: string;
+  /** `preparationPlanStamp` (occurrence, subject, grounded) the plan was written under; the opening uses its angle only while it is current (#2321). */
+  preparationStamp?: string;
   preparationOccurrence?: { id: string; endsAt: number };
   plan: ProgrammePlan | null;
   beats?: Record<string, boolean>;
@@ -95,6 +97,9 @@ export interface BoundaryHandoff extends RolledFrom {
   incomingPersonaId: string;
   incomingPersonaName: string | null;
   incomingShowName: string | null;
+  /** The incoming show's id (null: autonomous), for the mixer's jingle list
+   *  (#2367, jingle-show-sync.ts). Absent on a record armed before it. */
+  incomingShowId?: string | null;
   targetKey: string;
   boundaryAt: number | null;
   contextAt?: string;
@@ -338,6 +343,13 @@ export function onAirPersona() {
   return (id && settings.resolvePersonaById(id)) || settings.getEffectivePersona();
 }
 
+// The show currently ON AIR, by the same rule as onAirPersona: a look-ahead
+// session already belongs to the incoming show. Falls back to the grid.
+export function onAirShow() {
+  const id = _session?.show?.id;
+  return (id && settings.resolveShowById(id)) || settings.resolveActiveShow();
+}
+
 export interface AutomaticHostSpeech {
   persona: Persona | null;
   hostSpeech: HostSpeechStamp | null;
@@ -456,6 +468,17 @@ async function end() {
   logEvent('session.end', { sessionId: _session.id, key: _session.key });
 }
 
+// Told after every hard roll, once the new session is persisted. A listener
+// registry rather than an import, so a module the session must not depend on
+// (jingle-show-sync.ts, which writes the mixer's jingle list) can follow every
+// roll path: the talk tick, the pick cycle, a request, a takeover. A listener's
+// failure is its own; it never fails the roll.
+const _rollListeners = new Set<() => void>();
+export function onRoll(listener: () => void): () => void {
+  _rollListeners.add(listener);
+  return () => { _rollListeners.delete(listener); };
+}
+
 // Keep the live session or roll to a fresh one. Only a genuine show boundary or
 // the 4h cap hard-rolls; an autonomous daypart/mood turnover is a soft shift
 // that keeps the chat history.
@@ -511,6 +534,9 @@ export async function maybeRoll(ctx: SessionContext): Promise<Session> {
     _resumedQueuedHandoff = false;
   }
   await persist();
+  for (const listener of _rollListeners) {
+    try { listener(); } catch (err) { console.error('[session] roll listener failed:', (err as Error).message); }
+  }
   return next;
 }
 
@@ -683,6 +709,7 @@ export function armBoundaryHandoff(
     incomingPersonaId: incoming.id,
     incomingPersonaName: incoming.name ?? null,
     incomingShowName: ctx?.activeShow?.name ?? null,
+    incomingShowId: ctx?.activeShow?.id ?? null,
     targetKey,
     boundaryAt,
     contextAt: typeof ctx?.at === 'string' ? ctx.at : new Date(boundaryAt ?? Date.now()).toISOString(),
