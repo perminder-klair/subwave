@@ -51,23 +51,19 @@ export function startSentence(preview: SteerPreview | null, inputs: SteerStartIn
   if (inputs.until === 'once') {
     // A single track stores no steer, but "start now" still drops the DJ's own
     // queued picks so it plays next.
-    const next = inputs.startNow ? ' to play next, in place of the DJ\'s queued picks' : '';
-    if (state === 'valid' || state === 'resized') return `Start queues this track${next}. No model call is needed for it, and no steer is stored.`;
-    if (state === 'stale') return `This track is out of date; Start works out a new one with one model call and queues it${next}.`;
-    return `Start works out one track with one model call and queues it${next}. No steer is stored.`;
+    const next = inputs.startNow ? ' next' : '';
+    if (state === 'valid' || state === 'resized') return `Queues this track${next}. No model call.`;
+    if (state === 'stale') return `Out of date. Start picks a fresh track${next} (one model call).`;
+    return `Picks one track${next} (one model call).`;
   }
   if (state === 'valid') {
     const { fit, picks } = preview!;
     if (fit >= picks.length) {
-      return picks.length === 1
-        ? 'Start plays this track first. No model call is needed for it; picking continues after.'
-        : `Start plays these ${picks.length} tracks first. No model call is needed for them; picking continues after.`;
+      return picks.length === 1 ? 'Opens with this track. No model call.' : `Opens with these ${picks.length}. No model call.`;
     }
-    return `Start plays the first ${fit} of these, the ones that start before the steer ends. No model call is needed for them; picking continues after.`;
+    return `Opens with the first ${fit}; the rest would start after it ends. No model call.`;
   }
-  if (state === 'resized') {
-    return 'Start plays as many of these as start before the steer ends at this length, with no model call. Preview again to see how many.';
-  }
-  if (state === 'stale') return 'These tracks are out of date; Start will work out a new list.';
-  return `Start works out up to ${STEER_OPENING_TRACKS} opening tracks with one model call and plays the ones that start before the steer ends; picking continues after.`;
+  if (state === 'resized') return 'Opens with as many of these as fit the new length. No model call.';
+  if (state === 'stale') return 'Out of date. Start picks a fresh list.';
+  return `Picks up to ${STEER_OPENING_TRACKS} opening tracks (one model call).`;
 }
