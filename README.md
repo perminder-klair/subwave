@@ -39,6 +39,7 @@ here stays complete and free either way.
 - **Operator manual** — [getsubwave.com/manual](https://www.getsubwave.com/manual)
 - **Community** — [join the Discord](https://discord.gg/vjVbVKnMBa)
 - **Support the project** — [buy me a coffee on Ko-fi](https://ko-fi.com/pklair)
+- **Sponsor** — [Porch Mail](https://www.porch.email/?ref=subwave), a desktop email app from the maker of SUB/WAVE
 
 ## Screenshots
 
