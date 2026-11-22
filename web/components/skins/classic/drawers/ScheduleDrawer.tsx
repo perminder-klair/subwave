@@ -14,6 +14,8 @@ import type {
   StationContext,
 } from '@/lib/types';
 import { useStationClient } from '@/lib/stationClient';
+import { shownHour } from '@/lib/scheduleClock';
+import { usePlayerFeed } from '@/components/player/PlayerCore';
 
 const DAY_LABELS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
 
@@ -38,9 +40,8 @@ function pad2(n: number): string {
   return n < 10 ? `0${n}` : String(n);
 }
 
-function fmtHourRange(start: number, end: number, locale: StationLocale): string {
-  return `${fmtHour(start, locale)} – ${fmtHour((end + 1) % 24, locale)}`;
-}
+/** Formats a station hour of station day `day` (24 = that day's end). */
+type HourLabel = (day: number, hour: number, edge?: 'start' | 'end') => string;
 
 function fmtHour(start: number, locale: StationLocale): string {
   if (locale === 'en-US') {
@@ -87,6 +88,11 @@ export default function ScheduleDrawer({ activeShow, context }: ScheduleDrawerPr
   const [viewDay, setViewDay] = useState<number>(() => new Date().getDay());
   // Stops the auto-sync below so a manual day pick sticks across ticks.
   const [userPickedDay, setUserPickedDay] = useState(false);
+  // The listener's Appearance-menu clock (lib/clockZone.ts). In local mode the
+  // feed's `timezone` is their own zone; rows, days and the "now" highlight
+  // stay station hours either way, and only the labels convert.
+  const { clockZone, timezone: listenerTz } = usePlayerFeed();
+  const localTime = clockZone === 'local' && listenerTz != null;
 
   useEffect(() => {
     let cancelled = false;
@@ -161,12 +167,18 @@ export default function ScheduleDrawer({ activeShow, context }: ScheduleDrawerPr
 
   const hasAnyShow = data.shows.length > 0;
   const locale = normalizeStationLocale(data.locale);
+  const stationTz = data.timezone ?? null;
+  const shownTz = localTime ? listenerTz : stationTz;
+  const hourLabel: HourLabel = localTime
+    ? (day, hour, edge = 'start') => shownHour(now, stationTz, listenerTz, day, today, hour, locale, edge)
+    : (_day, hour) => fmtHour(hour % 24, locale);
   if (!hasAnyShow) {
     return (
       <div className="grid gap-6">
         <StationHeader
           now={now}
-          timezone={data.timezone ?? null}
+          timezone={shownTz}
+          localTime={localTime}
           locale={locale}
           location={context?.weather?.location ?? null}
         />
@@ -183,11 +195,12 @@ export default function ScheduleDrawer({ activeShow, context }: ScheduleDrawerPr
     <div className="grid gap-6">
       <StationHeader
         now={now}
-        timezone={data.timezone ?? null}
+        timezone={shownTz}
+        localTime={localTime}
         locale={locale}
         location={context?.weather?.location ?? null}
       />
-      <OnNowCard onNow={onNow} activeShow={activeShow} locale={locale} />
+      <OnNowCard onNow={onNow} activeShow={activeShow} until={onNow ? hourLabel(today, onNow.endHour + 1, 'end') : ''} />
 
       <section>
         <SectionLabel>
@@ -204,7 +217,11 @@ export default function ScheduleDrawer({ activeShow, context }: ScheduleDrawerPr
                 key={`${viewDay}-${slot.hour}`}
                 slot={slot}
                 isNow={viewDay === today && slot.hour <= currentHour && currentHour <= slot.endHour}
-                locale={locale}
+                time={
+                  slot.hour === slot.endHour
+                    ? hourLabel(viewDay, slot.hour)
+                    : `${hourLabel(viewDay, slot.hour)} – ${hourLabel(viewDay, slot.endHour + 1, 'end')}`
+                }
               />
             ))}
           </ul>
@@ -226,11 +243,14 @@ export default function ScheduleDrawer({ activeShow, context }: ScheduleDrawerPr
 function StationHeader({
   now,
   timezone,
+  localTime,
   locale,
   location,
 }: {
   now: Date;
   timezone: string | null;
+  /** The listener chose their own clock: label it theirs, not the station's. */
+  localTime: boolean;
   locale: StationLocale;
   location: string | null;
 }) {
@@ -239,7 +259,7 @@ function StationHeader({
   return (
     <section className="flex items-end justify-between gap-4 border-b border-separator-soft pb-3">
       <div>
-        <div className="text-[9px] tracking-[0.3em] text-muted uppercase">Station time</div>
+        <div className="text-[9px] tracking-[0.3em] text-muted uppercase">{localTime ? 'Your time' : 'Station time'}</div>
         <div className="v3-tab-num mt-1 text-2xl leading-none font-semibold text-ink">
           {time}
         </div>
@@ -493,9 +513,10 @@ function AvatarThumb({ avatar, name, tier }: { avatar: string; name: string; tie
 function OnNowCard(props: {
   onNow: { show: ScheduleShow; persona: SchedulePersona | null; endHour: number } | null;
   activeShow: ActiveShow | null;
-  locale: StationLocale;
+  /** When the block ends, already in the listener's chosen clock. */
+  until: string;
 }) {
-  const { onNow, activeShow, locale } = props;
+  const { onNow, activeShow, until } = props;
   const client = useStationClient();
   if (!onNow) {
     return (
@@ -521,7 +542,7 @@ function OnNowCard(props: {
   const guestNames = (activeShow?.guests || []).map(g => g?.name).filter(Boolean);
   return (
     <section>
-      <SectionLabel>On now · until {fmtHour((onNow.endHour + 1) % 24, locale)}</SectionLabel>
+      <SectionLabel>On now · until {until}</SectionLabel>
       <div className="flex gap-4 border border-separator-strong p-4">
         <AvatarThumb avatar={avatar} name={personaName} tier="lg" />
         <div className="min-w-0 flex-1">
@@ -554,11 +575,10 @@ function OnNowCard(props: {
   );
 }
 
-function ScheduleRow({ slot, isNow, locale }: { slot: Slot; isNow: boolean; locale: StationLocale }) {
+function ScheduleRow({ slot, isNow, time }: { slot: Slot; isNow: boolean; time: string }) {
   const client = useStationClient();
   const personaName = slot.persona?.name || (slot.show ? 'Host' : null);
   const avatar = client.resolve(slot.persona?.avatar || '');
-  const time = slot.hour === slot.endHour ? fmtHour(slot.hour, locale) : fmtHourRange(slot.hour, slot.endHour, locale);
   return (
     <li
       className={cn(
