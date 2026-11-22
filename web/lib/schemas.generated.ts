@@ -1788,8 +1788,9 @@ export function repairDjPromptForLoad(
 
 /**
  * Personas that will NOT speak through the station voice `{engine, provider}` —
- * what the admin DJ Brain section warns about and its one-click fix patches to
- * 'inherit'. A persona already on `inherit` is never listed.
+ * what the admin TTS voice page warns about under a DJ Brain studio voice, and
+ * its one-click fix patches to 'inherit'. A persona already on `inherit` is
+ * never listed.
  *
  * `provider` matters: the four cloud providers share one dispatcher but are
  * independent targets, so cloud/openai does not follow an openai-compatible

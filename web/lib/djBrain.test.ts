@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { djBrainSettingsPatch, isDjBrainUrl, sameBaseUrl, DJ_BRAIN_BASE_URL } from './djBrain';
+import {
+  brainVoiceWirable, djBrainSettingsPatch, isBrainRoute, isBrainVoice, isDjBrainUrl, sameBaseUrl, DJ_BRAIN_BASE_URL,
+} from './djBrain';
 
 test('a brain-only key wires the LLM and leaves the voice alone', () => {
   const p = djBrainSettingsPatch({ baseUrl: DJ_BRAIN_BASE_URL, token: 'k', voice: false, stationEngine: 'piper' });
@@ -44,4 +46,29 @@ test('sameBaseUrl matches any brain URL, never two blanks', () => {
   assert.equal(sameBaseUrl('http://brain.lan:8080/v1/', 'http://brain.lan:8080/v1'), true);
   assert.equal(sameBaseUrl('', ''), false);
   assert.equal(sameBaseUrl('http://a/v1', 'http://b/v1'), false);
+});
+
+test('the brain route is read from what is routed, not from a key on file', () => {
+  assert.equal(isBrainRoute({ provider: 'openai-compatible', baseUrl: `${DJ_BRAIN_BASE_URL}/`, model: 'anything' }), true);
+  // A brain run elsewhere still serves the brain's model id.
+  assert.equal(isBrainRoute({ provider: 'openai-compatible', baseUrl: 'http://10.0.0.5:8787/v1', model: 'dj-brain' }), true);
+  assert.equal(isBrainRoute({ provider: 'openai-compatible', baseUrl: 'http://10.0.0.5:8080/v1', model: 'qwen3' }), false);
+  assert.equal(isBrainRoute({ provider: 'openai-compatible', baseUrl: '', model: 'dj-brain' }), false);
+  // The compat URL is still the brain's, but the station moved to Ollama.
+  assert.equal(isBrainRoute({ provider: 'ollama', baseUrl: DJ_BRAIN_BASE_URL, model: 'dj-brain' }), false);
+});
+
+test('the cloud voice is the brain\'s only at the brain\'s URL', () => {
+  assert.equal(isBrainVoice({ provider: 'openai-compatible', baseUrl: `${DJ_BRAIN_BASE_URL}/` }, DJ_BRAIN_BASE_URL), true);
+  assert.equal(isBrainVoice({ provider: 'openai-compatible', baseUrl: 'http://10.0.0.5:5000/v1' }, DJ_BRAIN_BASE_URL), false);
+  assert.equal(isBrainVoice({ provider: 'openai', baseUrl: DJ_BRAIN_BASE_URL }, DJ_BRAIN_BASE_URL), false);
+});
+
+test('the voice is wired only when its key slot can be filled', () => {
+  const base = { planHasVoice: true, token: '', voiceKeyOnFile: false, voiceWiredToBrain: false };
+  assert.equal(brainVoiceWirable(base), false);
+  assert.equal(brainVoiceWirable({ ...base, token: ' k ' }), true);
+  assert.equal(brainVoiceWirable({ ...base, voiceKeyOnFile: true }), true);
+  assert.equal(brainVoiceWirable({ ...base, voiceWiredToBrain: true }), true);
+  assert.equal(brainVoiceWirable({ ...base, planHasVoice: false, token: 'k', voiceKeyOnFile: true }), false);
 });
