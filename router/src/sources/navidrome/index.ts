@@ -58,6 +58,10 @@ interface SubChild {
   starred?: string;
   musicBrainzId?: string;
   replayGain?: ReplayGain & { baseGain?: number };
+  explicitStatus?: 'explicit' | 'clean' | '';
+  samplingRate?: number;
+  bitDepth?: number;
+  channelCount?: number;
 }
 
 interface SubDateParts {
@@ -167,7 +171,8 @@ export default defineSource((ctx) => {
   }
 
   // The OpenSubsonic fields pass straight through: genres[], artists[],
-  // albumArtists[], musicBrainzId and replayGain are what make Navidrome the
+  // albumArtists[], musicBrainzId, replayGain, explicitStatus and the file's
+  // samplingRate/bitDepth/channelCount are what make Navidrome the
   // richest source, and the router normalises whatever is missing.
   const song = (c: SubChild): Song => ({
     id: c.id,
@@ -193,6 +198,10 @@ export default defineSource((ctx) => {
     created: c.created,
     musicBrainzId: c.musicBrainzId,
     replayGain: c.replayGain,
+    explicitStatus: c.explicitStatus,
+    samplingRate: c.samplingRate,
+    bitDepth: c.bitDepth,
+    channelCount: c.channelCount,
   });
 
   const album = (a: SubAlbum): Album => ({
