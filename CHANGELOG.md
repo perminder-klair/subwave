@@ -12,6 +12,47 @@
   independent. Operators who already reconfigured profiles under #1777 must
   mark those profiles before upgrading. See [upgrade and recovery steps](docs/multi-station.md#upgrading-existing-profiles).
 
+## [1.34.0](https://github.com/perminder-klair/subwave/compare/v1.33.0...v1.34.0) (2026-11-22)
+
+
+### Features
+
+* add verbatim station IDs per persona ([#1870](https://github.com/perminder-klair/subwave/issues/1870)) ([200495e](https://github.com/perminder-klair/subwave/commit/200495e4f7b17a7eb267171453f4f26cf0415dee))
+* **admin:** a compact Steer card with an end-time readout and shorter copy ([#2396](https://github.com/perminder-klair/subwave/issues/2396)) ([4471def](https://github.com/perminder-klair/subwave/commit/4471defc82ae3d44027ad104bd1be67a31870cf1))
+* **community:** redesign the /apps page to match the community catalog pages ([#2395](https://github.com/perminder-klair/subwave/issues/2395)) ([4fc93c9](https://github.com/perminder-klair/subwave/commit/4fc93c93058b51e1cfbea9e3e608a4f04924f56a))
+* **community:** redesign the public catalog pages and add a /community hub ([#2386](https://github.com/perminder-klair/subwave/issues/2386)) ([123b2d9](https://github.com/perminder-klair/subwave/commit/123b2d9e96c5195341460d0637fee2a47c62242a))
+* **doctor:** warn when a show lists only beds too short for its links ([#2371](https://github.com/perminder-klair/subwave/issues/2371)) ([277e9ae](https://github.com/perminder-klair/subwave/commit/277e9ae464fd88877471a945eaad5356f1fc8e02)), closes [#2367](https://github.com/perminder-klair/subwave/issues/2367)
+* **doctor:** warn when the mixer is older than the jingle playlist swap ([#2374](https://github.com/perminder-klair/subwave/issues/2374)) ([6922cd4](https://github.com/perminder-klair/subwave/commit/6922cd46a31f6b0af3d46e6a18ed073077d45e44)), closes [#2367](https://github.com/perminder-klair/subwave/issues/2367)
+* **festivals:** optional from/to dates for a festival ([#2369](https://github.com/perminder-klair/subwave/issues/2369)) ([5ca2869](https://github.com/perminder-klair/subwave/commit/5ca28690be6cbd594f61583f5812fc2050915f92)), closes [#2112](https://github.com/perminder-klair/subwave/issues/2112)
+* **jingles:** show jingle lists apply under the mixer-counted rotate ([#2373](https://github.com/perminder-klair/subwave/issues/2373)) ([9fac475](https://github.com/perminder-klair/subwave/commit/9fac4757670ea9909ef8e4231a438b56d3a4ab46))
+* **landing:** a Cloud page, the side pages, and a dispatch announcing the Cloud Edition ([#2388](https://github.com/perminder-klair/subwave/issues/2388)) ([b5c6fe1](https://github.com/perminder-klair/subwave/commit/b5c6fe1e8ac3384e8e282f64823a028f4bcea594))
+* **landing:** list Porch Mail as a sponsor on the project site ([#2380](https://github.com/perminder-klair/subwave/issues/2380)) ([3a45800](https://github.com/perminder-klair/subwave/commit/3a4580000cbc1bac8b5649d9dd8bf6ae454f1937))
+* **library:** one line of counts on the Library page, and what needs the operator ([#2322](https://github.com/perminder-klair/subwave/issues/2322)) ([1838cf9](https://github.com/perminder-klair/subwave/commit/1838cf99b1717085e2b465922388259c8007caf0))
+* **personas:** let a persona mix languages on air (alsoSpeaks) ([#1740](https://github.com/perminder-klair/subwave/issues/1740)) ([08af283](https://github.com/perminder-klair/subwave/commit/08af2838147a7804f54d8a1574923775da3c63ab))
+* **player:** let listeners read times in their local zone ([#2382](https://github.com/perminder-klair/subwave/issues/2382)) ([c3b510d](https://github.com/perminder-klair/subwave/commit/c3b510de73adbc378b880b1908f5ee8045289e88))
+* **player:** the classic skin's cover enlarges when pressed ([#2345](https://github.com/perminder-klair/subwave/issues/2345)) ([920dde8](https://github.com/perminder-klair/subwave/commit/920dde88ab67512feaacc0a382576b06c8f1166d))
+* **player:** the schedule drawer reads in the listener's chosen clock ([#2394](https://github.com/perminder-klair/subwave/issues/2394)) ([4faad94](https://github.com/perminder-klair/subwave/commit/4faad94bd99d3f2c9289f95d75314e03319d6bf7))
+* **settings:** make DJ Brain a source on LLM provider, not a tab of its own ([#2397](https://github.com/perminder-klair/subwave/issues/2397)) ([b702ee2](https://github.com/perminder-klair/subwave/commit/b702ee205ca856b7b859251607705deddff4378d))
+* **setup:** one DJ Brain key wires the brain, and the voice on Brain Studio ([#2390](https://github.com/perminder-klair/subwave/issues/2390)) ([be886ee](https://github.com/perminder-klair/subwave/commit/be886ee8201620b6eaff6fa225b403a0063f3d06))
+* **shows:** a listener-facing description, separate from the DJ brief ([#2370](https://github.com/perminder-klair/subwave/issues/2370)) ([7eed450](https://github.com/perminder-klair/subwave/commit/7eed450b8b5677bd42823bf04f80f42a9559e20b)), closes [#2358](https://github.com/perminder-klair/subwave/issues/2358)
+* **shows:** choose jingles and beds per show ([#2297](https://github.com/perminder-klair/subwave/issues/2297)) ([6dd0d5c](https://github.com/perminder-klair/subwave/commit/6dd0d5c871c842d9e3c2564d7210d6e2df8c274f))
+
+
+### Bug Fixes
+
+* **dash:** Requests rows show the date, the time taken in words, and the route once ([#2378](https://github.com/perminder-klair/subwave/issues/2378)) ([6301a7f](https://github.com/perminder-klair/subwave/commit/6301a7fa82d7e8765c6663738f54e92cdac4cc9d))
+* **deps:** clear npm audit in web and controller ([#2387](https://github.com/perminder-klair/subwave/issues/2387)) ([#2391](https://github.com/perminder-klair/subwave/issues/2391)) ([23ab42f](https://github.com/perminder-klair/subwave/commit/23ab42f2c6614e574a254369a730c55e89738f98))
+* **idents:** a verbatim station ID no longer waits on the context fetch ([#2368](https://github.com/perminder-klair/subwave/issues/2368)) ([2d924d9](https://github.com/perminder-klair/subwave/commit/2d924d906fd737254cf42e11fa8c84dfe0374f2a))
+* **liquidsoap:** stop jingle seams leaking clocks that grow CPU with uptime ([#2372](https://github.com/perminder-klair/subwave/issues/2372)) ([9e7c2cc](https://github.com/perminder-klair/subwave/commit/9e7c2cccd8daf8f5e7a21b80cdf74baeed31fc7c))
+* **picker:** yield while building strict show pools ([#2377](https://github.com/perminder-klair/subwave/issues/2377)) ([8d0ce73](https://github.com/perminder-klair/subwave/commit/8d0ce73e9c1126486d95e27a20f215b4f9d0968d))
+* **web:** move voice levelling into Settings → Voice Advanced ([#2398](https://github.com/perminder-klair/subwave/issues/2398)) ([b0b4826](https://github.com/perminder-klair/subwave/commit/b0b4826f70c3dc35cc75dbd896bf26b4c37cccbb))
+
+
+### Documentation
+
+* a dispatch on the shop, and DJ Brain's current price and Hosted's domain ([#2389](https://github.com/perminder-klair/subwave/issues/2389)) ([5324465](https://github.com/perminder-klair/subwave/commit/5324465c47d6d22d303a7beb4d0486d7f2eaa0ec))
+* **news:** add Steal the radio dispatch for gta.getsubwave.com ([#2379](https://github.com/perminder-klair/subwave/issues/2379)) ([c1f28d0](https://github.com/perminder-klair/subwave/commit/c1f28d0924e969dc9c84cf29515853f317586914))
+
 ## [1.33.0](https://github.com/perminder-klair/subwave/compare/v1.32.0...v1.33.0) (2026-11-18)
 
 
