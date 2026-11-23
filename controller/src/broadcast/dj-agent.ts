@@ -15,6 +15,9 @@ import { energyForDaypart, getClockContext, getDateContext, getTimeContext } fro
 import { linkClockAt, linkClockStampFor } from './queue/pure.js';
 import { djObject, nearestId, modelTolerant } from '../llm/sdk.js';
 import * as budget from './dj-budget.js';
+import type { RequestDedication } from './request-ledger.js';
+import type { AlexaVerifiedCandidate } from '../alexa/listener-features.js';
+import { dedicationSpeech } from '../alexa/dedications.js';
 import { withTrace, logEvent, timePhase } from '../observability/events.js';
 import { artistRootKey, recencyWindowsForLibrary, type CandidateLike } from '../music/recency.js';
 import { hardRecentFor, showNoRepeatGuard, strictShowLibraryPoolSliced } from '../music/show-recency.js';
@@ -1753,7 +1756,19 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, pickA
 // so its failures are the same symptom.
 // The caller (routes/request.js) owns the request `event` turn — it posts one
 // for every request path, so the agent only appends its own `dj` reply here.
-export async function runRequest(queue: any, { requester, text }: { requester: string; text: string }) {
+interface RequestAgentInput {
+  requester: string;
+  text: string;
+  alexa?: {
+    requestId: string;
+    dedication?: RequestDedication | null;
+    verifiedCandidate?: AlexaVerifiedCandidate;
+    isCancelled: () => boolean;
+    waitForCancellation?: () => Promise<boolean>;
+  };
+}
+
+export async function runRequest(queue: any, input: RequestAgentInput) {
   if (settings.get().llm?.requestMatching !== 'agentic' || breakerOpen()) return null;
   // Over the hard token cap the request agent only runs when requests are
   // exempt (llm.exemptRequests, on by default); otherwise return null and let
@@ -1761,7 +1776,7 @@ export async function runRequest(queue: any, { requester, text }: { requester: s
   if (!budget.requestsAllowed()) return null;
 
   try {
-    const out = await runRequestViaAgent(queue, { requester, text });
+    const out = await runRequestViaAgent(queue, input);
     breakerSuccess();
     return out;
   } catch (err) {
@@ -1770,7 +1785,7 @@ export async function runRequest(queue: any, { requester, text }: { requester: s
   }
 }
 
-async function runRequestViaAgent(queue: any, { requester, text }: { requester: string; text: string }) {
+async function runRequestViaAgent(queue: any, { requester, text, alexa }: RequestAgentInput) {
   return withTrace({ kind: 'request', requester }, async () => {
     const requestSpeech = session.captureAutomaticHostSpeech(session.onAirPersona());
     // Requests stay near-unfiltered — listeners must be able to re-request a
@@ -1824,6 +1839,16 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     // lands a corrective re-pick — same let-after-destructure shape
     // pickViaSelectionRoute uses for the identical reason.
     let object = run.object;
+    const confirmed = alexa?.verifiedCandidate;
+    if (confirmed) {
+      // Use the library record observed under the confirmed ID. If discovery
+      // missed it, the route can try its ID-constrained direct fallback.
+      const observed = extras.seen.get(confirmed.id);
+      if (!observed || observed.id !== confirmed.id) return null;
+      if (object?.id !== confirmed.id) {
+        object = { kind: 'track', id: confirmed.id, ack: plainRequestAck(observed, requester), intro: '' };
+      }
+    }
 
     // Chat escape (C1): an explicit kind:"chat" WITH a null id means this
     // wasn't a music request — answer in persona, queue nothing, skip the
@@ -1949,7 +1974,7 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     const firstMiss = misnamed(object, song, extras.seen);
     if (firstMiss.length) {
       // An ack-only miss goes straight to the plain ack: no call, no lookup.
-      const canRepick = !corrected && claimEarnsRepick(firstMiss);
+      const canRepick = !confirmed && !corrected && claimEarnsRepick(firstMiss);
       const pool = new Map(extras.seen);
       const lookup = canRepick ? claimLookupQuery(firstMiss, toolCalls) : null;
       if (lookup) {
@@ -1991,7 +2016,7 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     // call means the corrective pick was already offered spaced candidates;
     // whatever it left stands, as spacing does on a failed re-pick.
     let spacingGuard: string | null = null;
-    if (neighbourRoots.size && standIn(song, extras.seen)) {
+    if (!confirmed && neighbourRoots.size && standIn(song, extras.seen)) {
       if (!corrected) {
         const spaced = await runArtistGuard<any>({
           song, object, pickAnchor: null,
@@ -2084,12 +2109,25 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     // in the intro, after misnaming the track) — join rather than let one
     // verdict hide another.
     const guardVerdict = [claimGuard, spacingGuard, guarded.guard, screened.guard].filter(Boolean).join('+') || null;
+    const dedication = alexa?.dedication;
+    const queuedIntro = dedication
+      ? [dedicationSpeech(dedication.target, dedication.locale), intro].filter(Boolean).join(' ')
+      : intro;
     let introDropped = false;
+    // Queue.push inserts synchronously. Check the live receipt after every
+    // awaited lookup, re-pick and intro rewrite, immediately before insertion.
+    if (alexa?.isCancelled()) return null;
+    if (alexa && await alexa.waitForCancellation?.()) return null;
+    // The wait itself yields to CancelRequestIntent. Recheck immediately after
+    // it and keep this check adjacent to push: queue.push inserts synchronously,
+    // so no cancellation can interleave between this decision and insertion.
+    if (alexa?.isCancelled()) return null;
     const pos = await queue.push({
       track: trackFields(song),
+      ...(alexa && { requestId: alexa.requestId, dedication }),
       requestedBy: requester,
       intent: 'listener request',
-      introScript: intro || null,
+      introScript: queuedIntro || null,
       introKind: 'dj-speak',
       // Voice the intro as whoever wrote it (see the pool-pick push above).
       introPersona: currentSpeech.persona,
@@ -2129,7 +2167,7 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     return {
       ack,
       track: { title: song.title, artist: song.artist, id: song.id },
-      introScript: airedIntro,
+      introScript: introDropped ? null : queuedIntro || null,
       guard: guardVerdict,
     };
   });

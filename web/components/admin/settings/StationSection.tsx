@@ -379,7 +379,7 @@ export function StationSection({ data, form, setForm, busy, saveSettings, fieldE
         </div>
       </Card>
 
-      <Advanced note="request rate limits and the public-API switch">
+      <Advanced note="Listener request limits and the public-API switch">
       <Card title="Listener requests" sub="Rate limits and the pause switch for POST /request">
         <div className="grid gap-3">
           <div className="field">

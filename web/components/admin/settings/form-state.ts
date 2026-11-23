@@ -100,6 +100,10 @@ export function settingsForm(v: NonNullable<SettingsData['values']>): FormState 
       password: v.privacy?.password ?? '',
       publishPersonaSouls: v.privacy?.publishPersonaSouls ?? false,
     },
+    alexa: {
+      enabled: v.alexa?.enabled === true,
+      skillId: v.alexa?.skillId ?? '',
+    },
     requests: {
       enabled: v.requests?.enabled !== false,
       maxPending: String(v.requests?.maxPending ?? 6),

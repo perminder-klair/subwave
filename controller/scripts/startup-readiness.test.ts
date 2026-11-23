@@ -31,6 +31,21 @@ test('HTTP readiness waits for startup recovery, then a new reconciliation survi
     tts: { enabled: false }, embedding: { enabled: false },
     llm: { ollamaUrl: 'http://127.0.0.1:1', pickerAgent: false },
   }));
+  const previousRequestId = 'startup-alexa-previous';
+  const replacementRequestId = 'startup-alexa-staged';
+  const alexaIdentity = 'startup-hashed-alexa-identity';
+  writeFileSync(join(state, 'request-ledger.json'), JSON.stringify({
+    version: 2,
+    salt: 'startup-test-salt',
+    records: [
+      { id: previousRequestId, createdAt: 1, updatedAt: 2, status: 'resolved', source: 'alexa', requester: 'anon', text: 'old request', alexaIdentity },
+      { id: replacementRequestId, createdAt: 3, updatedAt: 3, status: 'pending', source: 'alexa', requester: 'anon', text: 'replacement request' },
+    ],
+    latestAlexa: { [alexaIdentity]: previousRequestId },
+    replacementRecoveries: {
+      [replacementRequestId]: { previousId: previousRequestId, replacementId: replacementRequestId, identity: alexaIdentity },
+    },
+  }));
   writeFileSync(preload, `
 import fs from 'node:fs';
 import cp from 'node:child_process';
@@ -119,6 +134,8 @@ globalThis.fetch = (input, init) => {
     ]);
     assert.equal(held.type, 'startup-held');
     assert.ok(held.port > 0);
+    const ledgerWhileHeld = JSON.parse(readFileSync(join(state, 'request-ledger.json'), 'utf8'));
+    assert.ok(ledgerWhileHeld.replacementRecoveries[replacementRequestId], 'replacement recovery must wait until queue recovery is available');
     const url = `http://127.0.0.1:${held.port}`;
     const auth = { Authorization: `Basic ${Buffer.from('test:test').toString('base64')}`, 'Content-Type': 'application/json' };
     const health = await fetch(`${url}/health`);
@@ -130,6 +147,12 @@ globalThis.fetch = (input, init) => {
       const r = await fetch(url + path, { method: 'POST', headers: auth, body: '{}' });
       assert.equal(r.status, 503, `${path} must not run during initialization`);
     }
+    const listenerRequest = await fetch(`${url}/request`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: 'A song please' }),
+    });
+    assert.equal(listenerRequest.status, 503, 'listener requests stay closed while replacement recovery is pending');
     assert.equal((await fetch(`${url}/state`)).status, 503, 'do not expose default state before loading persisted privacy');
     assert.equal((await fetch(`${url}/health`, { method: 'OPTIONS' })).status, 200, 'CORS preflight remains available');
     assert.equal(JSON.parse(readFileSync(join(state, 'tagger.pid'), 'utf8')).pid, orphan.pid,
@@ -141,6 +164,11 @@ globalThis.fetch = (input, init) => {
       await pause(50);
     }
     assert.ok(ready, logs);
+    const recoveredLedger = JSON.parse(readFileSync(join(state, 'request-ledger.json'), 'utf8'));
+    assert.deepEqual(recoveredLedger.replacementRecoveries, {}, 'startup must settle replacement recovery before reporting ready');
+    assert.equal(recoveredLedger.records.find((row: { id: string }) => row.id === previousRequestId)?.status, 'interrupted');
+    assert.equal(recoveredLedger.records.find((row: { id: string }) => row.id === replacementRequestId)?.status, 'interrupted');
+    assert.equal(recoveredLedger.latestAlexa[alexaIdentity], previousRequestId);
     await orphanExit;
     assert.equal(orphan.signalCode, 'SIGTERM', 'startup must still reap the actual orphan');
     const denied = await fetch(`${url}/library/reconcile`, { method: 'POST' });
