@@ -17,6 +17,7 @@ import * as settings from '../settings.js';
 import { canonicalId } from './id-canonical.js';
 import { reportRotation, reportSwitchBlocks } from './tagger-progress.js';
 import { decidePrune, type PruneDecision } from './prune-policy.js';
+import { recordHeldRows } from './held-rows.js';
 import { clearSourceSwitch, pendingSourceSwitch, strandedTrackBlocks, switchedAfter } from './source-switch.js';
 import { currentSelectionSince } from '../setup/music-source.js';
 
@@ -98,15 +99,25 @@ export async function adoptAndPrune(
     reportRotation({ adopted });
   }
   const missing = db.countMissingTracks(liveIds);
-  if (missing === 0) return { adopted, pruned: 0 };
+  if (missing === 0) {
+    recordHeldRows([]);
+    return { adopted, pruned: 0 };
+  }
   const decision = decidePrune({
     missing,
     knownTracks: db.trackCount(),
     scanning: await subsonic.getScanStatus(),
     confirmed: opts.confirmMassPrune === true,
   });
-  if (!decision.prune) return { adopted, pruned: 0, held: decision };
+  if (!decision.prune) {
+    // Kept, but not served: the pick and analysis paths leave these out
+    // until a walk sees them again or the removal is confirmed (held-rows.ts).
+    const rows = db.requireDb().prepare('SELECT id FROM tracks').all() as Array<{ id: string }>;
+    recordHeldRows(rows.map((r) => r.id).filter((id) => !liveIds.has(id)));
+    return { adopted, pruned: 0, held: decision };
+  }
   const pruned = db.pruneMissingTracks(liveIds);
+  recordHeldRows([]);
   return { adopted, pruned };
 }
 

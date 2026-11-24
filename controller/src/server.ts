@@ -357,8 +357,10 @@ app.listen(config.server.port, async (err?: Error) => {
   // Terminate a tagger/analyzer child orphaned by a restart: it is detached and
   // keeps running, so a second Start would double-write the library DB.
   try {
-    const { recoverFromRestart } = await import('./broadcast/tagger.js');
+    const { recoverFromRestart, resumeSourceSwitchAtBoot } = await import('./broadcast/tagger.js');
     recoverFromRestart();
+    // A music-source switch whose carry-across walk never finished (#692).
+    resumeSourceSwitchAtBoot();
   } catch (err: any) {
     console.error('[tagger] restart recovery failed:', err.message);
   }

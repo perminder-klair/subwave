@@ -220,18 +220,33 @@ function musicIdentityKeys(source: MusicIdentitySource, plugin: Pick<MusicPlugin
  * sources answer, how their ids are published, and the settings that say
  * where they point. Secrets never count — a new password reaches the same
  * library — and a blank value is the same as an absent one.
+ *
+ * Direct Navidrome serves the same ids as the router's Navidrome plugin on the
+ * same server keeping its ids, so when the stored Navidrome URL is known the
+ * two read as one identity and moving between them re-links nothing. Without
+ * it, direct mode is just 'navidrome'.
  */
 export function musicSelectionIdentity(
   sel: { mode: MusicMode; merge?: boolean; sources: readonly MusicIdentitySource[] },
   plugins: readonly Pick<MusicPluginInfo, 'name' | 'config'>[] = [],
+  directNavidromeUrl?: string | null,
 ): string {
-  if (sel.mode !== 'router') return 'navidrome';
+  const sources: readonly MusicIdentitySource[] | null =
+    sel.mode === 'router' ? sel.sources
+    : directNavidromeUrl ? [{ plugin: 'navidrome', rawIds: true, config: { url: directNavidromeUrl } }]
+    : null;
+  if (!sources) return 'navidrome';
   return JSON.stringify(
-    sel.sources.map((s) => {
+    sources.map((s) => {
       const keys = musicIdentityKeys(s, plugins.find((p) => p.name === s.plugin))
         .filter((k) => s.config[k] !== undefined && s.config[k] !== null && s.config[k] !== '')
         .sort((a, b) => a.localeCompare(b));
-      return { plugin: s.plugin, rawIds: s.rawIds === true, config: Object.fromEntries(keys.map((k) => [k, s.config[k]])) };
+      const value = (k: string) => {
+        const v = s.config[k];
+        // http://nd:4533/ and http://nd:4533 are one server.
+        return k === 'url' && typeof v === 'string' ? v.trim().replace(/\/+$/, '') : v;
+      };
+      return { plugin: s.plugin, rawIds: s.rawIds === true, config: Object.fromEntries(keys.map((k) => [k, value(k)])) };
     }),
   );
 }

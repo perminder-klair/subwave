@@ -116,6 +116,24 @@ test('selection identity: a new password is the same library, a new server is no
   assert.equal(ms.selectionIdentity({ mode: 'navidrome', merge: false, sources: a.sources }), 'navidrome');
 });
 
+// Moving a Navidrome station behind the router with its ids kept, or back,
+// serves the same ids: it used to write a marker and walk the whole library.
+test('selection identity: direct Navidrome and its id-keeping router twin are one library', () => {
+  const navidrome = { name: 'navidrome', config: [
+    { key: 'url', label: 'Server URL', type: 'url' as const, required: true, affectsIds: true },
+    { key: 'user', label: 'Username', type: 'string' as const, required: true, affectsIds: false },
+    { key: 'password', label: 'Password', type: 'secret' as const, required: true },
+  ] } as any;
+  const direct = { mode: 'navidrome' as const, merge: false, sources: [] };
+  const twin = (url: string, rawIds = true) => ({ mode: 'router' as const, merge: false, sources: [{ plugin: 'navidrome', rawIds, config: { url, user: 'u', password: 'p' } }] });
+  const url = 'http://nd:4533';
+  assert.equal(ms.selectionIdentity(direct, [navidrome], url), ms.selectionIdentity(twin(url), [navidrome], url));
+  assert.equal(ms.selectionIdentity(direct, [navidrome], url), ms.selectionIdentity(twin('http://nd:4533/'), [navidrome], url), 'a trailing slash is the same server');
+  assert.notEqual(ms.selectionIdentity(direct, [navidrome], url), ms.selectionIdentity(twin(url, false), [navidrome], url), 'prefixed ids are new ids');
+  assert.notEqual(ms.selectionIdentity(direct, [navidrome], url), ms.selectionIdentity(twin('http://other:4533'), [navidrome], url));
+  assert.equal(ms.selectionIdentity(direct, [navidrome]), 'navidrome', 'no stored URL: as before');
+});
+
 // #1827 review: every non-secret field counted, so flipping a display toggle
 // wrote a switch marker and started a full re-link walk. A manifest now marks
 // the fields that change ids; one that marks none keeps the old reading.

@@ -99,7 +99,7 @@ export async function applySelection(selection: MusicSelection, prev: MusicSelec
   let routerError: string | null = null;
   try {
     router = await routerReload();
-    if (selection.mode === 'router' && router.configError) routerError = router.configError;
+    if (selection.mode === 'router') routerError = router.configError ?? unservedSource(router);
   } catch (err: any) {
     // In navidrome mode the router is optional; its absence is not an error.
     if (selection.mode === 'router') routerError = err?.message || 'router unreachable';
@@ -114,15 +114,18 @@ export async function applySelection(selection: MusicSelection, prev: MusicSelec
   await saveSetupConfig({ music: selection });
   setCurrentSelection(selection);
 
+  // The stored direct connection, whichever mode is live: it is what direct
+  // mode serves, so it lets the identity see that the Navidrome plugin keeping
+  // its ids on the same server is the same library.
+  const direct = resolveNavidrome((await loadSetupConfig()).navidrome, NAVIDROME_ENV_ENABLED);
   if (selection.mode === 'router') {
     Object.assign(config.navidrome, routerConnection(auth ?? readRouterAuth()));
   } else {
-    const sc = await loadSetupConfig();
-    Object.assign(config.navidrome, resolveNavidrome(sc.navidrome, NAVIDROME_ENV_ENABLED));
+    Object.assign(config.navidrome, direct);
   }
 
-  const from = selectionIdentity(prev, plugins);
-  const to = selectionIdentity(selection, plugins);
+  const from = selectionIdentity(prev, plugins, direct.url);
+  const to = selectionIdentity(selection, plugins, direct.url);
   const switched = from !== to;
   if (switched) await markSourceSwitch(from, to);
 
@@ -141,8 +144,7 @@ export async function applySelection(selection: MusicSelection, prev: MusicSelec
   // press the button. Busy tagger: it walked the old library, so the reconcile
   // follows when it exits (broadcast/tagger.ts resumeSourceSwitch).
   let reconcile: 'started' | 'pending' | null = null;
-  const healthy = selection.mode !== 'router' || (router?.active.length ? router.active.every((a) => a.health.state === 'healthy') : false);
-  if (switched && healthy) {
+  if (switched) {
     if (tagger.running) reconcile = 'pending';
     else {
       startReconcile();
@@ -150,6 +152,21 @@ export async function applySelection(selection: MusicSelection, prev: MusicSelec
     }
   }
   return { router, routerError: null, switched, reconcile };
+}
+
+/**
+ * Why the freshly built selection cannot serve the station, or null when every
+ * source answered. The manifest check only proves the form is filled in: a
+ * wrong API key or an unreachable server passes it, and going live with one
+ * starves the station at the next track. So a source that does not answer is
+ * refused like a plugin that fails to build, and the running source stays.
+ */
+export function unservedSource(router: RouterStatus): string | null {
+  if (!router.active.length) return 'the music router is serving no source';
+  const down = router.active.find((a) => a.health.state !== 'healthy');
+  if (!down) return null;
+  const why = down.health.error || down.health.state.replace('-', ' ');
+  return `${down.label} is not answering, so the station stays on its current source: ${why}`;
 }
 
 function describe(sel: MusicSelection, plugins: RouterStatus['plugins']): string {

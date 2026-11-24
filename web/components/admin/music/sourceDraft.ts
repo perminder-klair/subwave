@@ -92,8 +92,15 @@ export function draftDirty(saved: SavedSelectionView, mode: MusicMode, merge: bo
  * rule (musicSelectionIdentity, shared through the schema mirror), so the
  * warning appears exactly when the save will re-link the library.
  */
-export function changesTrackIds(saved: SavedSelectionView, mode: MusicMode, sources: DraftSource[], plugins: readonly MusicPluginInfo[]): boolean {
-  return musicSelectionIdentity(saved, plugins) !== musicSelectionIdentity({ mode, sources }, plugins);
+export function changesTrackIds(
+  saved: SavedSelectionView,
+  mode: MusicMode,
+  sources: DraftSource[],
+  plugins: readonly MusicPluginInfo[],
+  /** The stored direct Navidrome URL, so its id-keeping plugin twin reads as the same library. */
+  directNavidromeUrl?: string | null,
+): boolean {
+  return musicSelectionIdentity(saved, plugins, directNavidromeUrl) !== musicSelectionIdentity({ mode, sources }, plugins, directNavidromeUrl);
 }
 
 /** The body for POST /settings/music-source (and the wizard's `music` block). */

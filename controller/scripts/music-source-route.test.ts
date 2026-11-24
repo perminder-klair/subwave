@@ -50,8 +50,29 @@ await new Promise<void>((ok) => server.listen(0, '127.0.0.1', ok));
 const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 const authorization = `Basic ${Buffer.from('test-admin:test-pass').toString('base64')}`;
 
+// Just enough Jellyfin for the router's health probe (/Users, then the stats
+// calls), answering only a request that carries its key in the Authorization
+// scheme Jellyfin 12 requires: a save is refused unless its source answers.
+const JF_KEY = 'TOP-SECRET-KEY';
+const fakeJellyfin = createServer((req, res) => {
+  const auth = String(req.headers.authorization ?? '');
+  if (auth !== `MediaBrowser Token="${JF_KEY}"`) {
+    res.writeHead(401).end();
+    return;
+  }
+  const pathname = new URL(req.url ?? '/', 'http://jf').pathname;
+  const body =
+    pathname === '/Users' ? [{ Id: 'u1', Name: 'radio' }]
+    : pathname === '/Items/Counts' ? { SongCount: 3, AlbumCount: 1 }
+    : { Items: [], TotalRecordCount: 1 };
+  res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(body));
+});
+await new Promise<void>((ok) => fakeJellyfin.listen(0, '127.0.0.1', ok));
+const jfUrl = `http://127.0.0.1:${(fakeJellyfin.address() as AddressInfo).port}`;
+
 after(() => {
   server.close();
+  fakeJellyfin.close();
   routerProc.stop();
   tagger.running = false;
   rmSync(stateRoot, { recursive: true, force: true });
@@ -152,28 +173,30 @@ test('a selection the router refuses at start-up is rolled back, not half-applie
 });
 
 test('secrets stay in the process; a blank secret keeps the stored one', async () => {
-  // A Jellyfin source we can save without a reachable server: the router
-  // constructs it lazily, so the save succeeds and health reports the outage.
   let res = await call('POST', '/settings/music-source', {
     mode: 'router',
-    sources: [{ plugin: 'jellyfin', config: { url: 'http://127.0.0.1:9', apiKey: 'TOP-SECRET-KEY' } }],
+    sources: [{ plugin: 'jellyfin', config: { url: jfUrl, apiKey: JF_KEY } }],
   });
   assert.equal(res.status, 200, JSON.stringify(res.body));
-  assert.ok(!JSON.stringify(res.body).includes('TOP-SECRET-KEY'));
-  assert.equal(res.body.router.active[0].health.state, 'unreachable');
+  assert.equal(res.body.ok, true, JSON.stringify(res.body));
+  assert.ok(!JSON.stringify(res.body).includes(JF_KEY));
+  assert.equal(res.body.router.active[0].health.state, 'healthy');
   const got = await call('GET', '/settings/music-source');
-  assert.ok(!JSON.stringify(got.body).includes('TOP-SECRET-KEY'));
+  assert.ok(!JSON.stringify(got.body).includes(JF_KEY));
   assert.deepEqual(got.body.sources[0].secretsSet, ['apiKey']);
-  assert.equal(got.body.sources[0].config.url, 'http://127.0.0.1:9');
+  assert.equal(got.body.sources[0].config.url, jfUrl);
 
+  // The fake answers only the right key, so this save passing proves the
+  // stored one travelled.
   res = await call('POST', '/settings/music-source', {
     mode: 'router',
-    sources: [{ plugin: 'jellyfin', config: { url: 'http://127.0.0.1:9', apiKey: '', user: 'someone' } }],
+    sources: [{ plugin: 'jellyfin', config: { url: jfUrl, apiKey: '', user: 'radio' } }],
   });
   assert.equal(res.status, 200);
+  assert.equal(res.body.ok, true, JSON.stringify(res.body));
   let stored = ms.readSelection(await setupConfig.loadSetupConfig()).sources[0]!;
-  assert.equal(stored.config.apiKey, 'TOP-SECRET-KEY', 'kept: same server');
-  assert.equal(stored.config.user, 'someone');
+  assert.equal(stored.config.apiKey, JF_KEY, 'kept: same server');
+  assert.equal(stored.config.user, 'radio');
 
   // A new server needs its key typed again: the stored one is not sent there.
   res = await call('POST', '/settings/music-source', {
@@ -183,7 +206,32 @@ test('secrets stay in the process; a blank secret keeps the stored one', async (
   assert.equal(res.status, 400);
   assert.match(res.body.error, /Jellyfin needs: API key/);
   stored = ms.readSelection(await setupConfig.loadSetupConfig()).sources[0]!;
-  assert.equal(stored.config.url, 'http://127.0.0.1:9', 'nothing saved');
+  assert.equal(stored.config.url, jfUrl, 'nothing saved');
+});
+
+// The manifest check only proves the form is filled in. A wrong key used to
+// save, point the station at a source that answered 401, and starve it at the
+// next track; now the source must answer before it goes live.
+test('a source that does not answer is refused, and the station keeps the one it has', async () => {
+  const before = {
+    setup: readFileSync(path.join(stateRoot, 'setup-config.json'), 'utf8'),
+    router: readFileSync(path.join(routerDir, 'config.json'), 'utf8'),
+    live: { ...config.navidrome },
+  };
+  for (const [draft, why] of [
+    [{ url: jfUrl, apiKey: 'a-typo' }, /Jellyfin is not answering.*401/],
+    [{ url: 'http://127.0.0.1:9', apiKey: JF_KEY }, /Jellyfin is not answering/],
+  ] as const) {
+    const res = await call('POST', '/settings/music-source', { mode: 'router', sources: [{ plugin: 'jellyfin', config: draft }] });
+    assert.equal(res.body.ok, false, JSON.stringify(res.body));
+    assert.match(res.body.error, why);
+    assert.equal(res.body.switched, false);
+    assert.equal(readFileSync(path.join(stateRoot, 'setup-config.json'), 'utf8'), before.setup, 'nothing saved');
+    assert.equal(readFileSync(path.join(routerDir, 'config.json'), 'utf8'), before.router, 'the router config is restored');
+    assert.deepEqual({ ...config.navidrome }, before.live);
+    const got = await call('GET', '/settings/music-source');
+    assert.deepEqual(got.body.router.active.map((a: any) => [a.plugin, a.health.state]), [['jellyfin', 'healthy']], 'still serving the working source');
+  }
 });
 
 test('a draft test reports health without saving it', async () => {
@@ -193,8 +241,8 @@ test('a draft test reports health without saving it', async () => {
   assert.equal(res.body.stats.songs, 261);
   assert.equal(res.body.capabilities.playlists, true);
   // Uses the stored secret when the draft leaves it blank — for the stored server only.
-  const jf = await call('POST', '/settings/music-source/test', { plugin: 'jellyfin', config: { url: 'http://127.0.0.1:9' } });
-  assert.equal(jf.body.state, 'unreachable');
+  const jf = await call('POST', '/settings/music-source/test', { plugin: 'jellyfin', config: { url: jfUrl } });
+  assert.equal(jf.body.state, 'healthy', 'the stored key answered the fake, which takes only that key');
   const elsewhere = await call('POST', '/settings/music-source/test', { plugin: 'jellyfin', config: { url: 'http://127.0.0.1:11' } });
   assert.equal(elsewhere.body.state, 'not-configured', 'no stored key travels to another server');
   assert.equal(ms.readSelection(await setupConfig.loadSetupConfig()).sources[0]!.plugin, 'jellyfin', 'nothing was saved');

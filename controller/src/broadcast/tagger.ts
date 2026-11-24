@@ -19,6 +19,7 @@ import { PROGRESS_PREFIX, EVENT_PREFIX, ROTATION_PREFIX, CATALOGUE_PREFIX, SWITC
 import { writePidfile, clearPidfile, readPidfile, isPidAlive, MANAGED_ENV } from '../music/tagger-lock.js';
 import path from 'node:path';
 import { STATE_DIR } from '../config.js';
+import { heldIds } from '../music/held-rows.js';
 import {
   openRunLog, listRunLogs, runLogPath, RUN_LOG_DIR_NAME,
   type RunLog, type RunLogPage, type RunLogFileInfo,
@@ -114,8 +115,11 @@ export function considerIdRotationRecovery(track: {
 const TAGGER_LOG_TAIL = 30;
 
 // Single snapshot source so GET /settings and GET /library/tagger can't drift.
-export function taggerView(): TaggerState {
-  return { ...tagger, lastLog: tagger.lastLog.slice(-TAGGER_LOG_TAIL) };
+export function taggerView(): TaggerState & { heldRows: number } {
+  // heldRows: library rows the last complete walk kept but did not see, out of
+  // the pick paths until a walk sees them or the operator confirms the removal
+  // (music/held-rows.ts). Read from the file, so it outlives a restart.
+  return { ...tagger, lastLog: tagger.lastLog.slice(-TAGGER_LOG_TAIL), heldRows: heldIds().size };
 }
 
 function stripLogPrefix(s: string): string {
@@ -217,12 +221,14 @@ export function createRunEndReporter(
 
 // The operator's answer to a replaced-file hold (music/replaced-file-policy.ts),
 // for the two runs that walk. The admin UI sends neither: both are API-only.
-type ReplacedAnswer = { confirmReplaced?: boolean; acceptReplaced?: boolean };
+type ReplacedAnswer = { confirmReplaced?: boolean; acceptReplaced?: boolean; confirmPrune?: boolean };
 
-function replacedFlags({ confirmReplaced, acceptReplaced }: ReplacedAnswer): string[] {
+function replacedFlags({ confirmReplaced, acceptReplaced, confirmPrune }: ReplacedAnswer): string[] {
   return [
     ...(confirmReplaced ? ['--confirm-replaced'] : []),
     ...(acceptReplaced ? ['--accept-replaced'] : []),
+    // The operator's answer to a held mass removal (music/prune-policy.ts).
+    ...(confirmPrune ? ['--confirm-prune'] : []),
   ];
 }
 
@@ -603,6 +609,24 @@ function spawnChild(
     runEnd.exited(tagger.lastRun);
   });
   queue.log('scheduler', `${label} started${detail ? ` (${detail})` : ''}`);
+}
+
+// A switch marker still pending at boot is a carry-across walk that never ran
+// to the end: saved while a run held the slot and the controller restarted
+// before that run's exit could resume it, or the walk itself was cut off by
+// the restart (recoverFromRestart reports it as stopped, which the exit path
+// rightly does not follow). Either way the library is still on the old ids,
+// and picks and analysis are working from rows the source does not serve.
+// So boot owes it one reconcile, once the restart's own cleanup has settled.
+export const BOOT_SWITCH_RESUME_DELAY_MS = 20_000;
+
+export function resumeSourceSwitchAtBoot(delayMs = BOOT_SWITCH_RESUME_DELAY_MS): void {
+  if (!pendingSourceSwitch()) return;
+  setTimeout(() => {
+    if (!pendingSourceSwitch() || tagger.running) return; // done meanwhile, or a run that will resume it
+    queue.log('scheduler', 'The music source changed before the last restart — re-linking the library now');
+    startReconcile();
+  }, delayMs).unref();
 }
 
 // Called once from server.ts startup. A pidfile naming a live process group is a

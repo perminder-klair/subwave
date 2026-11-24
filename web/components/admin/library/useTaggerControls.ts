@@ -187,6 +187,17 @@ export function useTaggerControls() {
     onDone: () => { notify.ok('re-scan started…'); setLogOpen(true); void reloadTagger(); },
   });
 
+  // The operator's yes to a held mass removal: the same walk, allowed to delete
+  // the rows it does not see (RunHoldsBanner asks first).
+  const confirmPruneM = useAdminMutation<void, void>({
+    request: (_v, fetcher) => startRun('/library/reconcile', { confirmPrune: true }, 'removal failed')(fetcher),
+    onDone: () => {
+      notify.ok('removing the tracks the music source no longer has');
+      setLogOpen(true);
+      void reloadTagger();
+    },
+  });
+
   // Prunes library entries whose tracks are gone from Navidrome. No LLM cost;
   // reuses the tagger's single-flight slot.
   const reconcileM = useAdminMutation<void, void>({
@@ -306,7 +317,7 @@ export function useTaggerControls() {
 
   // One shared busy flag: the panel disables every control while any is in flight.
   const busy = [
-    startM, stopM, rescanM, reconcileM, analyzeM, vocalBackfillM, resetM,
+    startM, stopM, rescanM, reconcileM, confirmPruneM, analyzeM, vocalBackfillM, resetM,
     toggleAudioM, toggleVocalM, toggleQuietM, saveQuietMinutesM,
   ].some(m => m.isPending);
 
@@ -319,6 +330,8 @@ export function useTaggerControls() {
     stopTagger: () => { stopM.mutate(); },
     rescanTagger: (opts: RescanOpts) => { rescanM.mutate(opts); },
     reconcile: () => { reconcileM.mutate(); },
+    confirmPrune: () => { confirmPruneM.mutate(); },
+    pruning: confirmPruneM.isPending,
     resetLibrary: () => { resetM.mutate(); },
     analyzeAudio: () => { analyzeM.mutate(); },
     vocalBackfill: () => { vocalBackfillM.mutate(); },

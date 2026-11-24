@@ -3,6 +3,13 @@
 
 import * as db from './library-db.js';
 import * as blocklist from './blocklist.js';
+import { rejectHeld } from './held-rows.js';
+
+// What a library read may offer a pick: not blocked, and served by the music
+// source now (a row a walk kept but did not see is held, held-rows.ts).
+function servable<T>(rows: T[]): T[] {
+  return rejectHeld(blocklist.rejectBlocked(rows) as Array<T & { id?: unknown }>);
+}
 import * as sceneVocab from './scene-vocab.js';
 import { resolveEmbeddingDim } from './embeddings.js';
 import { openingKeyFrom, endingKeyFrom } from './mix.js';
@@ -234,11 +241,12 @@ export function countTagged(): number {
 }
 
 export function candidateFilterTracks() {
-  return loaded ? db.candidateFilterTracks() : [];
+  return loaded ? rejectHeld(db.candidateFilterTracks()) : [];
 }
 
 export async function* candidateFilterTrackBatches() {
-  if (loaded) yield* db.candidateFilterTrackBatches();
+  if (!loaded) return;
+  for await (const batch of db.candidateFilterTrackBatches()) yield rejectHeld(batch);
 }
 
 // One library row in the same slim shape every pool source hands back, so
@@ -318,7 +326,7 @@ const MOOD_MIN_EXACT = 12;
 export function songsByMood(mood: string | null | undefined): any[] {
   if (!mood || !loaded) return [];
   // Count only airable tracks before deciding whether to widen the mood.
-  const exact = blocklist.rejectBlocked(db.songsByMood(mood));
+  const exact = servable(db.songsByMood(mood));
   if (exact.length >= MOOD_MIN_EXACT) return exact;
 
   const seen = new Set(exact.map(s => s.id));
@@ -328,7 +336,7 @@ export function songsByMood(mood: string | null | undefined): any[] {
   // read an inherited member here and throw on iteration.
   const neighbours = Object.hasOwn(MOOD_NEIGHBOURS, mood) ? MOOD_NEIGHBOURS[mood] : [];
   for (const neighbour of neighbours) {
-    for (const row of blocklist.rejectBlocked(db.songsByMood(neighbour))) {
+    for (const row of servable(db.songsByMood(neighbour))) {
       if (seen.has(row.id)) continue;
       widened.push(row);
       seen.add(row.id);
@@ -411,7 +419,7 @@ export function isBlockedId(id: string): boolean {
 export function songsByEnergy(energy: string | null | undefined): any[] {
   if (!energy || !loaded) return [];
   if (energy !== 'low' && energy !== 'medium' && energy !== 'high') return [];
-  return blocklist.rejectBlocked(db.songsByEnergy(energy).map(slimTrack));
+  return servable(db.songsByEnergy(energy).map(slimTrack));
 }
 
 // KNN over the text embedding space. `seed` is normally a track id, but the
@@ -432,7 +440,7 @@ export function tracksLikeThis(seed: string, k: number, opts: db.KnnOpts = {}): 
     const t = db.getTrack(hit.id);
     if (t) out.push({ ...slimTrack(t), _similarity: hit.similarity });
   }
-  return blocklist.rejectBlocked(out);
+  return servable(out);
 }
 
 // Audio KNN over the CLAP vectors — the sonic counterpart to tracksLikeThis,
@@ -452,7 +460,7 @@ export function tracksLikeThisAudio(seed: string, k: number, opts: db.KnnOpts = 
     const t = db.getTrack(hit.id);
     if (t) out.push({ ...slimTrack(t), _similarity: hit.similarity });
   }
-  return blocklist.rejectBlocked(out);
+  return servable(out);
 }
 
 // The task-prefix mode the text-embedding index was built in — query embeds
@@ -485,7 +493,7 @@ export function tracksByVector(vec: number[] | Float32Array, k: number, opts: db
     const t = db.getTrack(hit.id);
     if (t) out.push({ ...slimTrack(t), _similarity: hit.similarity });
   }
-  return blocklist.rejectBlocked(out);
+  return servable(out);
 }
 
 // Audio KNN against an externally-computed query vector, for when a sonic
@@ -498,7 +506,7 @@ export function tracksByAudioVector(vec: number[] | Float32Array, k: number, opt
     const t = db.getTrack(hit.id);
     if (t) out.push({ ...slimTrack(t), _similarity: hit.similarity });
   }
-  return blocklist.rejectBlocked(out);
+  return servable(out);
 }
 
 // Whether the CLAP index covers this track — a cheap existence check (no blob
@@ -621,7 +629,7 @@ export function deepCuts(days: number = DEEP_CUT_DAYS, k = 60): any[] {
   if (!loaded) return [];
   const cutoffIso = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
   try {
-    return blocklist.rejectBlocked(db.deepCutTracks(cutoffIso, k).map(slimTrack));
+    return servable(db.deepCutTracks(cutoffIso, k).map(slimTrack));
   } catch {
     return [];
   }

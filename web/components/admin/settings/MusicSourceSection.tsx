@@ -172,6 +172,7 @@ export function MusicSourceSection({ data, adminFetch, refresh }: MusicSourceSec
           sources={sources}
           setSources={setSources}
           onSaved={reload}
+          directNavidromeUrl={data.navidrome?.url}
         />
       )}
     </>
@@ -223,16 +224,18 @@ interface RouterPanelProps {
   sources: DraftSource[];
   setSources: (s: DraftSource[]) => void;
   onSaved: () => Promise<void>;
+  /** The stored direct connection, for the id-change warning. */
+  directNavidromeUrl?: string | null;
 }
 
-function RouterPanel({ view, adminFetch, merge, setMerge, sources, setSources, onSaved }: RouterPanelProps) {
+function RouterPanel({ view, adminFetch, merge, setMerge, sources, setSources, onSaved, directNavidromeUrl }: RouterPanelProps) {
   const plugins = view.router?.plugins ?? [];
   const choices = selectablePlugins(plugins);
   const [busy, setBusy] = useState(false);
   const [rescanning, setRescanning] = useState(false);
 
   const dirty = draftDirty(view, 'router', merge, sources);
-  const idsChange = changesTrackIds(view, 'router', sources, plugins);
+  const idsChange = changesTrackIds(view, 'router', sources, plugins, directNavidromeUrl);
   const missing = sources.flatMap((s) => missingFields(s, plugins.find((p) => p.name === s.plugin)).map((f) => f.label));
 
   const update = (i: number, next: DraftSource) => setSources(sources.map((s, j) => (j === i ? next : s)));
@@ -495,7 +498,7 @@ function PluginsCard({ status, onRescan, rescanning }: { status: RouterStatus; o
           </div>
         ))}
         <div className="field-hint">
-          To add a source, drop a plugin folder into <code>state/router/plugins/</code> and press Rescan.
+          To add a source, copy a plugin folder into <code>state/router/plugins/</code> as root (<code>sudo cp -r</code>: the folder is root&apos;s, so plugin code cannot rewrite a plugin) and press Rescan.
           Plugins are code that runs in the router — install only ones you have read and trust.
         </div>
       </div>

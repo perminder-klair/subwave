@@ -50,10 +50,11 @@ export function decidePrune(opts: {
       prune: false,
       reason: 'mass-loss',
       message:
-        `${opts.missing.toLocaleString('en-GB')} of ${opts.knownTracks.toLocaleString('en-GB')} library tracks are missing from Navidrome ` +
-        `(more than the ${threshold.toLocaleString('en-GB')} a walk may remove on its own). Removal is on hold: ` +
+        `${opts.missing.toLocaleString('en-GB')} of ${opts.knownTracks.toLocaleString('en-GB')} library tracks are missing from the music source ` +
+        `(more than the ${threshold.toLocaleString('en-GB')} a walk may remove on its own). They are kept, out of picks. Removal is on hold: ` +
         'if a music folder or share is not mounted, mount it and run the walk again. ' +
-        'If the tracks were really deleted, run the reconcile with --confirm-prune.',
+        'If the tracks were really deleted, or the station moved to a different library, confirm the removal ' +
+        '(Library → Remove them, or the reconcile with --confirm-prune).',
     };
   }
   return { prune: true };

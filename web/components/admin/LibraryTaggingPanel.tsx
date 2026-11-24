@@ -144,6 +144,8 @@ export interface TaggerState {
   runLogId?: string | null;
   // What the current (or last) run held back for the operator.
   holds?: string[];
+  // Library rows the last walk kept but did not see, out of picks (controller music/held-rows.ts).
+  heldRows?: number;
 }
 
 // Rides along on /settings, so it needs no extra request on any tab.
@@ -202,6 +204,9 @@ interface TaggingPanelProps {
   onRescan: (opts: RescanOpts) => void;
   // Walk Navidrome and prune library entries for tracks that no longer exist.
   onReconcile: () => void;
+  // Remove the rows a walk held back (RunHoldsBanner confirms first).
+  onConfirmPrune?: () => void;
+  pruning?: boolean;
   // Count the library — the only expensive read on this page, and the operator asks for it (#1570).
   onCountLibrary: () => void;
   // Opens a Library tab from a counts tile (Browse, Blocked, History, Era).
@@ -1054,7 +1059,13 @@ export default function TaggingPanel(p: TaggingPanelProps) {
 
       <SceneVocabSection />
 
-      <RunHoldsBanner holds={p.tagger?.holds} onViewLog={() => p.setLogOpen(() => true)} />
+      <RunHoldsBanner
+        holds={p.tagger?.holds}
+        heldRows={p.tagger?.heldRows}
+        onViewLog={() => p.setLogOpen(() => true)}
+        onConfirmPrune={p.tagger?.running ? undefined : p.onConfirmPrune}
+        pruning={p.pruning}
+      />
 
       {showFailBanner && (
         <div className="mx-4 mt-6 flex flex-wrap items-center gap-x-3 gap-y-1 border border-l-[3px] border-[var(--danger)] bg-[color-mix(in_oklab,var(--danger)_8%,transparent)] px-3 py-2 text-[11px] text-ink sm:mx-6">
