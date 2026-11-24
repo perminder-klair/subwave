@@ -4451,6 +4451,27 @@ html:has(.admin-booth) [data-sidebar="sidebar"][data-mobile="true"],
     border: 1px solid color-mix(in oklab, var(--danger) 40%, transparent);
     background: color-mix(in oklab, var(--danger) 12%, transparent);
 }
+/* Blocked tab: the entry's kind, one theme colour each so a track, an album
+   and an artist entry tell apart at a glance. The counts line's own palette
+   (.lib-count--*): never play is accent-2, so a track entry takes it; an
+   album the accent; an artist the ink. One width for all three, so the
+   titles line up whatever the kind. */
+.admin-root .lib-ktag { font-weight: 600; min-width: 52px; justify-content: center; }
+.admin-root .lib-ktag-track {
+    color: var(--accent-2);
+    border-color: color-mix(in oklab, var(--accent-2) 50%, transparent);
+    background: color-mix(in oklab, var(--accent-2) 12%, transparent);
+}
+.admin-root .lib-ktag-album {
+    color: var(--accent);
+    border-color: color-mix(in oklab, var(--accent) 50%, transparent);
+    background: color-mix(in oklab, var(--accent) 12%, transparent);
+}
+.admin-root .lib-ktag-artist {
+    color: var(--ink);
+    border-color: color-mix(in oklab, var(--ink) 45%, transparent);
+    background: color-mix(in oklab, var(--ink) 8%, transparent);
+}
 /* "needs tags" marker — icon-only chip (tooltip carries the words) */
 .admin-root .lib-needs {
     display: inline-flex; align-items: center;

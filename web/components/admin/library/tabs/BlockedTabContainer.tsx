@@ -11,7 +11,8 @@ import { useAdminMutation, useAdminQuery } from '../useAdminQuery';
 import type { BlockEntry } from '../types';
 
 export default function BlockedTabContainer() {
-  const { restampBlockMarks, removeBlockEntry } = useLibrary();
+  const { restampBlockMarks, removeBlockEntry, coverage, reloadCoverage } = useLibrary();
+  const overview = coverage?.overview ?? null;
   const [unblocking, setUnblocking] = useState<string | null>(null);
 
   const blocked = useAdminQuery<BlockEntry[]>({
@@ -57,6 +58,8 @@ export default function BlockedTabContainer() {
       <BlockRulesCard onChanged={() => { void restampBlockMarks(); }} />
       <BlockedTab
         entries={blocked.data ?? null}
+        counts={overview?.blocked.byEntry ?? null}
+        countedAt={overview?.computedAt ?? null}
         loading={blocked.isFetching}
         unblocking={unblocking}
         bulkBusy={bulkUnblock.isPending}
@@ -65,7 +68,7 @@ export default function BlockedTabContainer() {
           if (batch.length === 0) return Promise.resolve();
           return bulkUnblock.mutateAsync(batch).then(() => undefined).catch(() => undefined);
         }}
-        onRefresh={() => { void blocked.refetch(); }}
+        onRefresh={() => { void blocked.refetch(); void reloadCoverage(); }}
       />
     </>
   );
