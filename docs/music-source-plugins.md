@@ -12,7 +12,7 @@ my-source/
   index.mjs             # export default (ctx) => ({ ...ops })
 ```
 
-Install it by copying the folder to `state/router/plugins/my-source/` and pressing **Rescan plugins** in Admin → Settings → Music source. It then appears in the source picker, with a settings form drawn from your manifest.
+Install it by copying the folder to `state/router/plugins/my-source/` and pressing **Rescan plugins** in Admin → Settings → Music source. That folder belongs to root, so plugin code can never rewrite a plugin; copy as root (`sudo cp -r my-source state/router/plugins/`). It then appears in the source picker, with a settings form drawn from your manifest.
 
 > **Plugins are code.** They run inside the router with network access. Install only plugins you have read and trust. The router only sees `state/router/`, not the rest of the station's state, but a plugin can still reach anything the router can reach on the network.
 

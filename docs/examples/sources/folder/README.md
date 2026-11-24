@@ -17,7 +17,7 @@ Artist and album come from the folder names, track number and title from the fil
 
 ## Install
 
-1. Copy this folder to `state/router/plugins/folder/`.
+1. Copy this folder to `state/router/plugins/folder/`. That folder belongs to root (plugin code must not be able to rewrite a plugin), so copy as root: `sudo cp -r docs/examples/sources/folder state/router/plugins/`.
 2. Mount your music into the router container, read-only — in `docker-compose.yml`, under the `router` service:
 
    ```yaml

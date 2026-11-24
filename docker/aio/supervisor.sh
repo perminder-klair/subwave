@@ -52,6 +52,15 @@ resolve_state_dir() {
 
 log() { echo "[subwave-aio] $*" >&2; }
 
+# The music router's uid (#692), shared with the controller, which hands it
+# state/router/config.json and data/ (setup/music-source.ts). Unlike the
+# compose service, the router here shares the whole container filesystem, so
+# its default must not be 1000: that is the usual owner of the host folder
+# mounted at /var/sub-wave, and an owner of a sticky directory may delete or
+# rename anything in it. A uid no host account uses keeps plugin code to
+# state/router/data. Set ROUTER_UID/ROUTER_GID to override.
+export ROUTER_UID="${ROUTER_UID:-4534}" ROUTER_GID="${ROUTER_GID:-4534}"
+
 # ---------------------------------------------------------------------------
 # Shared state bootstrap — same functions, list and messages as
 # docker/broadcast-entrypoint.sh, which carries the full rationale (#1300 bug
@@ -1079,7 +1088,7 @@ run_router() {
 	       ROUTER_HOST=127.0.0.1 \
 	       ROUTER_DIR=/var/sub-wave/router \
 	       HOME=/tmp
-	setpriv --reuid="${ROUTER_UID:-1000}" --regid="${ROUTER_GID:-1000}" --clear-groups \
+	setpriv --reuid="$ROUTER_UID" --regid="$ROUTER_GID" --clear-groups \
 	        --inh-caps=-all --bounding-set=-all --no-new-privs \
 	        node_modules/.bin/tsx src/server.ts
 }
