@@ -313,7 +313,12 @@ export function wrapPlugin(plugin: SourcePlugin, opts: WrapOptions): HostSource 
     async scanStatus() {
       if (!plugin.scanStatus) return null;
       const s = await timed('scanStatus', () => plugin.scanStatus!());
-      return { scanning: Boolean(s?.scanning), count: Math.max(0, Math.round(Number(s?.count) || 0)) };
+      // A backend that does not report a song total leaves `count` out. 0 would
+      // read as "the library is empty" to the controller, which compares this
+      // count against a baseline to see new arrivals (tag-schedule.ts).
+      const n = Number(s?.count);
+      const count = s?.count != null && Number.isFinite(n) && n >= 0 ? Math.round(n) : undefined;
+      return { scanning: Boolean(s?.scanning), ...(count !== undefined ? { count } : {}) };
     },
 
     async stats() {

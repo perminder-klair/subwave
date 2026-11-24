@@ -229,7 +229,12 @@ export function createComposite(children: HostSource[]): HostSource {
     async scanStatus() {
       const all = (await fanOut('scanStatus', (c) => c.scanStatus())).filter((s) => s !== null);
       if (!all.length) return null;
-      return { scanning: all.some((s) => s!.scanning), count: all.reduce((n, s) => n + s!.count, 0) };
+      // The total is known only when every source reports its own.
+      const known = all.every((s) => typeof s!.count === 'number');
+      return {
+        scanning: all.some((s) => s!.scanning),
+        ...(known ? { count: all.reduce((n, s) => n + (s!.count ?? 0), 0) } : {}),
+      };
     },
 
     async stats() {

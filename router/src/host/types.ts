@@ -186,7 +186,8 @@ export interface HostSource {
 
   scrobble(id: string, opts: { submission: boolean; time?: number }): Promise<void>;
   /** null = the source cannot say. */
-  scanStatus(): Promise<{ scanning: boolean; count: number } | null>;
+  /** `count` is the song total when the backend reports one; absent means unknown, never 0. */
+  scanStatus(): Promise<{ scanning: boolean; count?: number } | null>;
   stats(): Promise<Stats>;
 
   close(): Promise<void>;

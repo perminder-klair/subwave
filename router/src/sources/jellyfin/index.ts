@@ -73,7 +73,10 @@ export default defineSource((ctx) => {
   const base = String(ctx.config.url ?? '').replace(/\/+$/, '');
   const apiKey = String(ctx.config.apiKey ?? '');
   const wantedUser = ctx.config.user ? String(ctx.config.user) : undefined;
-  const headers = { 'X-Emby-Token': apiKey };
+  // Jellyfin 12 accepts only the Authorization scheme (10.11 deprecated the
+  // legacy X-Emby-Token header and ?api_key=, 12 removed them). 10.x reads
+  // either, so both go on every request.
+  const headers = { Authorization: `MediaBrowser Token="${apiKey}"`, 'X-Emby-Token': apiKey };
 
   function url(path: string, params: Record<string, string | number | undefined> = {}): string {
     const u = new URL(base + path);

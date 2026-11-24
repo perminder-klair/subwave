@@ -74,6 +74,13 @@ test('scan status: any source scanning is scanning; sources that cannot tell are
   assert.equal(await createComposite([g1, g2]).scanStatus(), null);
 });
 
+test('scan status: a source with no song total leaves the merged total unknown, never 0', async () => {
+  const m = await mock();
+  // Jellyfin and Plex report whether they scan, not how many songs they hold.
+  const noCount: HostSource = { ...m, name: 'nocount', scanStatus: async () => ({ scanning: false }) };
+  assert.deepEqual(await createComposite([noCount, m]).scanStatus(), { scanning: false });
+});
+
 test('a child that fails a merged read shrinks the answer instead of failing it', async () => {
   const m = await mock();
   const broken: HostSource = { ...(await good()), search: async () => { throw new Error('backend down'); } };
@@ -131,4 +138,13 @@ test('stars and playlists go to the owner; ids a backend cannot hold are dropped
   assert.deepEqual(pl.songs.map((s) => s.id), [song.id]);
   await c.unstar([song.id]);
   await c.deletePlaylist(pl.id);
+});
+
+test('scan status: wrap passes a plugin’s missing song total through as absent', async () => {
+  const plugin = await load(resolve(here, 'fixtures/plugins/good'), false, { greeting: 'g' });
+  const wrapped = (scan: () => Promise<{ scanning: boolean; count?: number }>) =>
+    wrapPlugin({ ...plugin, scanStatus: scan }, { name: 'good', label: 'Good', codec: prefixedCodec('good'), log: quiet }).scanStatus();
+  assert.deepEqual(await wrapped(async () => ({ scanning: true })), { scanning: true });
+  assert.deepEqual(await wrapped(async () => ({ scanning: false, count: 0 })), { scanning: false, count: 0 }, 'a real 0 stays 0');
+  assert.deepEqual(await wrapped(async () => ({ scanning: false, count: 42.4 })), { scanning: false, count: 42 });
 });
