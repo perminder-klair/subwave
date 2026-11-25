@@ -10,6 +10,9 @@
   --rk-card: var(--card-bg, var(--surface));
   --rk-display: #171512;
   --rk-display-ink: #f2ede3;
+  --rk-lcd-ok: #7fd3a5;
+  --rk-lcd-idle: #e7b05a;
+  --rk-lcd-error: #ff8b7a;
   --rk-scope: #11100e;
   --rk-scope-ink: #b8d5b5;
   --rk-scope-dim: #a8afa2;
@@ -41,6 +44,51 @@
   }
 }
 
+/* ── standby strip + signal overlay (direct Navidrome) ─────────────────── */
+
+.standby {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 16px;
+  border: 1px solid var(--ink);
+  border-left: 3px solid var(--rk-amber);
+  background: color-mix(in oklab, var(--rk-amber) 7%, var(--rk-card));
+}
+.standby strong {
+  font-family: var(--rk-mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.standby p { margin: 2px 0 0; font-size: 0.8rem; line-height: 1.45; color: var(--muted); }
+.standby > a { margin-left: auto; flex: none; }
+
+.overlayHost { position: relative; }
+.overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: grid;
+  place-content: center;
+  gap: 6px;
+  padding: 24px;
+  text-align: center;
+  background: color-mix(in oklab, var(--rk-scope) 78%, transparent);
+  color: var(--rk-scope-ink);
+  font-family: var(--rk-mono);
+  backdrop-filter: blur(1.5px);
+}
+.overlay strong { font-size: 0.8rem; letter-spacing: 0.22em; text-transform: uppercase; }
+.overlay p { margin: 0; max-width: 34ch; font-size: 0.66rem; line-height: 1.6; color: var(--rk-scope-dim); }
+
+/* The section tabs sit on the rack card, like the faceplate, not on the page. */
+.tabs {
+  border: 1px solid var(--ink);
+  border-top: 0;
+  background: color-mix(in oklab, var(--rk-card) 94%, transparent);
+}
+
 /* ── faceplate + rack panels ─────────────────────────────────────────────── */
 
 .faceplate,
@@ -52,11 +100,15 @@
 }
 
 .faceplate {
-  min-height: 82px;
-  padding: 16px 20px;
+  padding: 18px 20px 16px;
+  display: grid;
+  gap: 14px;
+}
+.faceplateTop {
   display: flex;
   align-items: center;
-  gap: 20px;
+  justify-content: space-between;
+  gap: 12px 20px;
   flex-wrap: wrap;
 }
 
@@ -69,8 +121,7 @@
   line-height: 0.95;
   letter-spacing: -0.035em;
 }
-.brand p,
-.runtimeNote {
+.brand p {
   margin: 5px 0 0;
   font-family: var(--rk-mono);
   font-size: 0.58rem;
@@ -80,7 +131,6 @@
   text-transform: uppercase;
   color: var(--muted);
 }
-.runtimeNote { max-width: 190px; margin: 0; color: var(--accent); }
 
 .powerLamp,
 .scopeLamp {
@@ -95,20 +145,44 @@
 .powerLamp[data-state="error"] { background: var(--danger); box-shadow: 0 0 8px color-mix(in oklab, var(--danger) 70%, transparent); }
 .powerLamp[data-state="idle"] { background: var(--rk-amber); box-shadow: 0 0 8px color-mix(in oklab, var(--rk-amber) 60%, transparent); }
 
-.readout {
-  flex: 1;
-  min-width: 260px;
-  padding: 10px 13px;
-  overflow: hidden;
+/* The display: a dark LCD of labelled cells. Wide cells take the room a name needs. */
+.lcd {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
   border: 1px solid var(--ink);
   background: var(--rk-display);
   color: var(--rk-display-ink);
   font-family: var(--rk-mono);
-  font-size: 0.68rem;
-  letter-spacing: 0.065em;
+}
+.lcdCell {
+  min-width: 0;
+  padding: 9px 13px 10px;
+  text-align: left;
+  border-left: 1px solid color-mix(in oklab, var(--rk-display-ink) 14%, transparent);
+}
+.lcdCell:first-child { border-left: 0; }
+.lcdCell[data-wide] { grid-column: span 2; }
+.lcdCell dt {
+  font-size: 0.52rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: color-mix(in oklab, var(--rk-display-ink) 55%, transparent);
+}
+.lcdCell dd {
+  margin: 3px 0 0;
+  overflow: hidden;
+  color: var(--rk-display-ink);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
+.lcdCell[data-tone="ok"] dd { color: var(--rk-lcd-ok); }
+.lcdCell[data-tone="idle"] dd { color: var(--rk-lcd-idle); }
+.lcdCell[data-tone="error"] dd { color: var(--rk-lcd-error); }
 
 .faceplateActions { display: flex; gap: 8px; flex-wrap: wrap; }
 
@@ -416,8 +490,15 @@ a.stripFoot:focus-visible { outline: 2px solid var(--accent); outline-offset: 2p
 }
 
 @media (max-width: 640px) {
-  .faceplate { align-items: stretch; gap: 12px; padding: 18px 16px; }
-  .brand, .readout { width: 100%; min-width: 0; }
+  .faceplate { gap: 12px; padding: 18px 16px; }
+  .standby { flex-wrap: wrap; }
+  .standby > a { margin-left: 0; }
+  .brand { width: 100%; min-width: 0; }
+  .lcdCell[data-wide] { grid-column: auto; }
+  .lcd { grid-template-columns: 1fr 1fr; }
+  .lcdCell { border-left: 0; border-top: 1px solid color-mix(in oklab, var(--rk-display-ink) 14%, transparent); }
+  .lcdCell:nth-child(-n + 2) { border-top: 0; }
+  .lcdCell:nth-child(even) { border-left: 1px solid color-mix(in oklab, var(--rk-display-ink) 14%, transparent); }
   .rackHeader { align-items: flex-start; padding: 12px 16px 10px; flex-direction: column; }
   .rackHeader > div:first-child { width: 100%; overflow-wrap: anywhere; }
 

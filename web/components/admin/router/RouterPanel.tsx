@@ -8,10 +8,14 @@
 // Read-only on purpose. Choosing what serves is Settings → Music source, whose
 // save validates the draft, writes the router's config and re-links the
 // library when track ids change — a second switch here would skip all three.
+//
+// The three views are tabs (?tab=channels|signal|matrix), shared with the
+// sidebar submenu, as on Imaging and Moods.
 
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { Radio, RefreshCw } from 'lucide-react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { Activity, Cable, Grid3x3, Radio, RefreshCw } from 'lucide-react';
 import { adminJson, useAdminMutation, useAdminQuery } from '../../../lib/admin-query';
 import { useAdminAuth } from '../../../lib/adminAuth';
 import { errorMessage, notify } from '../../../lib/notify';
@@ -19,6 +23,7 @@ import { cn } from '../../../lib/cn';
 import { buttonVariants } from '../../ui/button';
 import { V3Alert } from '../../ui/alert';
 import { Btn } from '../ui';
+import { SectionTabs } from '../SectionTabs';
 import type { RouterActivity } from '../../../lib/schemas.generated';
 import { MUSIC_SOURCE_KEY } from '../settings/MusicSourceSection';
 import { buildChannels, type RouterView } from './model';
@@ -33,6 +38,28 @@ export const ROUTER_ACTIVITY_KEY = [...MUSIC_SOURCE_KEY, 'activity'] as const;
 const ACTIVITY_POLL_MS = 1_500;
 // Health asks every serving backend for its library counts, so it is not polled hard.
 const HEALTH_POLL_MS = 30_000;
+
+type TabId = 'channels' | 'signal' | 'matrix';
+const TAB_IDS: TabId[] = ['channels', 'signal', 'matrix'];
+
+/** Direct Navidrome: say once, under the faceplate, that the router is on standby. */
+function StandbyStrip() {
+  return (
+    <div className={s.standby} role="status">
+      <span className={s.powerLamp} data-state="idle" aria-hidden="true" />
+      <div className="min-w-0">
+        <strong>Router on standby</strong>
+        <p>
+          The station plays Navidrome directly, so nothing goes through the router. Pick a source to route the
+          station through it; until then these views show what the router could serve, not what is on air.
+        </p>
+      </div>
+      <Link href="/admin/settings?section=music" className={buttonVariants({ variant: 'outline', size: 'sm' })}>
+        Choose a source
+      </Link>
+    </div>
+  );
+}
 
 function Screws() {
   return (
@@ -71,21 +98,61 @@ function RackPanel({
   );
 }
 
-function summaryLine(view: RouterView): string {
+type Tone = 'ok' | 'idle' | 'error' | undefined;
+interface Cell {
+  label: string;
+  value: string;
+  tone?: Tone;
+  wide?: boolean;
+}
+
+/** The faceplate's display: one labelled cell per fact, never one run-on line. */
+function readoutCells(view: RouterView | undefined, linkError: boolean, checkedAt: number): Cell[] {
+  if (!view) {
+    return [{ label: 'Link', value: linkError ? 'No link to the controller' : 'Establishing link…', tone: linkError ? 'error' : undefined, wide: true }];
+  }
   const r = view.router;
-  if (!r) return 'ESTABLISHING LINK…';
-  const parts =
-    view.mode === 'router'
-      ? ['MODE ROUTER', `SERVING ${r.serving ? r.serving.name.toUpperCase() : 'NOTHING'}`]
-      : ['MODE DIRECT NAVIDROME', 'ROUTER IDLE'];
-  parts.push(`ROUTER v${r.router.version}`, `PLUGIN API v${r.router.apiVersion}`, `${r.plugins.length} PLUGINS`, `${r.endpoints.length} ENDPOINTS`);
-  return parts.join(' / ');
+  const direct = view.mode === 'navidrome';
+  const serving = direct ? 'Navidrome' : r?.serving ? r.serving.label : 'Nothing';
+  const cells: Cell[] = [
+    { label: 'Mode', value: direct ? 'Direct' : view.merge ? 'Routed, merged' : 'Routed', tone: direct ? 'idle' : 'ok' },
+    { label: 'Station plays', value: serving, tone: !direct && !r?.serving ? 'error' : undefined, wide: true },
+  ];
+  if (!r) {
+    cells.push({ label: 'Router', value: 'Unreachable', tone: 'error' });
+  } else {
+    cells.push(
+      { label: 'Router', value: `v${r.router.version}` },
+      { label: 'Plugin API', value: `v${r.router.apiVersion}` },
+      { label: 'Plugins', value: String(r.plugins.length) },
+      { label: 'Endpoints', value: String(r.endpoints.length) },
+    );
+  }
+  if (checkedAt) {
+    cells.push({ label: 'Checked', value: new Date(checkedAt).toLocaleTimeString('en-GB') });
+  }
+  return cells;
 }
 
 export default function RouterPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
   const enabled = hydrated && !needsAuth;
   const [paused, setPaused] = useState(false);
+
+  const nav = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const rawTab = searchParams.get('tab');
+  const tab: TabId = (TAB_IDS as string[]).includes(rawTab ?? '') ? (rawTab as TabId) : 'channels';
+  // Routed through Next so a soft nav (in-page tab or sidebar submenu) re-derives `tab`.
+  const selectTab = useCallback(
+    (id: string) => {
+      const params = new URLSearchParams(Array.from(searchParams.entries()));
+      params.set('tab', id);
+      nav.replace(`${pathname}?${params.toString()}`, { scroll: false });
+    },
+    [nav, pathname, searchParams],
+  );
 
   const statusQuery = useAdminQuery<RouterView>({
     key: MUSIC_SOURCE_KEY,
@@ -100,7 +167,7 @@ export default function RouterPanel() {
   const activityQuery = useAdminQuery<RouterActivity>({
     key: ROUTER_ACTIVITY_KEY,
     adminFetch,
-    enabled: enabled && routerUp && !paused,
+    enabled: enabled && routerUp && !paused && tab === 'signal',
     staleTime: 0,
     refetchInterval: () => ACTIVITY_POLL_MS,
     request: (fetcher, signal) => adminJson<RouterActivity>(fetcher, '/settings/music-source/activity', undefined, signal),
@@ -127,35 +194,35 @@ export default function RouterPanel() {
         <Screws />
         <span className={s.screw} data-at="bl" aria-hidden="true" />
         <span className={s.screw} data-at="br" aria-hidden="true" />
-        <div className={s.brand}>
-          <span className={s.powerLamp} data-state={lamp} aria-hidden="true" />
-          <div>
-            <h1>SUB/WAVE ROUTER</h1>
-            <p>Music sources / live diagnostics</p>
+        <div className={s.faceplateTop}>
+          <div className={s.brand}>
+            <span className={s.powerLamp} data-state={lamp} aria-hidden="true" />
+            <div>
+              <h1>SUB/WAVE ROUTER</h1>
+              <p>Music sources / live diagnostics</p>
+            </div>
+          </div>
+          <div className={s.faceplateActions}>
+            <Btn sm onClick={() => void statusQuery.refetch()} disabled={statusQuery.isFetching}>
+              <RefreshCw aria-hidden="true" className={cn(statusQuery.isFetching && 'animate-spin')} />
+              Re-check health
+            </Btn>
+            <Btn sm onClick={() => rescan.mutate()} disabled={rescan.isPending || !routerUp}>
+              {rescan.isPending ? 'Rescanning…' : 'Rescan plugins'}
+            </Btn>
+            <Link href="/admin/settings?section=music" className={buttonVariants({ variant: 'solid', size: 'sm' })}>
+              Change source
+            </Link>
           </div>
         </div>
-        <div className={s.readout} aria-live="polite" title={view ? summaryLine(view) : undefined}>
-          {view ? summaryLine(view) : statusError ? 'NO LINK TO THE CONTROLLER' : 'ESTABLISHING LINK…'}
-        </div>
-        {view?.mode === 'navidrome' && (
-          <p className={s.runtimeNote}>
-            Station plays Navidrome directly
-            <br />
-            router idles until selected
-          </p>
-        )}
-        <div className={s.faceplateActions}>
-          <Btn sm onClick={() => void statusQuery.refetch()} disabled={statusQuery.isFetching}>
-            <RefreshCw aria-hidden="true" className={cn(statusQuery.isFetching && 'animate-spin')} />
-            Re-check health
-          </Btn>
-          <Btn sm onClick={() => rescan.mutate()} disabled={rescan.isPending || !routerUp}>
-            {rescan.isPending ? 'Rescanning…' : 'Rescan plugins'}
-          </Btn>
-          <Link href="/admin/settings?section=music" className={buttonVariants({ variant: 'solid', size: 'sm' })}>
-            Change source
-          </Link>
-        </div>
+        <dl className={s.lcd}>
+          {readoutCells(view, Boolean(statusError), statusQuery.dataUpdatedAt).map((c) => (
+            <div key={c.label} className={s.lcdCell} data-tone={c.tone} data-wide={c.wide || undefined}>
+              <dt>{c.label}</dt>
+              <dd>{c.value}</dd>
+            </div>
+          ))}
+        </dl>
       </header>
 
       {statusError && (
@@ -168,40 +235,70 @@ export default function RouterPanel() {
         <V3Alert tone="error" title="the router kept its previous source">{view.router.configError}</V3Alert>
       )}
 
-      <RackPanel
-        title="Source channels"
-        description="Every plugin the router can serve from. Serving channels feed the station; with several merged, the bus is what the station hears."
-        flush
-      >
-        {view ? <SourceChannels channels={channels} /> : <div className={s.skeleton} />}
-      </RackPanel>
+      {view?.mode === 'navidrome' && <StandbyStrip />}
 
-      <RackPanel
-        title="Signal path"
-        description="The station's real Subsonic requests travelling through the router: which source answered, how long it took, and why one failed."
-      >
-        {view?.router ? (
-          <SignalPath
-            activity={activityQuery.data}
-            backends={backends}
-            connected={activityQuery.isSuccess && !activityQuery.isError}
-            paused={paused}
-            onPausedChange={setPaused}
-            error={activityQuery.isError ? errorMessage(activityQuery.error) : null}
-          />
-        ) : view ? (
-          <p className={s.empty}>The monitor needs the router. {view.routerError ?? ''}</p>
-        ) : (
-          <div className={s.skeleton} />
-        )}
-      </RackPanel>
+      {/* SectionTabs draws only its top rule; the rack card gives it a ground. */}
+      <div className={s.tabs}>
+        <SectionTabs
+          tabs={[
+            { id: 'channels', label: 'Source channels', count: view ? channels.length : undefined, icon: Cable },
+            { id: 'signal', label: 'Signal path', icon: Activity },
+            { id: 'matrix', label: 'Service matrix', count: view?.router?.endpoints.length, icon: Grid3x3 },
+          ]}
+          value={tab}
+          onChange={selectTab}
+          label="Music router sections"
+        />
+      </div>
 
-      <RackPanel
-        title="Service matrix"
-        description="Which Subsonic endpoints each source fully backs. A source missing an op still plays — the station just gets less from that endpoint."
-      >
-        {view?.router ? <ServiceMatrix endpoints={view.router.endpoints} channels={channels} /> : <div className={s.skeleton} />}
-      </RackPanel>
+      {tab === 'channels' && (
+        <RackPanel
+          title="Source channels"
+          description="Every plugin the router can serve from. Serving channels feed the station; with several merged, the bus is what the station hears."
+          flush
+        >
+          {view ? <SourceChannels channels={channels} /> : <div className={s.skeleton} />}
+        </RackPanel>
+      )}
+
+      {tab === 'signal' && (
+        <RackPanel
+          title="Signal path"
+          description="The station's real Subsonic requests travelling through the router: which source answered, how long it took, and why one failed."
+        >
+          {view?.router ? (
+            <div className={s.overlayHost}>
+              <SignalPath
+                activity={activityQuery.data}
+                backends={backends}
+                connected={activityQuery.isSuccess && !activityQuery.isError}
+                paused={paused}
+                onPausedChange={setPaused}
+                error={activityQuery.isError ? errorMessage(activityQuery.error) : null}
+              />
+              {view.mode === 'navidrome' && !activityQuery.data?.requests?.length && (
+                <div className={s.overlay} role="status">
+                  <strong>No signal</strong>
+                  <p>The station talks to Navidrome directly, so nothing passes through the router to monitor.</p>
+                </div>
+              )}
+            </div>
+          ) : view ? (
+            <p className={s.empty}>The monitor needs the router. {view.routerError ?? ''}</p>
+          ) : (
+            <div className={s.skeleton} />
+          )}
+        </RackPanel>
+      )}
+
+      {tab === 'matrix' && (
+        <RackPanel
+          title="Service matrix"
+          description="Which Subsonic endpoints each source fully backs. A source missing an op still plays — the station just gets less from that endpoint."
+        >
+          {view?.router ? <ServiceMatrix endpoints={view.router.endpoints} channels={channels} /> : <div className={s.skeleton} />}
+        </RackPanel>
+      )}
 
       <footer className={s.footer}>
         <Radio aria-hidden="true" />

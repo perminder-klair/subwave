@@ -42,7 +42,9 @@ import {
   Boxes,
   Webhook,
   Telescope,
+  Activity,
   Cable,
+  Grid3x3,
 } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import type { SignInResult } from '../../lib/adminAuth';
@@ -219,7 +221,17 @@ const NAV_SECTIONS: NavSection[] = [
           { href: '/admin/connect?tab=webhooks', id: 'connect-webhooks', label: 'Webhooks', icon: Webhook, tab: 'webhooks' },
         ],
       },
-      { href: '/admin/router', id: 'router', label: 'Music router', icon: Cable },
+      {
+        href: '/admin/router',
+        id: 'router',
+        label: 'Music router',
+        icon: Cable,
+        children: [
+          { href: '/admin/router?tab=channels', id: 'router-channels', label: 'Channels', icon: Cable, tab: 'channels', defaultTab: true },
+          { href: '/admin/router?tab=signal', id: 'router-signal', label: 'Signal path', icon: Activity, tab: 'signal' },
+          { href: '/admin/router?tab=matrix', id: 'router-matrix', label: 'Service matrix', icon: Grid3x3, tab: 'matrix' },
+        ],
+      },
       { href: '/admin/settings', id: 'settings', label: 'Settings', icon: SlidersHorizontal },
       { href: '/admin/debug', id: 'debug', label: 'Debug', icon: Terminal },
     ],
