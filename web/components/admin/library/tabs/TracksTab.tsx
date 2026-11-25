@@ -5,6 +5,7 @@ import { Card, Btn, Seg } from '../../ui';
 import { num } from '../../LibraryTaggingPanel';
 import { RowsTable } from '../RowsTable';
 import { useLibrary } from '../LibraryContext';
+import { ListDownload } from '../DownloadButton';
 import { useLikedTracks, useRecentTracks, useUntaggedTracks } from './useTrackModes';
 import type { LikedSort, TableVariant, TrackMode } from '../types';
 import { PAGE_SIZE } from '../types';
@@ -94,6 +95,11 @@ export default function TracksTab({
                 <Btn sm onClick={liked.reload} disabled={liked.loading}>
                   <RefreshCw size={11} /> {liked.loading ? 'Loading…' : 'Refresh'}
                 </Btn>
+                {/* Every liked track, all pages, in this sort (ticked rows: the selection bar). */}
+                <ListDownload
+                  source={{ kind: 'liked', sort: liked.sort }}
+                  total={liked.rows === null ? null : liked.total}
+                />
               </>
             ) : trackMode === 'all' ? (
               <Btn sm onClick={recent.reload} disabled={recent.loading}>

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { HistoryTab } from '../HistoryTab';
 import { useLibrary } from '../LibraryContext';
 import { libraryKeys } from '../queries';
@@ -12,9 +12,10 @@ import { PAGE_SIZE } from '../types';
 // not a Track (no blockedBy, no moods) and the air log is immutable, so none of
 // the cross-list operations mean anything here. Do not "fix" the omission by
 // filing it under rows.
-export default function HistoryTabContainer() {
+export default function HistoryTabContainer({ selectionBar }: { selectionBar?: ReactNode }) {
   const {
     queuing, queueTrack, likeIndex, liking, toggleLike, blocking, blockTrack,
+    selected, toggleSelect, toggleAllRows,
   } = useLibrary();
   const [page, setPage] = useState(0);
 
@@ -47,6 +48,12 @@ export default function HistoryTabContainer() {
       onToggleLike={toggleLike}
       blocking={blocking}
       onBlock={blockTrack}
+      // Ticking a play ticks its track, the Library selection's unit: the
+      // selection bar downloads it, or adds it to a playlist, as on Browse.
+      selected={selected}
+      onToggleSelect={toggleSelect}
+      onToggleAll={toggleAllRows}
+      selectionBar={selectionBar}
     />
   );
 }

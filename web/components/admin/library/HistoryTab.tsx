@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment, useState } from 'react';
+import { Fragment, useState, type ReactNode } from 'react';
 import { RefreshCw, ListPlus } from 'lucide-react';
 import { Card, Btn } from '../ui';
 import { cn } from '../../../lib/cn';
@@ -12,6 +12,8 @@ import type { BlockType, LikeIndex, PlayEntry, Track } from './types';
 import { PreviewBar, PreviewButton, usePreviewControls } from './PreviewControls';
 import { BlockMenu, HeartButton, likeStateFor } from './row-actions';
 import { historySeamLine } from '../../../lib/transitionStats';
+import { CHECK_HIT } from './bits';
+import { historyPageTracks } from './history-selection';
 
 function playDayLabel(iso: string): string {
   const d = new Date(iso);
@@ -48,6 +50,7 @@ function playSourceLabel(p: PlayEntry): string {
 export function HistoryTab({
   rows, total, page, setPage, loading, queuing, onQueue, onRefresh,
   likeIndex, liking, onToggleLike, blocking, onBlock,
+  selected, onToggleSelect, onToggleAll, selectionBar,
 }: {
   rows: PlayEntry[] | null;
   total: number;
@@ -65,10 +68,19 @@ export function HistoryTab({
   onToggleLike: (t: Track, liked: boolean) => void;
   blocking: string | null;
   onBlock: (t: Track, type: BlockType) => void;
+  // The Library selection is a set of track ids, so a track aired twice on the
+  // page ticks on both rows; a play with no track id has nothing to tick.
+  selected: Set<string>;
+  onToggleSelect: (id: string) => void;
+  onToggleAll: (rows: Track[]) => void;
+  // The shared selection bar, rendered directly above the list.
+  selectionBar?: ReactNode;
 }) {
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   return (
     <>
+      {selectionBar}
+
       <Card
         title="Play history"
         sub={rows ? `${num(total)} play${total === 1 ? '' : 's'} on record — every aired track, with how it was picked and what show was on` : ''}
@@ -100,6 +112,9 @@ export function HistoryTab({
             onToggleLike={onToggleLike}
             blocking={blocking}
             onBlock={onBlock}
+            selected={selected}
+            onToggleSelect={onToggleSelect}
+            onToggleAll={onToggleAll}
           />
         )}
       </Card>
@@ -125,6 +140,7 @@ export function HistoryTab({
 // TrackRows does: the preview stops when the last list showing rows leaves.
 function HistoryRows({
   rows, loading, queuing, onQueue, likeIndex, liking, onToggleLike, blocking, onBlock,
+  selected, onToggleSelect, onToggleAll,
 }: {
   rows: PlayEntry[];
   loading: boolean;
@@ -135,13 +151,32 @@ function HistoryRows({
   onToggleLike: (t: Track, liked: boolean) => void;
   blocking: string | null;
   onBlock: (t: Track, type: BlockType) => void;
+  selected: Set<string>;
+  onToggleSelect: (id: string) => void;
+  onToggleAll: (rows: Track[]) => void;
 }) {
   const { snap, player, linkFor } = usePreviewControls();
   // A track can list several times here: the bar goes under the play the
   // operator pressed, not under every play of that track.
   const [previewPlay, setPreviewPlay] = useState<PlayEntry['id'] | null>(null);
+  // The page's tickable tracks, once each (a track can air twice on a page).
+  const pageTracks = historyPageTracks(rows, historyTrack);
+  const allSelected = pageTracks.length > 0 && pageTracks.every(t => selected.has(t.id));
   return (
     <div className={cn(loading && 'opacity-60 transition-opacity')}>
+      {pageTracks.length > 0 && (
+        <div className="lib-colhead !flex items-center gap-3">
+          <label className={CHECK_HIT}>
+            <input
+              type="checkbox"
+              checked={allSelected}
+              onChange={() => onToggleAll(pageTracks)}
+              aria-label={allSelected ? 'deselect the tracks on this page' : 'select the tracks on this page'}
+            />
+          </label>
+          <span>{allSelected ? 'deselect this page' : 'select this page'}</span>
+        </div>
+      )}
       {rows.map((p, i) => {
         const day = playDayLabel(p.playedAt);
         const prev = i > 0 ? rows[i - 1] : null;
@@ -155,6 +190,19 @@ function HistoryRows({
               <div className="caption border-b border-dashed border-[var(--separator-strong)] px-4 py-1.5 text-muted">{day}</div>
             )}
             <div className="flex items-center gap-3 border-b border-dashed border-[var(--separator-strong)] px-4 py-2.5 last:border-b-0">
+              {p.trackId ? (
+                <label className={CHECK_HIT}>
+                  <input
+                    type="checkbox"
+                    checked={selected.has(p.trackId)}
+                    onChange={() => onToggleSelect(p.trackId as string)}
+                    aria-label={`select ${p.title || 'track'}`}
+                  />
+                </label>
+              ) : (
+                // Keeps the column: a play with no track id has nothing to tick.
+                <span className="w-[13px] shrink-0" aria-hidden />
+              )}
               <span className="mono-num w-11 shrink-0 text-[11px] text-muted" title={new Date(p.playedAt).toLocaleString('en-GB')}>
                 {time}
               </span>

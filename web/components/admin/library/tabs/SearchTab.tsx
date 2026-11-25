@@ -2,7 +2,7 @@
 
 import {
   useEffect, useMemo, useRef, useState,
-  type ChangeEvent, type FormEvent,
+  type ChangeEvent, type FormEvent, type ReactNode,
 } from 'react';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { Search } from 'lucide-react';
@@ -23,10 +23,12 @@ export interface SearchTabProps {
   // False until useLibraryUrlState's restore has run — gates the deep-link
   // auto-search so it fires against the restored query, not an empty one.
   urlRestored: boolean;
+  // The selection bar, rendered under the search box, directly above the results.
+  selectionBar?: ReactNode;
 }
 
 export default function SearchTab({
-  searchQuery, setSearchQuery, searchMode, setSearchMode, urlRestored,
+  searchQuery, setSearchQuery, searchMode, setSearchMode, urlRestored, selectionBar,
 }: SearchTabProps) {
   const { adminFetch, ready, coverage } = useLibrary();
 
@@ -142,6 +144,8 @@ export default function SearchTab({
           </form>
         </div>
       </Card>
+
+      {selectionBar}
 
       <Card
         title="Search results"

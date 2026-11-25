@@ -15,35 +15,42 @@ import { compileSearch } from '../../music/search-query.js';
 
 export const router = express.Router();
 
+// The Browse list's filters, read from its query string. One reading for the
+// list and for the Library download of "everything the list shows"
+// (routes/library/download.ts), so the two can never disagree on a row.
+export function browseFilterFromQuery(q: Record<string, unknown>) {
+  const sort = (typeof q.sort === 'string' ? q.sort : 'artist') as
+    | 'artist' | 'title' | 'year' | 'taggedAt' | 'bpm' | 'loudness' | 'pace';
+  const vocal: 'instrumental' | 'vocal' | null =
+    q.vocal === 'instrumental' || q.vocal === 'vocal' ? q.vocal : null;
+  // The search box speaks the query language (music/search-query). Text that
+  // is not a valid query is searched as plain text, and the reason rides along
+  // for the box to show.
+  const search = typeof q.q === 'string' && q.q.trim() ? compileSearch(q.q) : null;
+  return {
+    search,
+    opts: {
+      moods: parseList(q.moods),
+      energy: typeof q.energy === 'string' && q.energy ? q.energy : null,
+      genre: typeof q.genre === 'string' && q.genre ? q.genre : null,
+      vocal,
+      yearFrom: parseIntSafe(q.yearFrom, null),
+      yearTo: parseIntSafe(q.yearTo, null),
+      query: search?.query ?? null,
+      sort,
+    },
+  };
+}
+
 router.get('/library/browse', requireAdmin, async (req, res) => {
   try {
     await library.load();
     const q = req.query || {};
-    const moods = parseList(q.moods);
-    const sort = (typeof q.sort === 'string' ? q.sort : 'artist') as
-      | 'artist' | 'title' | 'year' | 'taggedAt' | 'bpm' | 'loudness' | 'pace';
-    const vocal = q.vocal === 'instrumental' || q.vocal === 'vocal' ? q.vocal : null;
     const limit = parseIntSafe(q.limit, 50);
     const offset = parseIntSafe(q.offset, 0);
-    const yearFrom = parseIntSafe(q.yearFrom, null);
-    const yearTo = parseIntSafe(q.yearTo, null);
-    // The search box speaks the query language (music/search-query). Text that
-    // is not a valid query is searched as plain text, and the reason rides along
-    // for the box to show.
-    const search = typeof q.q === 'string' && q.q.trim() ? compileSearch(q.q) : null;
+    const { search, opts } = browseFilterFromQuery(q);
 
-    const result = library.filter({
-      moods,
-      energy: typeof q.energy === 'string' && q.energy ? q.energy : null,
-      genre: typeof q.genre === 'string' && q.genre ? q.genre : null,
-      vocal,
-      yearFrom,
-      yearTo,
-      query: search?.query ?? null,
-      sort,
-      limit,
-      offset,
-    });
+    const result = library.filter({ ...opts, limit, offset });
     // Drop station-archive rows an old tagger may have written into the index (#273).
     const cleanRows = result.rows.filter((row) => !subsonic.isStationArchive(row));
     const removed = result.rows.length - cleanRows.length;
@@ -88,6 +95,70 @@ router.get('/library/history', requireAdmin, async (req, res) => {
   }
 });
 
+// The Liked view's parameters, read from its query string. One reading for
+// the list and for the Library download of every liked track
+// (routes/library/download.ts), so the two can never disagree on a row or
+// its place. An unknown sort reads as the default, most recent first.
+export type LikedSort = 'recent' | 'count' | 'artist';
+export function likedViewFromQuery(q: Record<string, unknown>): { sort: LikedSort; q: string } {
+  const sort: LikedSort = q.sort === 'count' || q.sort === 'artist' ? q.sort : 'recent';
+  return { sort, q: (typeof q.q === 'string' ? q.q : '').trim().toLowerCase() };
+}
+
+// Every row of the Liked view, in its order, paging aside. Needs the library
+// and the likes store loaded.
+export function likedRows({ sort, q }: { sort: LikedSort; q: string }) {
+  const rows = likes.likedSongs().map((entry) => {
+    let rec: any = null;
+    try { rec = db.getTrack(entry.songId); } catch { /* index unavailable */ }
+    const snap = entry.track;
+    return {
+      id: entry.songId,
+      title: rec?.title ?? snap.title ?? null,
+      artist: rec?.artist ?? snap.artist ?? null,
+      album: rec?.album ?? snap.album ?? null,
+      year: rec?.year ?? snap.year ?? null,
+      originalYear: rec?.originalYear ?? null,
+      originalYearSource: rec?.originalYearSource ?? null,
+      isCompilation: rec?.isCompilation ?? null,
+      eraUntrusted: rec?.eraUntrusted ?? null,
+      genre: rec?.genre ?? snap.genre ?? null,
+      duration: snap.duration ?? rec?.durationSec ?? null,
+      moods: rec?.moods ?? [],
+      energy: rec?.energy ?? null,
+      source: rec?.source ?? null,
+      taggedAt: rec?.taggedAt ?? null,
+      bpm: rec?.bpm ?? null,
+      musicalKey: rec?.musicalKey ?? null,
+      loudnessLufs: rec?.loudnessLufs ?? null,
+      instrumental: isInstrumental(rec),
+      likeCount: entry.count,
+      likedByOperator: entry.operator,
+      lastLikedAt: entry.lastLikedAt,
+    };
+  });
+
+  // As in Browse: a blocked track still lists, annotated so the row can offer the lift.
+  const annotated = blocklist.annotate(
+    rows.filter((row) => !subsonic.isStationArchive(row)),
+  );
+
+  const matched = q
+    ? annotated.filter((r) =>
+      `${r.title ?? ''} ${r.artist ?? ''} ${r.album ?? ''}`.toLowerCase().includes(q))
+    : annotated;
+
+  const byName = (r: typeof annotated[number]) =>
+    `${(r.artist ?? '').toLowerCase()} ${(r.album ?? '').toLowerCase()} ${(r.title ?? '').toLowerCase()}`;
+  matched.sort((a, b) => {
+    if (sort === 'artist') return byName(a).localeCompare(byName(b));
+    // Equal counts tie-break on recency so the order is stable.
+    if (sort === 'count' && b.likeCount !== a.likeCount) return b.likeCount - a.likeCount;
+    return b.lastLikedAt.localeCompare(a.lastLikedAt);
+  });
+  return matched;
+}
+
 // Liked mode of the admin Library Tracks tab. Sourced from the likes store,
 // not library.db: a liked track may never have been tagged.
 router.get('/library/liked', requireAdmin, async (req, res) => {
@@ -96,60 +167,7 @@ router.get('/library/liked', requireAdmin, async (req, res) => {
     await likes.load();
     const limit = Math.min(Math.max(parseIntSafe(req.query?.limit, 50), 1), 200);
     const offset = Math.max(parseIntSafe(req.query?.offset, 0), 0);
-    const sort = req.query?.sort === 'count' || req.query?.sort === 'artist'
-      ? req.query.sort
-      : 'recent';
-    const q = (typeof req.query?.q === 'string' ? req.query.q : '').trim().toLowerCase();
-
-    const rows = likes.likedSongs().map((entry) => {
-      let rec: any = null;
-      try { rec = db.getTrack(entry.songId); } catch { /* index unavailable */ }
-      const snap = entry.track;
-      return {
-        id: entry.songId,
-        title: rec?.title ?? snap.title ?? null,
-        artist: rec?.artist ?? snap.artist ?? null,
-        album: rec?.album ?? snap.album ?? null,
-        year: rec?.year ?? snap.year ?? null,
-        originalYear: rec?.originalYear ?? null,
-        originalYearSource: rec?.originalYearSource ?? null,
-        isCompilation: rec?.isCompilation ?? null,
-        eraUntrusted: rec?.eraUntrusted ?? null,
-        genre: rec?.genre ?? snap.genre ?? null,
-        duration: snap.duration ?? rec?.durationSec ?? null,
-        moods: rec?.moods ?? [],
-        energy: rec?.energy ?? null,
-        source: rec?.source ?? null,
-        taggedAt: rec?.taggedAt ?? null,
-        bpm: rec?.bpm ?? null,
-        musicalKey: rec?.musicalKey ?? null,
-        loudnessLufs: rec?.loudnessLufs ?? null,
-        instrumental: isInstrumental(rec),
-        likeCount: entry.count,
-        likedByOperator: entry.operator,
-        lastLikedAt: entry.lastLikedAt,
-      };
-    });
-
-    // As in Browse: a blocked track still lists, annotated so the row can offer the lift.
-    const annotated = blocklist.annotate(
-      rows.filter((row) => !subsonic.isStationArchive(row)),
-    );
-
-    const matched = q
-      ? annotated.filter((r) =>
-        `${r.title ?? ''} ${r.artist ?? ''} ${r.album ?? ''}`.toLowerCase().includes(q))
-      : annotated;
-
-    const byName = (r: typeof annotated[number]) =>
-      `${(r.artist ?? '').toLowerCase()} ${(r.album ?? '').toLowerCase()} ${(r.title ?? '').toLowerCase()}`;
-    matched.sort((a, b) => {
-      if (sort === 'artist') return byName(a).localeCompare(byName(b));
-      // Equal counts tie-break on recency so the order is stable.
-      if (sort === 'count' && b.likeCount !== a.likeCount) return b.likeCount - a.likeCount;
-      return b.lastLikedAt.localeCompare(a.lastLikedAt);
-    });
-
+    const matched = likedRows(likedViewFromQuery(req.query ?? {}));
     res.json({ total: matched.length, rows: matched.slice(offset, offset + limit) });
   } catch (err) {
     res.status(500).json({ error: err.message });
