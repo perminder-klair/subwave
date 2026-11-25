@@ -1023,7 +1023,7 @@ export const routerTestResultSchema = z.object({
 export type RouterTestResult = z.infer<typeof routerTestResultSchema>;
 
 // --- router activity (GET /internal/activity on the router) -----------------------
-// The admin Music router page's Signal path monitor: recent Subsonic requests
+// The admin Music source page's Signal path monitor: recent Subsonic requests
 // and the source calls each made. Mirrors router/src/host/activity.ts, which
 // never records a query string, id or credential.
 
