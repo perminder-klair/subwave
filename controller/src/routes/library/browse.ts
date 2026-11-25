@@ -203,6 +203,19 @@ router.get('/library/search-sound', requireAdmin, async (req, res) => {
   }
 });
 
+// One track's file (path, format, size, bitrate), read when the operator opens
+// its editor: the path is what tells duplicate copies apart.
+router.get('/library/track/:id/file', requireAdmin, (req, res) => {
+  try {
+    const file = db.trackFile(String(req.params.id));
+    if (!file) return res.status(404).json({ error: 'this track is not in the library' });
+    res.json(file);
+  } catch (err) {
+    console.error('[library] track file read failed:', err.message);
+    res.status(500).json({ error: 'Could not read the track file' });
+  }
+});
+
 // Distinct genres for the filter dropdown: Navidrome's getGenres() merged with
 // the tagged index, cached at the Subsonic layer.
 router.get('/library/genres', requireAdmin, async (req, res) => {

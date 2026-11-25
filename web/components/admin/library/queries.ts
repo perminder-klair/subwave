@@ -25,6 +25,7 @@ export const libraryKeys = {
   liked: (sort: LikedSort, page: number) => ['library', 'rows', 'liked', sort, page] as const,
   likedAll: ['library', 'rows', 'liked'] as const,
   history: (page: number) => ['library', 'history', page] as const,
+  trackFile: (id: string) => ['library', 'track-file', id] as const,
   blocked: () => ['library', 'blocked'] as const,
   blockRules: () => ['library', 'block-rules'] as const,
   likeIndex: () => ['library', 'likeIndex'] as const,
