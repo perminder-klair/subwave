@@ -1,4 +1,4 @@
-// Draft state for the music-source forms (admin Settings → Music source and
+// Draft state for the music-source forms (admin Admin → Music source and
 // the onboarding wizard). Pure, so the rules the forms enforce — when a draft
 // is dirty, when it changes the station's track ids, what is sent — are
 // tested without a browser.

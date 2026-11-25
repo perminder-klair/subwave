@@ -3,7 +3,7 @@
 // One channel strip per plugin: health lamp, library counts, latency, the
 // capability bank and its settings. Serving channels sit first and stand at
 // full opacity; the merged bus follows them when more than one is serving.
-// Choosing what serves stays in Settings → Music source, where a switch also
+// Choosing what serves stays on the Source tab, where a switch also
 // re-links the library — so a standby strip links there instead of toggling.
 
 import Link from 'next/link';

@@ -1,4 +1,4 @@
-// Admin → Settings → Music source (#692): choose between the direct Navidrome
+// Admin → Music source (#692): choose between the direct Navidrome
 // connection and the SUB/WAVE music router, pick and configure the router's
 // source plugins, test a draft, and rescan installed plugins.
 //

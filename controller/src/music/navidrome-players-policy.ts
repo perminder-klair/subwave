@@ -202,7 +202,7 @@ const TAG_BUILT_MISS = 'Navidrome sends tag-built paths, so a file whose folders
 
 // Only reached with the opt-in on, so it never tells the operator to turn it on.
 const WHAT_TO_DO =
-  'The station switches a new player on within the hour, or press "Turn on now" in Settings → Music source. '
+  'The station switches a new player on within the hour, or press "Turn on now" in Admin → Music source → Navidrome → Advanced · real file paths. '
   + 'If Navidrome refuses, tick "Report Real Path" on each SUB/WAVE player in Navidrome → Settings → Players. '
   + 'ND_SUBSONIC_DEFAULTREPORTREALPATH=true on Navidrome starts new players on, for every client, not only SUB/WAVE '
   + '(0.64.2 honours it, 0.53.3 does not).';
@@ -272,7 +272,7 @@ export function realPathFinding(
     case 'not-read':
       return {
         status: 'skip',
-        detail: 'not read: "Keep Report Real Path on" is off in Settings → Music source',
+        detail: 'not read: "Keep Report Real Path on" is off in Admin → Music source → Navidrome → Advanced · real file paths',
         ...(opts.localMount ? { hint: `MUSIC_LIBRARY_PATH is set, and by default ${TAG_BUILT_MISS} Turn the setting on to play those from disk.` } : {}),
       };
     case 'no-players':

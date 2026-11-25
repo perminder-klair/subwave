@@ -2,7 +2,7 @@
 
 // One music source's settings, drawn from its plugin manifest — so a plugin
 // someone else wrote gets a working form with no web changes. Shared by
-// admin Settings → Music source and the onboarding wizard.
+// admin Admin → Music source and the onboarding wizard.
 
 import type { ChangeEvent } from 'react';
 import { Input } from '../../ui/input';

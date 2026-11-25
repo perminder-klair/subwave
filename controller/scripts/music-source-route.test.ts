@@ -1,4 +1,4 @@
-// Admin → Settings → Music source (#692), end to end through the HTTP routes
+// Admin → Music source (#692), end to end through the HTTP routes
 // against a REAL music router: what a save refuses, what it applies (the live
 // Subsonic connection, the router's config.json, the switch marker), secrets
 // staying in the process, a draft test, a plugin rescan, and the direct

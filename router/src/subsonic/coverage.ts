@@ -1,5 +1,5 @@
 // Which optional source op each Subsonic endpoint leans on, and what its
-// handler does when the serving source lacks it. The admin Music router page's
+// handler does when the serving source lacks it. The admin Music source page's
 // service matrix reads this from /internal/status and crosses it with each
 // source's capabilities.
 //
