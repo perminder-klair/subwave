@@ -69,8 +69,8 @@ async function moveStemDirs(map: ReadonlyMap<string, string>): Promise<void> {
 // A complete walk calls this before pruning. No filesystem write is needed to
 // make recovery possible: adoptRotatedIds commits its journal with the rows.
 // The prune itself goes through music/prune-policy.ts: nothing is removed
-// while Navidrome is scanning, and a mass removal is held until the operator
-// confirms it. `held` carries the operator-facing reason when it is.
+// while the music source is scanning, and a mass removal is held until the
+// operator confirms it. `held` carries the operator-facing reason when it is.
 export async function adoptAndPrune(
   liveIds: ReadonlySet<string>,
   opts: { confirmMassPrune?: boolean } = {},
@@ -85,8 +85,16 @@ export async function adoptAndPrune(
   if (marker && !switched) {
     console.log('[id-rotation] music-source switch recorded after this walk began — left for the next walk');
   }
+  // A source still scanning serves rows whose tags it has not read yet (a new
+  // Jellyfin lists every file at once and fills artist, album and length in
+  // over minutes), so a metadata match now finds a fraction of the library.
+  // Carry what matches, but keep the switch open: the controller re-walks once
+  // the scan is over (broadcast/tagger.ts awaitScanThenReconcile).
+  const scanning = switched ? await subsonic.getScanStatus() : undefined;
   const { adopted } = db.adoptRotatedIds(liveIds, { matchByMetadata: switched !== null });
-  if (switched) {
+  if (switched && scanning === true) {
+    console.log(`[id-rotation] music-source switch: carried ${adopted} track(s) so far; the source is still scanning, so the switch stays open until a walk after the scan`);
+  } else if (switched) {
     clearSourceSwitch();
     console.log(`[id-rotation] music-source switch: carried ${adopted} track(s) across by id or metadata`);
     await reportStrandedBlocks(liveIds);
@@ -106,7 +114,7 @@ export async function adoptAndPrune(
   const decision = decidePrune({
     missing,
     knownTracks: db.trackCount(),
-    scanning: await subsonic.getScanStatus(),
+    scanning: scanning !== undefined ? scanning : await subsonic.getScanStatus(),
     confirmed: opts.confirmMassPrune === true,
   });
   if (!decision.prune) {

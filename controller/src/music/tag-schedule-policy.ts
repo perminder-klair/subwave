@@ -209,7 +209,7 @@ export function baselineOnSuccess(baseline: number | null, startCount: number | 
 export type HoldReason = 'busy' | 'scanning' | 'quiet';
 
 export const HOLD_BUSY_TEXT = 'another tagger, analysis or reconcile run is going';
-export const HOLD_SCANNING_TEXT = 'Navidrome is scanning its library';
+export const HOLD_SCANNING_TEXT = 'The music source is scanning its library';
 
 export interface GateInput {
   auto: TaggerAutoSettings;

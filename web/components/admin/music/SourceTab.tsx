@@ -585,7 +585,7 @@ function RelinkCard({ adminFetch, label }: { adminFetch: AdminFetch; label: stri
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <strong className="font-mono text-[11px] tracking-[0.12em] uppercase">Re-linking your library to {label}</strong>
           <span className="font-mono text-[11px] text-muted">
-            {p ? `${p.label}${p.total ? ` · ${num(p.done ?? 0)} / ${num(p.total)}` : '…'}` : t.running ? 'waiting for the run going now' : 'starting in a moment'}
+            {p ? `${p.label}${p.total ? ` · ${num(p.done ?? 0)} / ${num(p.total)}` : '…'}` : t.running ? 'waiting for the run going now' : t.switchAwaitingScan ? `waiting for ${label} to finish scanning` : 'starting in a moment'}
           </span>
         </div>
         {/* No value while the phase has no total: an indeterminate bar. */}
@@ -600,7 +600,9 @@ function RelinkCard({ adminFetch, label }: { adminFetch: AdminFetch; label: stri
           )}
         />
         <p className="m-0 text-[12px] leading-[1.5] text-muted">
-          The station already plays from {label}. Tags, analysis, likes and the blocklist follow each track as it is matched.
+          {t.switchAwaitingScan && !t.running
+            ? `${label} is still reading its library, so only part of it could be matched. The rest is matched once its scan finishes.`
+            : `The station already plays from ${label}. Tags, analysis, likes and the blocklist follow each track as it is matched.`}
         </p>
       </div>
     );

@@ -235,7 +235,7 @@ async function main() {
   }
 
   if (shouldWalk) {
-    reportProgress({ phase: 'walk', label: 'Scanning Navidrome library', done: 0 });
+    reportProgress({ phase: 'walk', label: 'Scanning the music library', done: 0 });
     let walked = 0;
     const liveIds = new Set<string>();
     // A walk that prunes must be complete (same rule as the tagger's walk):
@@ -266,7 +266,7 @@ async function main() {
         walked += 1;
         if (walked % 500 === 0) {
           console.log(`[analyze] walked ${walked} tracks`);
-          reportProgress({ phase: 'walk', label: 'Scanning Navidrome library', done: walked });
+          reportProgress({ phase: 'walk', label: 'Scanning the music library', done: walked });
         }
       }
     } catch (err) {
@@ -293,7 +293,7 @@ async function main() {
       const { pruned, held } = await adoptAndPrune(liveIds, { confirmMassPrune: args.includes('--confirm-prune') });
       if (held) logEvent('warning', held.message, { hold: true });
       if (pruned > 0) {
-        console.log(`[analyze] pruned ${pruned} orphaned tracks no longer in Navidrome`);
+        console.log(`[analyze] pruned ${pruned} orphaned tracks no longer on the music source`);
       }
     }
   }
