@@ -122,11 +122,11 @@ function ChannelStrip({ channel }: { channel: Channel }) {
           </span>
         </div>
       ) : (
-        <Link href="/admin/settings?section=music" className={s.stripFoot} data-up="false">
+        <Link href="/admin/music?tab=source" className={s.stripFoot} data-up="false">
           <span className={s.fader} aria-hidden="true"><span /></span>
           <span>
             <b>{channel.lamp === 'broken' ? 'UNAVAILABLE' : 'STANDBY'}</b>
-            <small>{channel.lamp === 'broken' ? 'fix the plugin, then rescan' : 'select in settings →'}</small>
+            <small>{channel.lamp === 'broken' ? 'fix the plugin, then rescan' : 'choose on the Source tab →'}</small>
           </span>
         </Link>
       )}

@@ -251,12 +251,11 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   { label: 'Publish persona souls', section: 'station', card: 'Public API', keywords: 'system prompt schedule personas public json' },
 
   // ── music source ───────────────────────────────────────────────────────────
-  { label: 'Server URL', section: 'music', card: 'Navidrome server', keywords: 'navidrome subsonic host url' },
-  { label: 'Username', section: 'music', card: 'Navidrome server', keywords: 'navidrome subsonic login user' },
-  { label: 'Password', section: 'music', card: 'Navidrome server', keywords: 'navidrome subsonic secret salt token' },
-  { label: 'Music source', section: 'music', card: 'Source', keywords: 'navidrome jellyfin plex router plugin library backend' },
-  { label: 'Merge several sources', section: 'music', card: 'Merge several sources', keywords: 'combine two libraries jellyfin plex' },
-  { label: 'Installed plugins', section: 'music', card: 'Installed plugins', keywords: 'plugin rescan emby third-party source' },
+  // These open Settings → Music source, which forwards to the Music source page.
+  { label: 'Navidrome connection', section: 'music', card: 'Music source page', keywords: 'navidrome subsonic host url server username password login' },
+  { label: 'Music source', section: 'music', card: 'Music source page', keywords: 'navidrome jellyfin plex router plugin library backend switch' },
+  { label: 'Combine libraries', section: 'music', card: 'Music source page', keywords: 'merge combine two libraries jellyfin plex' },
+  { label: 'Source plugins', section: 'music', card: 'Music source page', keywords: 'plugin rescan emby third-party source install' },
 
   // ── skin & themes ──────────────────────────────────────────────────────────
   { label: 'Station skin', section: 'theme', card: 'Player skin', keywords: 'classic unit platter drift subamp tty listen face' },

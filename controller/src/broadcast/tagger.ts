@@ -115,11 +115,19 @@ export function considerIdRotationRecovery(track: {
 const TAGGER_LOG_TAIL = 30;
 
 // Single snapshot source so GET /settings and GET /library/tagger can't drift.
-export function taggerView(): TaggerState & { heldRows: number } {
+export function taggerView(): TaggerState & { heldRows: number; switchPending: boolean } {
   // heldRows: library rows the last complete walk kept but did not see, out of
   // the pick paths until a walk sees them or the operator confirms the removal
   // (music/held-rows.ts). Read from the file, so it outlives a restart.
-  return { ...tagger, lastLog: tagger.lastLog.slice(-TAGGER_LOG_TAIL), heldRows: heldIds().size };
+  // switchPending: a music-source switch whose carry-across walk has not
+  // finished yet (the marker file), so the Music source page can show the
+  // re-link in progress rather than only a toast.
+  return {
+    ...tagger,
+    lastLog: tagger.lastLog.slice(-TAGGER_LOG_TAIL),
+    heldRows: heldIds().size,
+    switchPending: pendingSourceSwitch() !== null,
+  };
 }
 
 function stripLogPrefix(s: string): string {

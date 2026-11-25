@@ -1,10 +1,10 @@
-import type { Metadata } from 'next';
-import RouterPanel from '../../../components/admin/router/RouterPanel';
+import { redirect } from 'next/navigation';
 
-export const metadata: Metadata = {
-  title: 'Music router',
-};
+// The music router console became the Music source page's diagnostic tabs;
+// old bookmarks land on the matching tab.
+const TABS = new Set(['channels', 'signal', 'matrix']);
 
-export default function AdminRouterPage() {
-  return <RouterPanel />;
+export default async function AdminRouterRedirect({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
+  const { tab } = await searchParams;
+  redirect(`/admin/music?tab=${tab && TABS.has(tab) ? tab : 'channels'}`);
 }

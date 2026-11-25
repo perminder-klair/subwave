@@ -16,7 +16,7 @@ ESM, `module: NodeNext` (relative imports end in `.js`), `verbatimModuleSyntax` 
 ## Layout
 
 - `src/sdk/` — the plugin contract. Imports nothing from the rest of the router; it is publishable as its own package. Changing it is changing the plugin API: bump `SOURCE_API_VERSION` only for a breaking change, and update `docs/music-source-plugins.md`.
-- `src/host/` — everything the router enforces around a plugin: `ids.ts`, `normalize.ts`, `media.ts`, `wrap.ts`, `composite.ts`, `loader.ts`, `manifest.ts`, `registry.ts`, `health.ts`, and `activity.ts` (the request feed the admin Music router page shows).
+- `src/host/` — everything the router enforces around a plugin: `ids.ts`, `normalize.ts`, `media.ts`, `wrap.ts`, `composite.ts`, `loader.ts`, `manifest.ts`, `registry.ts`, `health.ts`, and `activity.ts` (the request feed the admin Music source page's Signal path tab shows).
 - `src/subsonic/` — auth, envelope, one handler per endpoint, and `coverage.ts` (which optional op each endpoint leans on).
 - `src/internal/routes.ts` — the controller's API; its shapes are mirrored by `controller/src/schemas/music-source.ts`. Change both together.
 - `src/sources/<name>/` — built-ins, each a `subwave-source.json` + `index.ts`, loaded exactly like an installed plugin. A folder starting with `_` is skipped.

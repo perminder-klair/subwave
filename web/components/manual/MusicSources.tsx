@@ -26,7 +26,7 @@ export default function MusicSources() {
           <li><strong>Demo library</strong> — generated tones and covers, no server. For trying the station before connecting music.</li>
         </ul>
         <p>
-          Pick one in <Link href="/admin/settings?section=music">Settings → Music source</Link> (or
+          Pick one in <Link href="/admin/music">Admin → Music source</Link> (or
           the first step of the setup wizard), fill in its form, press <strong>Test connection</strong>,
           and save. It applies immediately; the auto playlist is rebuilt against the new library.
         </p>
@@ -47,7 +47,7 @@ export default function MusicSources() {
           <p>
             Not every server offers every signal — Plex has no lyrics, a folder of files has no
             genres. A missing capability never stops the music; the DJ just has fewer discovery
-            signals. Settings → Music source shows what yours supports.
+            signals. Admin → Music source → Service matrix shows what yours supports.
           </p>
         </div>
       </section>

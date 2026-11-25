@@ -1,21 +1,22 @@
 'use client';
 
-// Admin → Music router: the SUB/WAVE music router's control center. Source
-// channels (every plugin, its health, counts, latency and capabilities), the
-// Signal path monitor (the station's live Subsonic traffic and which source
-// answered it), and the service matrix (which endpoints each source backs).
+// Admin → Music source (/admin/music): where the station's music comes from,
+// and the SUB/WAVE music router's live diagnostics, as tabs
+// (?tab=source|channels|signal|matrix, shared with the sidebar submenu, as on
+// Imaging and Moods).
 //
-// Read-only on purpose. Choosing what serves is Settings → Music source, whose
-// save validates the draft, writes the router's config and re-links the
-// library when track ids change — a second switch here would skip all three.
+//   Source          choose and configure the library (music/SourceTab.tsx):
+//                   the one place a selection is tested, confirmed and saved
+//   Source channels every plugin, its health, counts, latency, capabilities
+//   Signal path     the station's live Subsonic traffic, which source answered
+//   Service matrix  which endpoints each source backs
 //
-// The three views are tabs (?tab=channels|signal|matrix), shared with the
-// sidebar submenu, as on Imaging and Moods.
+// The diagnostic tabs are read-only: a second way to switch would skip the
+// Source tab's test, confirmation and re-link progress.
 
 import { useCallback, useMemo, useState } from 'react';
-import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { Activity, Cable, Grid3x3, Radio, RefreshCw } from 'lucide-react';
+import { Activity, Cable, Grid3x3, Music2, Radio, RefreshCw } from 'lucide-react';
 import { adminJson, useAdminMutation, useAdminQuery } from '../../../lib/admin-query';
 import { useAdminAuth } from '../../../lib/adminAuth';
 import { errorMessage, notify } from '../../../lib/notify';
@@ -25,7 +26,8 @@ import { V3Alert } from '../../ui/alert';
 import { Btn } from '../ui';
 import { SectionTabs } from '../SectionTabs';
 import type { RouterActivity } from '../../../lib/schemas.generated';
-import { MUSIC_SOURCE_KEY } from '../settings/MusicSourceSection';
+import { MUSIC_SOURCE_KEY, type MusicSourceView } from '../music/queries';
+import { SourceTab } from '../music/SourceTab';
 import { buildChannels, type RouterView } from './model';
 import { ServiceMatrix } from './ServiceMatrix';
 import { SignalPath } from './SignalPath';
@@ -39,11 +41,11 @@ const ACTIVITY_POLL_MS = 1_500;
 // Health asks every serving backend for its library counts, so it is not polled hard.
 const HEALTH_POLL_MS = 30_000;
 
-type TabId = 'channels' | 'signal' | 'matrix';
-const TAB_IDS: TabId[] = ['channels', 'signal', 'matrix'];
+type TabId = 'source' | 'channels' | 'signal' | 'matrix';
+const TAB_IDS: TabId[] = ['source', 'channels', 'signal', 'matrix'];
 
 /** Direct Navidrome: say once, under the faceplate, that the router is on standby. */
-function StandbyStrip() {
+function StandbyStrip({ onChoose }: { onChoose: () => void }) {
   return (
     <div className={s.standby} role="status">
       <span className={s.powerLamp} data-state="idle" aria-hidden="true" />
@@ -54,9 +56,9 @@ function StandbyStrip() {
           station through it; until then these views show what the router could serve, not what is on air.
         </p>
       </div>
-      <Link href="/admin/settings?section=music" className={buttonVariants({ variant: 'outline', size: 'sm' })}>
+      <button type="button" onClick={onChoose} className={buttonVariants({ variant: 'outline', size: 'sm' })}>
         Choose a source
-      </Link>
+      </button>
     </div>
   );
 }
@@ -143,7 +145,7 @@ export default function RouterPanel() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const rawTab = searchParams.get('tab');
-  const tab: TabId = (TAB_IDS as string[]).includes(rawTab ?? '') ? (rawTab as TabId) : 'channels';
+  const tab: TabId = (TAB_IDS as string[]).includes(rawTab ?? '') ? (rawTab as TabId) : 'source';
   // Routed through Next so a soft nav (in-page tab or sidebar submenu) re-derives `tab`.
   const selectTab = useCallback(
     (id: string) => {
@@ -154,12 +156,12 @@ export default function RouterPanel() {
     [nav, pathname, searchParams],
   );
 
-  const statusQuery = useAdminQuery<RouterView>({
+  const statusQuery = useAdminQuery<MusicSourceView>({
     key: MUSIC_SOURCE_KEY,
     adminFetch,
     enabled,
     refetchInterval: () => HEALTH_POLL_MS,
-    request: (fetcher, signal) => adminJson<RouterView>(fetcher, '/settings/music-source', undefined, signal),
+    request: (fetcher, signal) => adminJson<MusicSourceView>(fetcher, '/settings/music-source', undefined, signal),
   });
   const view = statusQuery.data;
   const routerUp = Boolean(view?.router);
@@ -198,8 +200,8 @@ export default function RouterPanel() {
           <div className={s.brand}>
             <span className={s.powerLamp} data-state={lamp} aria-hidden="true" />
             <div>
-              <h1>SUB/WAVE ROUTER</h1>
-              <p>Music sources / live diagnostics</p>
+              <h1>MUSIC SOURCE</h1>
+              <p>Library / router / live diagnostics</p>
             </div>
           </div>
           <div className={s.faceplateActions}>
@@ -210,9 +212,6 @@ export default function RouterPanel() {
             <Btn sm onClick={() => rescan.mutate()} disabled={rescan.isPending || !routerUp}>
               {rescan.isPending ? 'Rescanning…' : 'Rescan plugins'}
             </Btn>
-            <Link href="/admin/settings?section=music" className={buttonVariants({ variant: 'solid', size: 'sm' })}>
-              Change source
-            </Link>
           </div>
         </div>
         <dl className={s.lcd}>
@@ -228,19 +227,21 @@ export default function RouterPanel() {
       {statusError && (
         <V3Alert tone="error" title="could not load the router status">{statusError}</V3Alert>
       )}
-      {view?.routerError && (
+      {/* The Source tab says these in its own words, and only when they matter there. */}
+      {tab !== 'source' && view?.routerError && (
         <V3Alert tone="error" title="music router unreachable">{view.routerError}</V3Alert>
       )}
-      {view?.router?.configError && (
+      {tab !== 'source' && view?.router?.configError && (
         <V3Alert tone="error" title="the router kept its previous source">{view.router.configError}</V3Alert>
       )}
 
-      {view?.mode === 'navidrome' && <StandbyStrip />}
+      {view?.mode === 'navidrome' && tab !== 'source' && <StandbyStrip onChoose={() => selectTab('source')} />}
 
       {/* SectionTabs draws only its top rule; the rack card gives it a ground. */}
       <div className={s.tabs}>
         <SectionTabs
           tabs={[
+            { id: 'source', label: 'Source', icon: Music2 },
             { id: 'channels', label: 'Source channels', count: view ? channels.length : undefined, icon: Cable },
             { id: 'signal', label: 'Signal path', icon: Activity },
             { id: 'matrix', label: 'Service matrix', count: view?.router?.endpoints.length, icon: Grid3x3 },
@@ -250,6 +251,10 @@ export default function RouterPanel() {
           label="Music router sections"
         />
       </div>
+
+      {tab === 'source' && (
+        <SourceTab adminFetch={adminFetch} view={view} viewError={statusError} />
+      )}
 
       {tab === 'channels' && (
         <RackPanel
@@ -302,7 +307,7 @@ export default function RouterPanel() {
 
       <footer className={s.footer}>
         <Radio aria-hidden="true" />
-        SUB/WAVE / MUSIC ROUTER / UNIT 01 / LIVE DIAGNOSTICS
+        SUB/WAVE / MUSIC SOURCE / UNIT 01 / LIVE DIAGNOSTICS
       </footer>
     </div>
   );
