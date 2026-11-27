@@ -51,6 +51,12 @@ export function SkipChoices({
       <p className="m-0 text-xs leading-normal text-muted">
         A block is absolute, listener requests included. Lift it from Library → Blocked.
       </p>
+      {/* The player's skip cheat code (components/player/SkipCheat.tsx), named here because
+          this is where an admin already skips. */}
+      <p className="m-0 text-xs leading-normal text-muted">
+        Tip: on the player, signed in here, swipe ↑ ↑ ↓ ↓ and tap twice (or type ↑ ↑ ↓ ↓ B A)
+        to skip from your phone. It skips at once, with no dialog and no block.
+      </p>
     </div>
   );
 }
