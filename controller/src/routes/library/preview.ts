@@ -4,8 +4,8 @@
 // - `POST /library/:id/preview` (admin) answers a short-lived link to the
 //   audio. An <audio> element cannot send the console's Basic header, so the
 //   link carries its own proof: an HMAC over the track id and an expiry, keyed
-//   by a per-process secret (never derived from ADMIN_PASS, and a restart
-//   voids every link, like the device cookie in middleware/auth.ts). A link
+//   by a per-process secret (util/signed-link.ts: never derived from
+//   ADMIN_PASS, and a restart voids every link). A link
 //   names one track and lapses after PREVIEW_TTL_SEC, so leaking one (a log,
 //   a history entry) exposes that track's audio for a few hours, nothing else.
 // - `GET /library/preview/:id?exp=&sig=` streams it from Navidrome through
@@ -18,11 +18,11 @@
 // moves no play count the smart playlists read. The blocklist governs airplay,
 // not the operator's own ears: a never-play track still previews.
 import express from 'express';
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { requireAdmin } from '../../middleware/auth.js';
 import * as subsonic from '../../music/subsonic.js';
 import { recordHttpAttempt } from '../../music/subsonic-log.js';
+import { signedLinkValid, signedQuery } from '../../util/signed-link.js';
 
 export const router = express.Router();
 
@@ -30,27 +30,17 @@ export const PREVIEW_TTL_SEC = 6 * 3600;
 // Navidrome's answer must start within this; the body then streams for as long
 // as the listener keeps it.
 const UPSTREAM_HEADERS_TIMEOUT_MS = 15_000;
-const SECRET = randomBytes(32);
 // Subsonic ids are short alphanumerics; anything else would make the proxy an
 // SSRF surface (the same rule as /cover/:id).
-const ID_RE = /^[\w-]{1,64}$/;
+export const ID_RE = /^[\w-]{1,64}$/;
 
-function sign(id: string, exp: number): string {
-  return createHmac('sha256', SECRET).update(`preview:${id}:${exp}`).digest('base64url');
-}
-
+// The signing rule is util/signed-link.ts, shared with the Library download.
 export function previewPath(id: string, nowMs = Date.now()): string {
-  const exp = Math.floor(nowMs / 1000) + PREVIEW_TTL_SEC;
-  return `/library/preview/${encodeURIComponent(id)}?exp=${exp}&sig=${sign(id, exp)}`;
+  return `/library/preview/${encodeURIComponent(id)}?${signedQuery('preview', id, PREVIEW_TTL_SEC, nowMs)}`;
 }
 
 export function previewLinkValid(id: string, exp: unknown, sig: unknown, nowMs = Date.now()): boolean {
-  if (typeof exp !== 'string' || typeof sig !== 'string' || !/^\d{1,12}$/.test(exp)) return false;
-  const expSec = Number(exp);
-  if (expSec * 1000 <= nowMs) return false;
-  const want = Buffer.from(sign(id, expSec));
-  const got = Buffer.from(sig);
-  return got.length === want.length && timingSafeEqual(got, want);
+  return signedLinkValid('preview', id, exp, sig, nowMs);
 }
 
 router.post('/library/:id/preview', requireAdmin, (req, res) => {

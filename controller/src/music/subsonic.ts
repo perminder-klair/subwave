@@ -1021,6 +1021,12 @@ export function getRawStreamUrl(songId: string): string {
   return buildUrl('stream', { id: songId, format: 'raw' });
 }
 
+// Subsonic `download`: the original file as stored, never transcoded, for the
+// admin Library download. Like `stream`, it does not scrobble.
+export function getDownloadUrl(songId: string): string {
+  return buildUrl('download', { id: songId });
+}
+
 // Where a song's `path` could be on the library mount. Three shapes reach here:
 // - relative: built from the tags, joined to the mount as it always was.
 // - absolute and inside the mount: Report Real Path on a Navidrome that sees the

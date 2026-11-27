@@ -1,6 +1,6 @@
 'use client';
 
-import type { ChangeEvent } from 'react';
+import type { ChangeEvent, ReactNode } from 'react';
 import { useState } from 'react';
 import { ListMusic } from 'lucide-react';
 import { Input } from '../../ui/input';
@@ -9,12 +9,16 @@ import { Card, Btn } from '../ui';
  
 import type { PlaylistSummary } from './types';
 
-export function AddToPlaylistBar({ count, playlists, busy, onAdd, onClear }: {
+// The shared selection bar, on every Library tab with ticked rows. `download`:
+// the Library download of the ticked rows (DownloadButton.tsx SelectionDownload),
+// beside the bar's own buttons.
+export function AddToPlaylistBar({ count, playlists, busy, onAdd, onClear, download }: {
   count: number;
   playlists: PlaylistSummary[] | null;
   busy: boolean;
   onAdd: (target: { playlistId?: string; name?: string }) => void;
   onClear: () => void;
+  download?: ReactNode;
 }) {
   const [target, setTarget] = useState<string>('__new');
   const [name, setName] = useState('');
@@ -55,6 +59,7 @@ export function AddToPlaylistBar({ count, playlists, busy, onAdd, onClear }: {
         >
           <ListMusic size={12} /> {busy ? 'Adding…' : creating ? 'Create playlist' : 'Add to playlist'}
         </Btn>
+        {download}
         <Btn sm onClick={onClear} disabled={busy}>Clear selection</Btn>
       </div>
     </Card>

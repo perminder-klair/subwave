@@ -15,6 +15,7 @@ import HistoryTabContainer from './library/tabs/HistoryTabContainer';
 import BlockedTabContainer from './library/tabs/BlockedTabContainer';
 import { Tabs } from './library/Tabs';
 import { AddToPlaylistBar } from './library/AddToPlaylistBar';
+import { SelectionDownload } from './library/DownloadButton';
 
 export default function LibraryPanel() {
   return <LibraryPanelInner />;
@@ -58,6 +59,19 @@ function LibraryBody() {
   // "Add 12" with 9 off-screen rows is a foot-gun. Lives here rather than in
   // the provider because only the panel knows the tab changed.
   useEffect(() => { clearSelection(); }, [tab, clearSelection]);
+
+  // Ticked rows are acted on from one bar, placed directly above the list it
+  // acts on: under Browse's filters and Search's box, at the top of Tracks and History.
+  const selectionBar = selected.size > 0 ? (
+    <AddToPlaylistBar
+      count={selected.size}
+      playlists={playlists}
+      busy={plBusy}
+      onAdd={addSelectedToPlaylist}
+      onClear={clearSelection}
+      download={<SelectionDownload ids={Array.from(selected)} />}
+    />
+  ) : null;
 
   return (
     // grid-cols-1: the implicit `auto` track is sized by min-content, so a
@@ -151,6 +165,7 @@ function LibraryBody() {
           q={q} setQ={setQ}
           sort={sort} setSort={setSort}
           libStats={tag.libStats}
+          selectionBar={selectionBar}
         />
       )}
 
@@ -159,24 +174,17 @@ function LibraryBody() {
           searchQuery={searchQuery} setSearchQuery={setSearchQuery}
           searchMode={searchMode} setSearchMode={setSearchMode}
           urlRestored={urlRestored}
+          selectionBar={selectionBar}
         />
       )}
 
       {tab === 'era' && <EraReviewSection />}
 
-      {tab !== 'blocked' && tab !== 'history' && selected.size > 0 && (
-        <AddToPlaylistBar
-          count={selected.size}
-          playlists={playlists}
-          busy={plBusy}
-          onAdd={addSelectedToPlaylist}
-          onClear={clearSelection}
-        />
-      )}
-
       {tab === 'blocked' && <BlockedTabContainer />}
 
-      {tab === 'history' && <HistoryTabContainer />}
+      {tab === 'history' && <HistoryTabContainer selectionBar={selectionBar} />}
+
+      {tab === 'tracks' && selectionBar}
 
       {tab === 'tracks' && (
         <TracksTab

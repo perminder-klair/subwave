@@ -25,9 +25,14 @@ const IS_INSTRUMENTAL_SQL = `CASE is_instrumental(vocal_ranges_json, NULL) WHEN 
 const IS_VOCAL_SQL = `CASE is_instrumental(vocal_ranges_json, NULL) WHEN 0 THEN 0
   ELSE ${TWO_WINDOW_VERDICT_SQL} END = 0`;
 
+// The browse filter's WHERE and ORDER BY, shared by the paged list and by the
+// whole-selection read behind the Library download, so "every track the list
+// shows" is the list's own query and never a second copy of it.
 // `reindexing` (set only for a query search): the stored search keys are still
 // being rebuilt after a bulk change, so the answer may be missing tracks.
-export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecord[]; reindexing?: boolean } {
+function browseQuery(opts: FilterOpts): {
+  whereSql: string; params: unknown[]; orderSql: string; reindexing?: boolean;
+} {
   const moods = (opts.moods || []).filter(Boolean);
   const energy = opts.energy || null;
   const genre = opts.genre || null;
@@ -36,8 +41,6 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecor
   const yearTo = Number.isFinite(opts.yearTo as number) ? (opts.yearTo as number) : null;
   const q = (opts.q || '').trim().toLowerCase();
   const sort = opts.sort || 'artist';
-  const limit = Math.max(1, Math.min(opts.limit ?? 50, 200));
-  const offset = Math.max(0, opts.offset ?? 0);
 
   // Tagged tracks only, else rows the metadata/analysis walk inserted show up here.
   const where: string[] = [SQL_HAS_MOODS];
@@ -99,6 +102,13 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecor
     pace: `ORDER BY (${PACE_MEAN_SQL}) IS NULL, (${PACE_MEAN_SQL}) DESC, LOWER(COALESCE(artist,''))`,
   });
   const orderSql = ORDER_BY[sort] ?? DEFAULT_ORDER;
+  return { whereSql, params, orderSql, ...(reindexing !== undefined && { reindexing }) };
+}
+
+export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecord[]; reindexing?: boolean } {
+  const limit = Math.max(1, Math.min(opts.limit ?? 50, 200));
+  const offset = Math.max(0, opts.offset ?? 0);
+  const { whereSql, params, orderSql, reindexing } = browseQuery(opts);
 
   const d = requireDb();
   const total = (
@@ -119,6 +129,50 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecor
   );
   const rows = ids.map(id => byId.get(id)).filter((r): r is TrackRow => r !== undefined);
   return { total, rows: rows.map(rowToTrack), ...(reindexing !== undefined && { reindexing }) };
+}
+
+// What a download needs of a track: its name parts and its file facts, nothing
+// wide. `fileSize` is the last walk's figure, so a total is an estimate.
+export interface DownloadRow {
+  id: string;
+  title: string | null;
+  artist: string | null;
+  album: string | null;
+  fileSuffix: string | null;
+  fileSize: number | null;
+}
+
+const DOWNLOAD_COLS = 'id, title, artist, album, file_suffix, file_size';
+type DownloadSourceRow = {
+  id: string; title: string | null; artist: string | null; album: string | null;
+  file_suffix: string | null; file_size: number | null;
+};
+const toDownloadRow = (r: DownloadSourceRow): DownloadRow => ({
+  id: r.id, title: r.title, artist: r.artist, album: r.album,
+  fileSuffix: r.file_suffix, fileSize: r.file_size,
+});
+
+// Every row the browse list matches, in its order: all pages, no limit
+// (`limit`/`offset` are ignored). Lean columns only, so a whole-library
+// selection reads no analysis JSON.
+export function filterAll(opts: FilterOpts = {}): { rows: DownloadRow[]; reindexing?: boolean } {
+  const { whereSql, params, orderSql, reindexing } = browseQuery(opts);
+  const rows = (requireDb().prepare(`SELECT ${DOWNLOAD_COLS} FROM tracks ${whereSql} ${orderSql}`)
+    .all(...params) as DownloadSourceRow[]).map(toDownloadRow);
+  return { rows, ...(reindexing !== undefined && { reindexing }) };
+}
+
+// The same lean rows for named ids; an id the mirror does not hold is absent.
+export function downloadRowsByIds(ids: readonly string[]): Map<string, DownloadRow> {
+  const out = new Map<string, DownloadRow>();
+  const d = requireDb();
+  for (let i = 0; i < ids.length; i += 500) {
+    const chunk = ids.slice(i, i + 500);
+    const rows = d.prepare(`SELECT ${DOWNLOAD_COLS} FROM tracks WHERE id IN (${chunk.map(() => '?').join(', ')})`)
+      .all(...chunk) as DownloadSourceRow[];
+    for (const r of rows) out.set(r.id, toDownloadRow(r));
+  }
+  return out;
 }
 
 // Lean row shape for the Observatory bulk endpoint. rowToTrack would JSON-parse
