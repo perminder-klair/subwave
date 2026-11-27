@@ -11,6 +11,7 @@ import type { QueryClient } from '@tanstack/react-query';
 import { notify, errorMessage } from '../../../lib/notify';
 import { AdminResponseError, adminJson, adminResponse, type AdminFetch } from '../../../lib/admin-query';
 import { applyBlockMarks, libraryKeys, rowsOf } from './queries';
+import { noteBlockWrite } from './coverage-poll';
 import type { BlockEntry, BlockRef, BlockType, Track } from './types';
 
 // Per-call cap on POST /library/blocklist/check, matching the controller's.
@@ -85,11 +86,27 @@ export async function restampCachedBlockMarks(qc: QueryClient, fetcher: AdminFet
   }
 }
 
+/**
+ * The Blocked tab's per-entry figures ride the coverage read's overview, so a
+ * write re-reads it, and notes the write so the page keeps asking until the
+ * controller's background recount lands (coverage-poll.ts has why).
+ */
+export function settleBlockedCounts(qc: QueryClient, now = Date.now()): void {
+  const state = qc.getQueryState<{ overview?: { computedAt?: string } | null }>(libraryKeys.coverage());
+  noteBlockWrite({
+    writeAt: now,
+    baseline: state?.data?.overview?.computedAt ?? null,
+    fromReads: state?.dataUpdateCount ?? 0,
+  });
+  void qc.invalidateQueries({ queryKey: libraryKeys.coverage(), exact: true });
+}
+
 /** After any block write, from whichever page made it. */
 export async function reconcileBlockCaches(qc: QueryClient, fetcher: AdminFetch): Promise<void> {
   // The Blocked tab's list is a query like any other, so invalidating reaches
   // it whether or not that tab is mounted.
   void qc.invalidateQueries({ queryKey: libraryKeys.blocked() });
+  settleBlockedCounts(qc);
   await restampCachedBlockMarks(qc, fetcher);
 }
 

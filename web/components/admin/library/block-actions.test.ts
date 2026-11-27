@@ -6,7 +6,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { QueryClient } from '@tanstack/react-query';
-import { deleteBlockEntry, liftedText, postBlock, restampCachedBlockMarks } from './block-actions';
+import { deleteBlockEntry, liftedText, postBlock, restampCachedBlockMarks, settleBlockedCounts } from './block-actions';
+import { blockSettle } from './coverage-poll';
 import { libraryKeys, rowsOf } from './queries';
 import type { Track } from './types';
 
@@ -94,4 +95,13 @@ test('restamp: cached rows are re-marked from one check, never invalidated', asy
 test('the lifted copy names the entry, falling back to its id', () => {
   assert.equal(liftedText({ id: 'a', name: 'Blindspot' }), '“Blindspot” can play again');
   assert.equal(liftedText({ id: 'a', name: null }), '“a” can play again');
+});
+
+test('a block write re-reads coverage and notes the overview it must catch up with', async () => {
+  const qc = new QueryClient();
+  qc.setQueryData(libraryKeys.coverage(), { overview: { computedAt: '2026-10-31T02:00:00.000Z' } });
+  settleBlockedCounts(qc, 1_000);
+  assert.equal(qc.getQueryState(libraryKeys.coverage())?.isInvalidated, true);
+  assert.deepEqual(blockSettle(qc.getQueryState(libraryKeys.coverage())?.dataUpdateCount ?? 0),
+    { writeAt: 1_000, baseline: '2026-10-31T02:00:00.000Z', reads: 0 });
 });

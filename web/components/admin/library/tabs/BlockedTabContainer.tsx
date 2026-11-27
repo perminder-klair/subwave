@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { notify, errorMessage } from '../../../../lib/notify';
 import { adminJson } from '../../../../lib/admin-query';
+import { settleBlockedCounts } from '../block-actions';
 import { BlockedTab } from '../BlockedTab';
 import { BlockRulesCard } from '../BlockRulesCard';
 import { useLibrary } from '../LibraryContext';
@@ -49,6 +50,7 @@ export default function BlockedTabContainer() {
       // Refetching replaces the hand-rolled filter over local state, and unlike
       // it also picks up anything the server dropped alongside the batch.
       await qc.invalidateQueries({ queryKey: libraryKeys.blocked() });
+      settleBlockedCounts(qc);
       await restampBlockMarks();
     },
   });
