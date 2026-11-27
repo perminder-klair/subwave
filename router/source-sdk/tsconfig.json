@@ -1,0 +1,22 @@
+{
+  // Builds @subwave/source-sdk straight from the router's own contract
+  // (../src/sdk), so the package and the router cannot drift. typescript comes
+  // from router/node_modules: run `npm --prefix router ci` first.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "declaration": true,
+    "declarationMap": false,
+    "sourceMap": false,
+    "removeComments": false,
+    "skipLibCheck": true,
+    "verbatimModuleSyntax": true,
+    "types": [],
+    "rootDir": "../src/sdk",
+    "outDir": "dist"
+  },
+  "files": ["../src/sdk/index.ts", "../src/sdk/types.ts"]
+}

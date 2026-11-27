@@ -47,6 +47,7 @@ async function walk(root, dir, out) {
   }
 }
 
+/** @type {import('@subwave/source-sdk').SourceFactory} */
 export default (ctx) => {
   const root = String(ctx.config.path);
   const rescanMs = Math.max(1, Number(ctx.config.rescanMinutes ?? 30)) * 60_000;
@@ -99,6 +100,7 @@ export default (ctx) => {
     return library;
   }
 
+  /** @type {(a: import('@subwave/source-sdk').Album & { dir: string }, songs: unknown[]) => import('@subwave/source-sdk').Album} */
   const albumOut = ({ dir, ...album }, songs) => ({ ...album, songCount: songs.length });
   const shuffle = (xs) => [...xs].sort(() => Math.random() - 0.5);
   const lower = (s) => String(s ?? '').toLowerCase();

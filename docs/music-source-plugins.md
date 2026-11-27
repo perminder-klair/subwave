@@ -61,7 +61,7 @@ export default (ctx) => ({
 });
 ```
 
-The default export is a factory the router calls with a context whenever the operator's selection is (re)applied. The types live in [`router/src/sdk/`](../router/src/sdk/) (`defineSource`, `SourceFactory`, `Song`, …). They are not published as a package yet, so to type-check a plugin outside this repo, copy `types.ts` next to it and use `import type` (a plugin ships as one module with nothing installed beside it, so `defineSource` is only a convenience: it returns the factory unchanged). A plugin ships as **one bundled ES module**: nothing is installed inside the container, so either use only Node built-ins (`node:fs`, `node:crypto`, `fetch`) or bundle your dependencies (esbuild, rollup). A backend that needs another language belongs in its own service that your plugin talks to over HTTP.
+The default export is a factory the router calls with a context whenever the operator's selection is (re)applied. The types are published as [`@subwave/source-sdk`](../router/source-sdk/README.md) (`defineSource`, `SourceFactory`, `Song`, …): `npm install --save-dev @subwave/source-sdk`. It is a dev dependency, because a plugin ships as one module with nothing installed beside it: `defineSource` is only a convenience that returns the factory unchanged, so either bundle it or type a plain-JS module with JSDoc (`/** @type {import('@subwave/source-sdk').SourceFactory} */`, as the folder example does). The package's major version is the plugin `apiVersion`. It is built from [`router/src/sdk/`](../router/src/sdk/), so to build against a contract change that has not been released yet, copy `types.ts` from there instead. A plugin ships as **one bundled ES module**: nothing is installed inside the container, so either use only Node built-ins (`node:fs`, `node:crypto`, `fetch`) or bundle your dependencies (esbuild, rollup). A backend that needs another language belongs in its own service that your plugin talks to over HTTP.
 
 ### The context
 
@@ -128,12 +128,13 @@ Leave any of these out and the station degrades instead of failing — the admin
 
 ## Test it
 
-The conformance kit runs the contract the station relies on, through the router's own enforcement layer:
+The conformance kit runs the contract the station relies on, through the router's own enforcement layer. It ships in the SDK package, so it needs no SUB/WAVE checkout:
 
 ```bash
-npm --prefix router install
-npm --prefix router run conformance -- /path/to/my-source --config url=http://emby:8096 --config apiKey=…
+npx @subwave/source-sdk conformance /path/to/my-source --config url=http://emby:8096 --config apiKey=…
 ```
+
+From a checkout (for a contract change that isn't released yet), the same kit is `npm --prefix router install && npm --prefix router run conformance -- /path/to/my-source …`.
 
 It checks the manifest, every required op, that ids are publishable and stable across two independent instances, that `stream` returns at least 4 KiB of non-text audio, Range handling, cover art, and each optional op you implement. Add `--allow-writes` to also exercise stars and a scratch playlist (it deletes what it creates). It exits non-zero on any failure, so it can gate your plugin's own CI.
 
