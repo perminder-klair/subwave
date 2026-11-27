@@ -53,4 +53,4 @@ The same kit ships in the SDK package as `npx @subwave/source-sdk conformance <p
 
 ## Plugin SDK
 
-`src/sdk/` is the plugin contract, and `source-sdk/` publishes it to npm as [`@subwave/source-sdk`](source-sdk/README.md). The package's major version is the plugin `apiVersion`. `.github/workflows/publish-source-sdk.yml` publishes it on a release tag whenever `source-sdk/package.json` names a version npm doesn't have yet. To build it locally: `npm ci && npm --prefix source-sdk run build` (the types with `tsc`, the conformance bundle with esbuild).
+`src/sdk/` is the plugin contract, and `source-sdk/` publishes it to npm as [`@subwave/source-sdk`](source-sdk/README.md). The package's major version is the plugin `apiVersion`. `.github/workflows/publish-source-sdk.yml` stages it on a release tag whenever `source-sdk/package.json` names a version npm doesn't have yet, and it goes live once a maintainer approves it on npmjs.com with 2FA. To build it locally: `npm ci && npm --prefix source-sdk run build` (the types with `tsc`, the conformance bundle with esbuild).

@@ -1,6 +1,6 @@
 {
   "name": "@subwave/source-sdk",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Types, defineSource() and the conformance kit for SUB/WAVE music-source plugins.",
   "license": "MIT",
   "type": "module",
