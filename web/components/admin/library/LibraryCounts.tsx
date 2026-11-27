@@ -23,7 +23,8 @@ export interface LibraryOverview {
   canAir: number;
   taggedCanAir: number;
   djReady: number;
-  blocked: { total: number; track: number; album: number; artist: number; rule: number };
+  // `byEntry`: the same tally per entry and rule, keyed `type:id` (the Blocked tab's figures).
+  blocked: { total: number; track: number; album: number; artist: number; rule: number; byEntry: Record<string, number> };
   lengthLimits: { show: string | null; minSec: number | null; maxSec: number | null; within: number } | null;
   aired: { windowDays: number; recent: number; ever: number; never: number; since: string | null };
   attention: { eraAlbums: number; unmeasurable: number; remeasure: number; yearFailed: number; analysisFailed: number; damaged: number; total: number };

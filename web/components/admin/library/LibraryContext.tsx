@@ -20,7 +20,7 @@ import type {
   BlockRef, BlockType, BrowseResponse, LikeIndex, QueueBlockKind, QueueBlockResult, Track,
 } from './types';
 import { refreshPlaylistCatalogues } from '../playlist-cache';
-import { coveragePollMs } from './coverage-poll';
+import { blockSettle, coveragePollMs } from './coverage-poll';
 import {
   deleteBlockEntry, liftedText, notifyBlockedWithUndo, postBlock, reconcileBlockCaches,
   restampCachedBlockMarks,
@@ -140,6 +140,7 @@ export function LibraryProvider({
       taggerRunning: !!tagger?.running,
       data: q.state.data,
       reads: q.state.dataUpdateCount,
+      settle: blockSettle(q.state.dataUpdateCount),
     }),
   });
   const coverage = coverageQuery.data ?? null;

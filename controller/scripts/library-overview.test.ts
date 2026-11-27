@@ -60,13 +60,17 @@ test('library = can air + never play, and blocked rows split by what blocks them
   await blocklist.add({ type: 'track', id: 'a' });
   // Album entry by id, and its name fallback for a copy with another album id.
   await blocklist.add({ type: 'album', id: 'al-gone', name: 'Gone', artist: 'Artist' });
-  await blocklist.addRule({ label: 'No polka', field: 'genre', values: ['polka'] });
-  // Blocks nothing in the library.
+  const rule = await blocklist.addRule({ label: 'No polka', field: 'genre', values: ['polka'] });
+  // Blocks nothing in the library: absent from byEntry, not a 0 row.
   await blocklist.add({ type: 'artist', id: 'ar-nobody', name: 'Nobody' });
 
   const o = ov.computeOverview(NOW);
   assert.equal(o.library, 9);
-  assert.deepEqual(o.blocked, { total: 4, track: 1, album: 2, artist: 0, rule: 1 });
+  const { byEntry, ...split } = o.blocked;
+  assert.deepEqual(split, { total: 4, track: 1, album: 2, artist: 0, rule: 1 });
+  // The Blocked tab's per-line figure: one count per entry and rule, adding up to the total.
+  assert.deepEqual(byEntry, { 'track:a': 1, 'album:al-gone': 2, [`rule:${rule.id}`]: 1 });
+  assert.equal(Object.values(byEntry).reduce((a, b) => a + b, 0), o.blocked.total);
   assert.equal(o.canAir, 5);
   assert.equal(o.library, o.canAir + o.blocked.total);
 });

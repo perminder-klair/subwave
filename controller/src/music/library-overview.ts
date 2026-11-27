@@ -31,9 +31,12 @@ export interface LibraryOverview {
   djReady: number;
   /**
    * Rows the never-play list blocks now, by what blocks them (most specific
-   * first): each row counts once, so the parts add up to `total`.
+   * first). `byEntry` is the same tally per entry and rule, keyed `type:id`
+   * (`rule:id` for a rule): each row counts once, for the entry that blocks it
+   * first, so the parts add up to `total`. An entry absent from it blocks
+   * nothing in the library.
    */
-  blocked: { total: number; track: number; album: number; artist: number; rule: number };
+  blocked: { total: number; track: number; album: number; artist: number; rule: number; byEntry: Record<string, number> };
   /**
    * The length limits the show on air applies when picking (exclude-mode cap,
    * and the floor), and how many of canAir pass them. Null when none applies.
@@ -74,7 +77,7 @@ export function summariseRows(
   library: number; canAir: number; taggedCanAir: number; djReady: number;
   blocked: LibraryOverview['blocked']; within: number; canAirIds: Set<string>;
 } {
-  const blocked = { total: 0, track: 0, album: 0, artist: 0, rule: 0 };
+  const blocked = { total: 0, track: 0, album: 0, artist: 0, rule: 0, byEntry: {} as Record<string, number> };
   const canAirIds = new Set<string>();
   let taggedCanAir = 0;
   let djReady = 0;
@@ -85,6 +88,8 @@ export function summariseRows(
       blocked.total++;
       if (hit.kind === 'rule') blocked.rule++;
       else blocked[hit.type]++;
+      const key = `${hit.kind === 'rule' ? 'rule' : hit.type}:${hit.id}`;
+      blocked.byEntry[key] = (blocked.byEntry[key] ?? 0) + 1;
       continue;
     }
     canAirIds.add(r.id);

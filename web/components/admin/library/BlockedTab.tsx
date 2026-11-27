@@ -8,12 +8,17 @@ import { cn } from '../../../lib/cn';
 import { SkeletonRows } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
 import { CHECK_HIT } from './bits';
+import { blockedCount } from './blocked-counts';
 import type { BlockEntry } from './types';
 
 const entryKey = (e: BlockEntry) => `${e.type}:${e.id}`;
 
-export function BlockedTab({ entries, loading, unblocking, bulkBusy, onUnblock, onBulkUnblock, onRefresh }: {
+export function BlockedTab({ entries, counts, countedAt, loading, unblocking, bulkBusy, onUnblock, onBulkUnblock, onRefresh }: {
   entries: BlockEntry[] | null;
+  /** coverage.overview.blocked.byEntry: tracks each entry keeps off, keyed `type:id`. */
+  counts?: Record<string, number> | null;
+  /** When that tally was counted (coverage.overview.computedAt). */
+  countedAt?: string | null;
   loading: boolean;
   unblocking: string | null;
   bulkBusy: boolean;
@@ -96,6 +101,7 @@ export function BlockedTab({ entries, loading, unblocking, bulkBusy, onUnblock, 
           </div>
           {rows.map(e => {
             const key = entryKey(e);
+            const count = blockedCount(counts, e, countedAt);
             return (
               <div key={key} className="flex items-center gap-3 border-b border-dashed border-[var(--separator-strong)] px-4 py-2.5 last:border-b-0">
                 <label className={CHECK_HIT}>
@@ -106,9 +112,21 @@ export function BlockedTab({ entries, loading, unblocking, bulkBusy, onUnblock, 
                     aria-label={`select ${e.name || e.id}`}
                   />
                 </label>
-                <span className="lib-mtag shrink-0" title={`blocked ${e.type}`}>{e.type}</span>
+                <span className={cn('lib-mtag lib-ktag shrink-0', `lib-ktag-${e.type}`)} title={`blocked ${e.type}`}>{e.type}</span>
                 <div className="min-w-0 flex-1">
-                  <div className="lib-title">{e.name || e.id}</div>
+                  {/* Wraps: on a phone the figure drops under a long title
+                      rather than squeezing it to a few letters. */}
+                  <div className="flex min-w-0 flex-wrap items-baseline gap-x-2">
+                    <span className="lib-title max-w-full min-w-0">{e.name || e.id}</span>
+                    {count && (
+                      <span
+                        className={cn('shrink-0 font-mono text-[11px] tabular-nums', count.none ? 'text-muted' : 'text-ink')}
+                        title={count.title}
+                      >
+                        {count.label}
+                      </span>
+                    )}
+                  </div>
                   {(e.artist || e.album) && e.type !== 'artist' && (
                     <div className="lib-artist">{e.artist || ''}{e.album && e.type === 'track' ? ` · ${e.album}` : ''}</div>
                   )}
