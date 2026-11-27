@@ -104,6 +104,7 @@ export const LLMS_SECTIONS: LlmsSection[] = [
       { title: 'Community skills', href: { page: '/skills' } },
       { title: 'Stations', href: { page: '/stations' }, note: 'a directory of SUB/WAVE stations on air' },
       { title: 'Apps', href: { page: '/apps' }, note: 'players, bots and other clients built for SUB/WAVE' },
+      { title: 'Plugins', href: { page: '/plugins' }, note: 'community music-source plugins: servers beyond Navidrome, Jellyfin and Plex' },
       { title: 'Dispatches', href: { page: '/news' }, note: 'release news and how-tos' },
       { title: 'Private station mode', href: { repo: 'docs/private-station.md' } },
       { title: 'Multi-station profiles', href: { repo: 'docs/multi-station.md' } },

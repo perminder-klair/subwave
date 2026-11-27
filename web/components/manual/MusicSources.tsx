@@ -104,6 +104,12 @@ PLEX_TOKEN=…`}</CodeBlock>
         <p className="bs-eyebrow">INSTALL A PLUGIN</p>
         <h2>Copy, rescan, switch.</h2>
         <p>
+          Plugins other people have written and shared are listed in the{' '}
+          <Link href="/plugins" className="bs-link">plugins directory</Link>, each with what it plugs
+          into, the plugin API it targets and its conformance result. A plugin is code that runs in your
+          station&rsquo;s router, so read its source before you install it.
+        </p>
+        <p>
           <strong>1. Copy the plugin&rsquo;s folder</strong> into your station&rsquo;s plugins folder, as
           root. The folder belongs to root, so plugin code can never rewrite a plugin.
         </p>

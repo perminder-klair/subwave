@@ -37,27 +37,48 @@
     margin: 0;
     padding: 0;
     display: grid;
-    grid-template-columns: repeat(6, minmax(0, 1fr));
+    grid-template-columns: repeat(12, minmax(0, 1fr));
     gap: 0;
     border: 2px solid var(--ink);
 }
 .dept {
-    grid-column: span 2;
+    grid-column: span 3;
     min-width: 0;
     border-right: 1px solid var(--ink);
     border-bottom: 1px solid var(--ink);
 }
-/* Two big tiles on the top row, three on the bottom. */
+/* Two big tiles on the top row, four on the bottom. */
 .dept:nth-child(1),
 .dept:nth-child(2) {
-    grid-column: span 3;
+    grid-column: span 6;
 }
 .dept:nth-child(2),
-.dept:nth-child(5) {
+.dept:nth-child(6) {
     border-right: 0;
 }
 .dept:nth-child(n + 3) {
     border-bottom: 0;
+}
+/* Four across leaves a quarter of the panel each: the titles come down a size
+   so the longest (STATIONS) fits its tile. */
+.dept:nth-child(n + 3) .deptTitle {
+    font-size: clamp(26px, 2.9vw, 40px);
+}
+/* Too narrow for four: the bottom row goes two by two. */
+@media (min-width: 761px) and (max-width: 1100px) {
+    .dept:nth-child(n + 3) {
+        grid-column: span 6;
+    }
+    .dept:nth-child(4) {
+        border-right: 0;
+    }
+    .dept:nth-child(3),
+    .dept:nth-child(4) {
+        border-bottom: 1px solid var(--ink);
+    }
+    .dept:nth-child(n + 3) .deptTitle {
+        font-size: clamp(30px, 4vw, 52px);
+    }
 }
 @media (max-width: 760px) {
     .depts {
@@ -323,6 +344,10 @@
 .rollSeg[data-kind='app'] {
     fill: var(--line);
     background: var(--line);
+}
+.rollSeg[data-kind='plugin'] {
+    fill: color-mix(in oklab, var(--ink) 55%, var(--bg));
+    background: color-mix(in oklab, var(--ink) 55%, var(--bg));
 }
 .rollSeg[data-kind='station'] {
     fill: var(--ink-faint);
