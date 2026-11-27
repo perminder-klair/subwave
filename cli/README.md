@@ -45,6 +45,7 @@ update`, in that order ([why](../docs/updating.md#update)).
 | `doctor` | full diagnostic sweep — host, compose, controller, Icecast, state, logs |
 | `update` | pull new images and recreate what changed; exits non-zero if any step fails |
 | `sync` | refresh compose files that have fallen behind this binary (`--check` to dry-run) |
+| `source list` / `add <src>` / `remove <name>` | music-source plugins: list them with the router's load errors; install one from a folder, git URL, GitHub folder link or archive URL (shown, confirmed, copied in as root, rescanned, rolled back if the router refuses it); remove one that isn't selected |
 | `listen` / `admin` | open the player or admin console in a browser |
 | `self-update` | replace this binary with the latest release |
 | `uninstall` | tear down and remove the install |

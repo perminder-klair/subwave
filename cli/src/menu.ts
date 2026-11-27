@@ -13,6 +13,7 @@ import { runLogsCommand } from './commands/logs.ts';
 import { runOpenWebCommand } from './commands/open-web.ts';
 import { runSetupCommand } from './commands/setup.ts';
 import { runSyncCommand } from './commands/sync.ts';
+import { runSourceMenu } from './commands/source.ts';
 import { getSubwaveHome } from './util.ts';
 import { isCloneMode } from './home.ts';
 import { resolveInstallMode, detectDrift, hasDrift } from './compose-sync.ts';
@@ -55,6 +56,7 @@ export async function runMenu(): Promise<void> {
     options.push({ value: 'logs', label: 'logs', hint: 'tail docker compose logs' });
     options.push({ value: 'stop', label: 'stop', hint: 'docker compose down' });
   }
+  options.push({ value: 'plugins', label: 'plugins', hint: 'music-source plugins: list, add, remove' });
   options.push({ value: 'setup', label: 'setup', hint: 're-run the install wizard' });
   // Only shown when the on-disk compose has fallen behind the binary (#1043).
   if (composeFilesDrifted()) {
@@ -101,6 +103,7 @@ async function dispatch(choice: string): Promise<void> {
     case 'restart': return runRestartCommand();
     case 'logs':    return runLogsCommand();
     case 'sync':    return runSyncCommand();
+    case 'plugins': return runSourceMenu();
     case 'setup': {
       // The setup wizard owns its own Clack lifecycle, so menu-mode Esc
       // handling stands down for the duration.

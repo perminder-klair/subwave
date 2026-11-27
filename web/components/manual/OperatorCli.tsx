@@ -98,6 +98,25 @@ export default function OperatorCli() {
       </section>
 
       <section className="bs-section">
+        <p className="bs-eyebrow">SOURCE PLUGINS</p>
+        <h2>Install a music-source plugin in one line.</h2>
+        <p>
+          <code className="bs-code-inline">subwave source add</code> takes a plugin folder, a git URL,
+          a GitHub folder link or an archive URL. It shows you the manifest and every file, asks before
+          installing (a plugin is code), copies it into the plugins folder as root, rescans, and reports
+          whether the router loaded it, putting things back if it didn&rsquo;t.
+        </p>
+        <CodeBlock>{`subwave source add https://github.com/someone/subwave-emby --ref v1.2.0
+subwave source list
+subwave source remove emby`}</CodeBlock>
+        <p className="text-muted">
+          A plugin that reads music from your machine still needs that folder mounted into the
+          router: <code className="bs-code-inline">add</code> prints the compose lines rather than
+          editing your compose file. See <Link href="/manual/music-sources" className="bs-link">Music sources</Link>.
+        </p>
+      </section>
+
+      <section className="bs-section">
         <p className="bs-eyebrow">SCRIPTING IT</p>
         <h2>Every action runs without the menu too.</h2>
         <p>
