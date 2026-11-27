@@ -28,9 +28,10 @@ export default function MusicSources() {
           Everything but direct Navidrome is served by the <strong>music router</strong>, a small
           service in the stack (<code className="bs-code-inline">router</code>) that speaks the same
           API from a <em>source plugin</em>. On a Navidrome station it sits idle. Under{' '}
-          <em>Combine several libraries (advanced)</em> you can merge two sources into one station,
-          or reach Navidrome through the router. Nothing is de-duplicated, so an album both servers
-          hold appears twice.
+          <em>Advanced: route Navidrome through the router, or combine libraries</em> you can serve
+          your own Navidrome through the router, starting from the connection the station already
+          has and keeping every track id, or merge two sources into one station. Nothing is
+          de-duplicated, so an album both servers hold appears twice.
         </p>
       </section>
 

@@ -257,6 +257,17 @@ export interface MusicIdentitySource {
   rawIds?: boolean;
 }
 
+/**
+ * Whether a source publishes its server's own ids. A Navidrome library moving
+ * behind the router keeps the ids the station already stores unless the
+ * operator chose otherwise; every other source is prefixed unless told. The
+ * save applies it and the identity reads it, so the admin form's draft (which
+ * never sets the flag) cannot warn of a re-link the save will not run.
+ */
+export function musicSourceRawIds(source: Pick<MusicIdentitySource, 'plugin' | 'rawIds'>): boolean | undefined {
+  return source.rawIds ?? (source.plugin === 'navidrome' ? true : undefined);
+}
+
 /** Keys a plugin's manifest marks as secret. */
 export function musicSecretKeys(plugin: Pick<MusicPluginInfo, 'config'> | undefined): string[] {
   return (plugin?.config ?? []).filter((f) => f.type === 'secret').map((f) => f.key);
@@ -305,7 +316,7 @@ export function musicSelectionIdentity(
         // http://nd:4533/ and http://nd:4533 are one server.
         return k === 'url' && typeof v === 'string' ? v.trim().replace(/\/+$/, '') : v;
       };
-      return { plugin: s.plugin, rawIds: s.rawIds === true, config: Object.fromEntries(keys.map((k) => [k, value(k)])) };
+      return { plugin: s.plugin, rawIds: musicSourceRawIds(s) === true, config: Object.fromEntries(keys.map((k) => [k, value(k)])) };
     }),
   );
 }

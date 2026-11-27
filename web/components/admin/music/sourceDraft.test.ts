@@ -11,6 +11,7 @@ import {
   choiceOf,
   draftDirty,
   missingFields,
+  navidromeFromDirect,
   seedableSources,
   selectionLabel,
   selectionPayload,
@@ -134,4 +135,40 @@ test('a selection is its card: direct, one router source, or Advanced for a merg
   assert.equal(choiceOf({ mode: 'router', merge: true, sources: [src('jellyfin'), src('plex')] }), ADVANCED);
   assert.equal(selectionLabel({ mode: 'router', sources: [src('jellyfin'), src('mock')] }, [jellyfin]), 'Jellyfin + Demo library');
   assert.equal(selectionLabel({ mode: 'navidrome', sources: [] }, null), 'Navidrome');
+  // Named apart from the direct connection, or the switch reads "Switch to Navidrome" while Navidrome is on air.
+  assert.equal(selectionLabel({ mode: 'router', sources: [src('navidrome')] }, null), 'Navidrome via router');
+});
+
+const navidrome: MusicPluginInfo = {
+  ...jellyfin,
+  name: 'navidrome',
+  label: 'Navidrome',
+  idPrefix: 'nd',
+  config: [
+    { key: 'url', label: 'Server URL', type: 'url', required: true, affectsIds: true },
+    { key: 'user', label: 'Username', type: 'string', required: true, affectsIds: false },
+    { key: 'password', label: 'Password', type: 'secret', required: true },
+  ],
+};
+
+test('routing the station\'s own Navidrome starts from its connection and keeps its ids', () => {
+  const direct = { url: 'http://nd:4533', user: 'dj', passSet: true };
+  const draft = navidromeFromDirect(navidrome, direct);
+  assert.deepEqual(draft.config, { url: 'http://nd:4533', user: 'dj' });
+  assert.deepEqual(draft.secretsSet, ['password']);
+  assert.equal(selectionLabel({ mode: 'router', sources: [draft, blankSource(jellyfin)] }, [navidrome, jellyfin]), 'Navidrome + Jellyfin', 'a merge names its parts');
+  assert.deepEqual(missingFields(draft, navidrome), [], 'the stored password counts');
+  // The draft never sets rawIds, and the warning used to read that as new ids.
+  const onAir: SavedSelectionView = { mode: 'navidrome', merge: false, sources: [] };
+  assert.equal(changesTrackIds(onAir, 'router', [draft], [navidrome], direct.url), false, 'no re-link warning');
+  assert.equal(changesTrackIds(onAir, 'router', [{ ...draft, rawIds: false }], [navidrome], direct.url), true, 'prefixed ids are new ids');
+  // Pointed at another server, the borrowed password no longer applies.
+  const moved = { ...draft, config: { ...draft.config, url: 'http://elsewhere:4533' } };
+  assert.deepEqual(missingFields(moved, navidrome).map((f) => f.key), ['password']);
+  assert.equal(changesTrackIds(onAir, 'router', [moved], [navidrome], direct.url), true);
+  // Nothing on file: an empty form, as before.
+  assert.deepEqual(navidromeFromDirect(navidrome, null), blankSource(navidrome));
+  assert.deepEqual(navidromeFromDirect(navidrome, { url: 'http://nd:4533', user: 'dj', passSet: false }).secretsSet, []);
+  // The borrowed server is the draft's own business, never sent.
+  assert.deepEqual(selectionPayload('router', false, [draft]), { mode: 'router', merge: false, sources: [{ plugin: 'navidrome', config: { url: 'http://nd:4533', user: 'dj' } }] });
 });
