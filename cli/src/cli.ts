@@ -24,6 +24,9 @@ Usage:
   subwave logs [svc|all]   tail docker compose logs (dev adds \`web-dev\`)
   subwave update           pull new images + recreate changed services
   subwave sync             refresh compose files that are behind this CLI (--check to dry-run)
+  subwave source list      music-source plugins: installed, built-in, load errors
+  subwave source add <src> install a plugin from a folder, git URL or archive URL
+  subwave source remove <name>  remove an installed plugin
   subwave listen [dev|prod] open the web player in a browser
   subwave admin [dev|prod] open the admin console in a browser
   subwave self-update      replace the installed binary with the latest release
@@ -46,6 +49,13 @@ uninstall flags:
   --images                 also remove the pulled ghcr images
   --binary                 also remove the subwave binary
   --yes, -y                skip the confirmation prompt
+
+source flags:
+  --ref <tag>              add: the git tag or branch to fetch
+  --path <dir>             add: the plugin's folder inside the repo or archive
+  --yes, -y                add/remove: skip the confirmation
+  --force                  remove: go ahead when the controller can't be asked
+  --purge-data             remove: also delete state/router/data/<name>
 
   subwave help             show this message
   subwave --version        print version
@@ -195,6 +205,39 @@ async function main(): Promise<void> {
     case 'sync': {
       const { runSyncCommand } = await import('./commands/sync.ts');
       await runSyncCommand({ check: rest.includes('--check') });
+      return;
+    }
+    case 'source': {
+      const { runSourceList, runSourceAdd, runSourceRemove } = await import('./commands/source.ts');
+      const [sub, ...args] = rest;
+      const flag = (name: string): string | undefined => {
+        const i = args.findIndex((a) => a === `--${name}` || a.startsWith(`--${name}=`));
+        if (i < 0) return undefined;
+        const a = args[i] as string;
+        if (a.includes('=')) return a.slice(a.indexOf('=') + 1);
+        const v = args[i + 1];
+        args.splice(i + 1, 1);
+        return v;
+      };
+      const ref = flag('ref');
+      const path = flag('path');
+      const yes = args.includes('--yes') || args.includes('-y');
+      const positional = args.filter((a) => !a.startsWith('-'));
+      if (sub === 'list' || sub === undefined) {
+        await runSourceList();
+      } else if (sub === 'add' && positional[0]) {
+        await runSourceAdd({ source: positional[0], ref, path, yes });
+      } else if (sub === 'remove' && positional[0]) {
+        await runSourceRemove({
+          name: positional[0],
+          yes,
+          force: args.includes('--force'),
+          purgeData: args.includes('--purge-data'),
+        });
+      } else {
+        process.stderr.write('Usage: subwave source list | add <folder|git URL|archive URL> | remove <name>\n');
+        process.exit(2);
+      }
       return;
     }
     case 'listen':

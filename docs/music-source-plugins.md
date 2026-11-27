@@ -12,7 +12,9 @@ my-source/
   index.mjs             # export default (ctx) => ({ ...ops })
 ```
 
-Install it by copying the folder into the station's `router/plugins/` folder and pressing **Rescan plugins** in Admin → Music source (Source tab → *Don't see your server?*). It then appears as a card in the source picker, tagged *installed*, with a settings form drawn from your manifest. That folder belongs to root, so plugin code can never rewrite a plugin; copy as root. Where it is:
+On a compose install, the CLI does the whole install: `subwave source add <folder | git URL | archive URL>` shows the manifest and the files, asks, copies the plugin in as root, rescans, and reports whether the router loaded it, putting things back as they were if it didn't. A GitHub folder link (`…/tree/<ref>/<path>`) works as is; `--ref` and `--path` cover anything else. `subwave source list` shows what's installed with any load errors, and `subwave source remove <name>` removes a plugin that isn't selected.
+
+By hand, install it by copying the folder into the station's `router/plugins/` folder and pressing **Rescan plugins** in Admin → Music source (Source tab → *Don't see your server?*). It then appears as a card in the source picker, tagged *installed*, with a settings form drawn from your manifest. That folder belongs to root, so plugin code can never rewrite a plugin; copy as root. Where it is:
 
 | Install | Plugins folder |
 | --- | --- |

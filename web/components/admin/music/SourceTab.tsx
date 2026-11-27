@@ -548,7 +548,8 @@ function AddSourceHint({ adminFetch, onRescanned, routerUp }: { adminFetch: Admi
       </button>
       {open && (
         <div className="max-w-[560px] border border-ink bg-[var(--ink-softer)] p-3 text-[12px] leading-[1.55] text-ink">
-          Other servers come as source plugins. Copy a plugin folder into <code>state/router/plugins/</code> as root
+          Other servers come as source plugins. With the CLI, <code>subwave source add &lt;folder or link&gt;</code> installs one
+          and rescans. By hand, copy a plugin folder into <code>state/router/plugins/</code> as root
           (<code>sudo cp -r</code>: the folder is root&apos;s, so plugin code cannot rewrite a plugin), then Rescan.
           Plugins are code that runs in the router — install only ones you have read and trust.{' '}
           <Link href="/plugins" className="underline">Find a plugin</Link>

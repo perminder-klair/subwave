@@ -110,6 +110,16 @@ PLEX_TOKEN=…`}</CodeBlock>
           station&rsquo;s router, so read its source before you install it.
         </p>
         <p>
+          On a compose install the CLI does steps 1 and 3 for you. It shows the plugin&rsquo;s manifest
+          and files, asks before installing, copies it in as root, rescans, and tells you whether the
+          router loaded it, undoing the copy if it didn&rsquo;t:
+        </p>
+        <CodeBlock>{`subwave source add https://github.com/someone/subwave-emby
+subwave source add ./my-plugin
+subwave source list
+subwave source remove emby`}</CodeBlock>
+        <p>By hand, or on the all-in-one image and Unraid:</p>
+        <p>
           <strong>1. Copy the plugin&rsquo;s folder</strong> into your station&rsquo;s plugins folder, as
           root. The folder belongs to root, so plugin code can never rewrite a plugin.
         </p>
