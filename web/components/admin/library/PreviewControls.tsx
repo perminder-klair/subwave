@@ -1,6 +1,6 @@
 'use client';
 
-// The preview player's row controls (G23), shared by every Library list that
+// The preview player's row controls, shared by every Library list that
 // shows a cover: the cover as the play button, and the bar under the playing
 // row. The store behind them is preview-player.ts.
 
@@ -10,7 +10,7 @@ import { cn } from '../../../lib/cn';
 import { useAdminAuth, ADMIN_API_URL } from '../../../lib/adminAuth';
 import { adminJson } from '../../../lib/admin-query';
 import { Thumb } from './bits';
-import { canSetVolume, fmtClock, usePreviewPlayer, type PreviewPlayer, type PreviewSnapshot } from './preview-player';
+import { canSetVolume, fmtClock, usePreviewPlayer, type PreviewLink, type PreviewPlayer, type PreviewSnapshot } from './preview-player';
 import type { Track } from './types';
 
 // The shared player, and the signed link its <audio> element plays
@@ -18,9 +18,9 @@ import type { Track } from './types';
 export function usePreviewControls() {
   const { snap, player } = usePreviewPlayer();
   const { adminFetch } = useAdminAuth();
-  const linkFor = (id: string) => async () => {
-    const j = await adminJson<{ path: string }>(adminFetch, `/library/${encodeURIComponent(id)}/preview`, { method: 'POST' });
-    return `${ADMIN_API_URL}${j.path}`;
+  const linkFor = (id: string) => async (): Promise<PreviewLink> => {
+    const j = await adminJson<{ path: string; expiresInSec: number }>(adminFetch, `/library/${encodeURIComponent(id)}/preview`, { method: 'POST' });
+    return { url: `${ADMIN_API_URL}${j.path}`, expiresInSec: j.expiresInSec };
   };
   return { snap, player, linkFor };
 }

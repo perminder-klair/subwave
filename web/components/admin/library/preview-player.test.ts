@@ -6,12 +6,18 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createPreviewPlayer, fmtClock, parseVolume, type PreviewAudio } from './preview-player';
+import { createPreviewPlayer, fmtClock, parseVolume, LINK_EXPIRY_MARGIN_MS, type PreviewAudio, type PreviewLink } from './preview-player';
+
+const TTL = 6 * 3600;
+const at = (url: string): PreviewLink => ({ url, expiresInSec: TTL });
 
 class FakeAudio implements PreviewAudio {
-  src = '';
+  private source = '';
   currentTime = 0;
   duration = Number.NaN;
+  // A new source starts at 0 with no length, as a real element's load does.
+  get src() { return this.source; }
+  set src(v: string) { this.source = v; this.currentTime = 0; this.duration = Number.NaN; }
   paused = true;
   volume = 1;
   muted = false;
@@ -33,16 +39,17 @@ class FakeAudio implements PreviewAudio {
     this.paused = true;
     this.emit('pause');
   }
-  removeAttribute(name: string) { if (name === 'src') this.src = ''; }
+  removeAttribute(name: string) { if (name === 'src') this.source = ''; }
   load() {}
 }
 
 function setup() {
   const audio = new FakeAudio();
-  const player = createPreviewPlayer(() => audio);
+  const clock = { now: 1_000_000 };
+  const player = createPreviewPlayer(() => audio, undefined, () => clock.now);
   const links: string[] = [];
-  const link = (id: string) => async () => { links.push(id); return `/api/library/preview/${id}?exp=1&sig=x`; };
-  return { audio, player, links, link };
+  const link = (id: string) => async () => { links.push(id); return at(`/api/library/preview/${id}?exp=1&sig=x`); };
+  return { audio, player, links, link, clock };
 }
 
 test('a press plays the track from a fresh link; a second press pauses, a third resumes', async () => {
@@ -88,7 +95,7 @@ test('the bar follows the element and seeks within the track', async () => {
 test('a link that arrives after the operator moved on never starts', async () => {
   const { audio, player, link } = setup();
   let release!: (v: string) => void;
-  const slow = () => new Promise<string>(r => { release = r; });
+  const slow = () => new Promise<PreviewLink>(r => { release = (url: string) => r(at(url)); });
   const first = player.toggle('a', slow);
   await player.toggle('b', link('b'));
   release('/api/library/preview/a?late');
@@ -128,7 +135,7 @@ test('the level is applied to the element, kept across previews and saved', asyn
   const store = memoryStore();
   const player = createPreviewPlayer(() => audio, store);
   player.setVolume(0.4);
-  await player.toggle('a', async () => '/a');
+  await player.toggle('a', async () => at('/a'));
   assert.equal(audio.volume, 0.4, 'an element made after the change starts at the level');
   player.stop();
   assert.equal(player.getSnapshot().volume, 0.4, 'stopping keeps the level');
@@ -142,7 +149,7 @@ test('the level is applied to the element, kept across previews and saved', asyn
 test('the saved level is read back, and a bad one is full level', async () => {
   const audio = new FakeAudio();
   const player = createPreviewPlayer(() => audio, memoryStore('0.3:m'));
-  await player.toggle('a', async () => '/a');
+  await player.toggle('a', async () => at('/a'));
   assert.deepEqual([audio.volume, audio.muted], [0.3, true]);
   assert.deepEqual(parseVolume('junk'), { volume: 1, muted: false });
   assert.deepEqual(parseVolume(null), { volume: 1, muted: false });
@@ -156,7 +163,7 @@ test('mute toggles; raising the level unmutes; unmuting at zero comes back at ha
   const audio = new FakeAudio();
   const store = memoryStore();
   const player = createPreviewPlayer(() => audio, store);
-  await player.toggle('a', async () => '/a');
+  await player.toggle('a', async () => at('/a'));
   player.toggleMute();
   assert.equal(audio.muted, true);
   assert.equal(store.read(), '1:m');
@@ -172,4 +179,83 @@ test('the clock reads m:ss', () => {
   assert.equal(fmtClock(0), '0:00');
   assert.equal(fmtClock(65.9), '1:05');
   assert.equal(fmtClock(Number.NaN), '0:00');
+});
+
+test('resuming after the link lapsed signs again and keeps the position', async () => {
+  const { audio, player, links, link, clock } = setup();
+  await player.toggle('a', link('a'));
+  audio.duration = 300;
+  audio.emit('loadedmetadata');
+  audio.currentTime = 95;
+  audio.emit('timeupdate');
+  await player.toggle('a', link('a'));
+  assert.equal(player.getSnapshot().status, 'paused');
+  clock.now += TTL * 1000 - LINK_EXPIRY_MARGIN_MS + 1;
+  await player.toggle('a', link('a'));
+  assert.deepEqual(links, ['a', 'a'], 'a fresh link');
+  assert.equal(player.getSnapshot().time, 95, 'the bar holds its place while the new link loads');
+  assert.equal(player.getSnapshot().duration, 300);
+  audio.emit('timeupdate');
+  assert.equal(player.getSnapshot().time, 95, "the new source's 0 is not published");
+  audio.duration = 300;
+  audio.emit('loadedmetadata');
+  assert.equal(audio.currentTime, 95, 'restored once the metadata is in');
+  assert.equal(player.getSnapshot().status, 'playing');
+});
+
+test("a resume within the link's life reuses it", async () => {
+  const { player, links, link, clock } = setup();
+  await player.toggle('a', link('a'));
+  await player.toggle('a', link('a'));
+  clock.now += TTL * 1000 - LINK_EXPIRY_MARGIN_MS - 1;
+  await player.toggle('a', link('a'));
+  assert.deepEqual(links, ['a']);
+});
+
+test('a seek while the fresh link loads is where the restore lands', async () => {
+  const { audio, player, link, clock } = setup();
+  await player.toggle('a', link('a'));
+  audio.duration = 300;
+  audio.emit('loadedmetadata');
+  audio.currentTime = 40;
+  audio.emit('timeupdate');
+  await player.toggle('a', link('a'));
+  clock.now += TTL * 1000;
+  await player.toggle('a', link('a'));
+  player.seek(200);
+  assert.equal(player.getSnapshot().time, 200);
+  audio.duration = 300;
+  audio.emit('loadedmetadata');
+  assert.equal(audio.currentTime, 200);
+});
+
+test('the press after an error keeps the place in the track', async () => {
+  const { audio, player, links, link } = setup();
+  await player.toggle('a', link('a'));
+  audio.duration = 300;
+  audio.emit('loadedmetadata');
+  audio.currentTime = 120;
+  audio.emit('timeupdate');
+  audio.emit('error');
+  assert.equal(player.getSnapshot().status, 'error');
+  await player.toggle('a', link('a'));
+  assert.deepEqual(links, ['a', 'a']);
+  audio.duration = 300;
+  audio.emit('loadedmetadata');
+  assert.equal(audio.currentTime, 120);
+});
+
+test('a resume that fails after the operator moved on shows no error', async () => {
+  const { audio, player, link } = setup();
+  await player.toggle('a', link('a'));
+  await player.toggle('a', link('a'));
+  let reject!: (e: Error) => void;
+  audio.play = () => new Promise<void>((_, r) => { reject = r; });
+  const resume = player.toggle('a', link('a'));
+  player.stop();
+  audio.play = FakeAudio.prototype.play.bind(audio);
+  await player.toggle('a', link('a'));
+  reject(new Error('AbortError'));
+  await resume;
+  assert.deepEqual({ id: player.getSnapshot().id, status: player.getSnapshot().status }, { id: 'a', status: 'playing' });
 });
