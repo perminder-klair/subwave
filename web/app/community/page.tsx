@@ -12,7 +12,7 @@ import { pageMeta } from '@/lib/seo';
 export const metadata = pageMeta({
   title: 'SUB/WAVE — Community',
   description:
-    'Everything SUB/WAVE operators have built and shared: DJ skills, personas, shows, apps and stations, with the newest additions and the people who sent them in.',
+    'Everything SUB/WAVE operators have built and shared: DJ skills, personas, shows, apps, music-source plugins and stations, with the newest additions and the people who sent them in.',
   path: '/community',
 });
 
@@ -25,10 +25,11 @@ const DEPT: Record<Kind, { tag: string; title: string; blurb: string; noun: stri
   persona: { tag: 'The Green Room', title: 'Personas', blurb: 'DJs to book for your booth, each one a soul and a set of dials.', noun: 'Persona' },
   show: { tag: 'The Programme Guide', title: 'Shows', blurb: 'Slots to fill your grid: a topic brief and the filters that pick the music.', noun: 'Show' },
   app: { tag: 'The Receivers', title: 'Apps', blurb: 'Players, bots and clients that tune in.', noun: 'App' },
+  plugin: { tag: 'The Patch Bay', title: 'Plugins', blurb: 'Music sources beyond the ones built in: plug your station into another server.', noun: 'Plugin' },
   station: { tag: 'The Dial', title: 'Stations', blurb: 'SUB/WAVE stations on air around the world.', noun: 'Station' },
 };
 
-const KIND_ORDER: Kind[] = ['persona', 'skill', 'show', 'app', 'station'];
+const KIND_ORDER: Kind[] = ['persona', 'skill', 'show', 'app', 'plugin', 'station'];
 
 function Departments({ d }: { d: Digest }) {
   return (
@@ -200,7 +201,7 @@ export default function CommunityIndex() {
         helpLabel="How contributing works"
       />
 
-      <Suspense fallback={<CatalogGridSkeleton count={5} />}>
+      <Suspense fallback={<CatalogGridSkeleton count={6} />}>
         <Commons />
       </Suspense>
     </article>

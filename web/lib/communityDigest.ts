@@ -3,9 +3,9 @@
 // catalog.json lists (lib/communityCatalog.ts), so the page issues one fetch.
 import type { CommunityCatalog } from './communityCatalog';
 
-export type Kind = 'skill' | 'persona' | 'show' | 'app' | 'station';
+export type Kind = 'skill' | 'persona' | 'show' | 'app' | 'plugin' | 'station';
 
-export const KINDS: Kind[] = ['skill', 'persona', 'show', 'app', 'station'];
+export const KINDS: Kind[] = ['skill', 'persona', 'show', 'app', 'plugin', 'station'];
 
 export interface WireItem {
   kind: Kind;
@@ -36,6 +36,7 @@ const HREF: Record<Kind, string> = {
   persona: '/personas',
   show: '/shows',
   app: '/apps',
+  plugin: '/plugins',
   station: '/stations',
 };
 
@@ -43,6 +44,7 @@ const ANCHOR: Partial<Record<Kind, string>> = {
   skill: 'skill-',
   persona: 'persona-',
   show: 'show-',
+  plugin: 'plugin-',
 };
 
 function nameOf(kind: Kind, e: Record<string, unknown>): string | undefined {
@@ -52,17 +54,17 @@ function nameOf(kind: Kind, e: Record<string, unknown>): string | undefined {
 }
 
 function byOf(kind: Kind, e: Record<string, unknown>): string | undefined {
-  const raw = kind === 'app' ? e.author : kind === 'station' ? e.operator : e.submittedBy;
+  const raw = kind === 'app' || kind === 'plugin' ? e.author : kind === 'station' ? e.operator : e.submittedBy;
   return str(raw)?.replace(/^@/, '');
 }
 
 function dateOf(kind: Kind, e: Record<string, unknown>): string | undefined {
-  const d = kind === 'app' || kind === 'station' ? str(e.submitted) : str(e.dateAdded);
+  const d = kind === 'app' || kind === 'plugin' || kind === 'station' ? str(e.submitted) : str(e.dateAdded);
   return d && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : undefined;
 }
 
 function listOf(cat: CommunityCatalog, kind: Kind): Record<string, unknown>[] {
-  return { skill: cat.skills, persona: cat.personas, show: cat.shows, app: cat.apps, station: cat.stations }[kind];
+  return { skill: cat.skills, persona: cat.personas, show: cat.shows, app: cat.apps, plugin: cat.plugins, station: cat.stations }[kind];
 }
 
 export function digest(cat: CommunityCatalog, wireSize = 10): Digest {
@@ -99,7 +101,7 @@ export function digest(cat: CommunityCatalog, wireSize = 10): Digest {
         const key = by.toLowerCase();
         const c =
           people.get(key) ??
-          ({ handle: by, total: 0, byKind: { skill: 0, persona: 0, show: 0, app: 0, station: 0 } } as Contributor);
+          ({ handle: by, total: 0, byKind: { skill: 0, persona: 0, show: 0, app: 0, plugin: 0, station: 0 } } as Contributor);
         c.total += 1;
         c.byKind[kind] += 1;
         people.set(key, c);

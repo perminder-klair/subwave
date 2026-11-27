@@ -1,0 +1,299 @@
+/* /plugins — the Patch Bay. Each music-source plugin is a jack on the panel: a
+   strip, a socket labelled with what it plugs into, the facts the submission
+   proved and its conformance counts. Theme tokens only, so every station theme
+   and dark mode carry through; the only motion is a hover lift, which
+   prefers-reduced-motion: reduce drops. The card frame follows /apps
+   (components/apps/apps.module.css) so the two directories read as one shop. */
+
+.grid {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+    gap: clamp(24px, 3vw, 40px);
+}
+.card {
+    --card-pad: clamp(16px, 2vw, 22px);
+    display: flex;
+    flex-direction: column;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    box-shadow:
+        0 1px 0 var(--separator-strong),
+        0 14px 24px -18px color-mix(in oklab, var(--ink) 45%, transparent);
+    min-width: 0;
+    scroll-margin-top: 24px;
+    transition:
+        transform 200ms ease,
+        box-shadow 200ms ease;
+}
+.card:hover,
+.card:focus-within,
+.card:target {
+    transform: translate(-3px, -3px);
+    box-shadow: 8px 8px 0 var(--accent);
+}
+.cardStrip {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    padding: 12px var(--card-pad) 8px;
+    border-bottom: 2px solid var(--accent);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+.badge {
+    padding: 2px 7px;
+    background: var(--ink);
+    color: var(--bg);
+    letter-spacing: 0.16em;
+}
+
+/* ---- The socket --------------------------------------------------------- */
+
+.socket {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 18px var(--card-pad);
+    border-bottom: 1px solid var(--line);
+    background: var(--bg);
+}
+/* A quarter-inch jack: a ring, a shadowed hole, and a nut. */
+.socketHole {
+    flex: none;
+    width: 46px;
+    height: 46px;
+    border-radius: 50%;
+    border: 3px solid var(--ink);
+    background: radial-gradient(circle at center, var(--ink) 0 9px, var(--surface) 10px 100%);
+    box-shadow:
+        0 0 0 5px var(--bg),
+        0 0 0 6px var(--separator-strong);
+}
+.socketLabel {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+.socketEyebrow {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+.socketName {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink);
+    overflow-wrap: anywhere;
+}
+
+/* ---- Body --------------------------------------------------------------- */
+
+.body {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 16px var(--card-pad) 18px;
+    min-width: 0;
+}
+.name {
+    margin: 0;
+    min-width: 0;
+    font-family: var(--font-display);
+    font-size: clamp(21px, 2.2vw, 27px);
+    font-weight: 900;
+    line-height: 1.02;
+    letter-spacing: -0.01em;
+    overflow-wrap: anywhere;
+}
+.nameLink {
+    color: inherit;
+    text-decoration: none;
+    transition: color 120ms;
+}
+.nameLink:hover,
+.nameLink:focus-visible {
+    color: var(--accent);
+    text-decoration: underline;
+    text-decoration-thickness: 2px;
+    text-underline-offset: 3px;
+}
+
+.facts {
+    display: grid;
+    gap: 8px;
+    margin: 0;
+}
+.facts > div {
+    display: grid;
+    grid-template-columns: 9.5em minmax(0, 1fr);
+    gap: 10px;
+    align-items: baseline;
+}
+.facts dt {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+.facts dd {
+    margin: 0;
+    font-size: 13px;
+    color: var(--ink);
+    overflow-wrap: anywhere;
+}
+.facts code {
+    font-family: var(--font-mono);
+    font-size: 12px;
+}
+
+/* ---- Conformance meter -------------------------------------------------- */
+
+.meter {
+    display: grid;
+    gap: 6px;
+}
+.meterTitle {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+.meterRow {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    border: 1px solid var(--ink);
+}
+.meterCell {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 6px 8px;
+    border-right: 1px solid var(--ink);
+}
+.meterCell:last-child {
+    border-right: 0;
+}
+.meterCount {
+    font-family: var(--font-display);
+    font-size: 20px;
+    font-weight: 900;
+    line-height: 1;
+    color: var(--ink);
+}
+.meterLabel {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+.meterCell[data-outcome='pass'] {
+    box-shadow: inset 0 -3px 0 var(--accent);
+}
+.meterCell[data-outcome='fail']:not([data-zero]) {
+    background: var(--ink);
+}
+.meterCell[data-outcome='fail']:not([data-zero]) .meterCount,
+.meterCell[data-outcome='fail']:not([data-zero]) .meterLabel {
+    color: var(--bg);
+}
+.meterCell[data-zero] .meterCount {
+    color: var(--ink-faint);
+}
+.unchecked {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+}
+
+/* ---- Foot --------------------------------------------------------------- */
+
+/* Pinned to the bottom, so the links line up along a row of uneven cards. */
+.foot {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    margin-top: auto;
+    padding-top: 4px;
+}
+.warn {
+    margin: 0;
+    padding: 8px 10px;
+    border-left: 3px solid var(--accent);
+    background: var(--bg);
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--ink);
+}
+.links {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+}
+.get {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    background: var(--ink);
+    color: var(--bg);
+    font-weight: 700;
+    text-decoration: none;
+    box-shadow: 3px 3px 0 var(--accent);
+    transition:
+        transform 120ms ease,
+        box-shadow 120ms ease;
+}
+.get:hover,
+.get:focus-visible {
+    transform: translate(-2px, -2px);
+    box-shadow: 5px 5px 0 var(--accent);
+}
+.credit {
+    padding-top: 12px;
+    border-top: 1px dashed var(--separator-strong);
+}
+
+/* ---- Small print -------------------------------------------------------- */
+
+.fine {
+    margin: clamp(24px, 4vw, 40px) 0 0;
+    max-width: 78ch;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--muted);
+}
+.fine + .fine {
+    margin-top: 10px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .card,
+    .get {
+        transition: none;
+    }
+}

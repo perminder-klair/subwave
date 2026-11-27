@@ -11,6 +11,7 @@ const ROUTES = [
   '/community',
   '/stations',
   '/apps',
+  '/plugins',
   '/personas',
   '/shows',
   '/skills',

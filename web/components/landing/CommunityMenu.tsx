@@ -16,6 +16,7 @@ const COMMUNITY = [
   { href: '/personas', tag: 'The Green Room', title: 'Personas', blurb: 'DJs to book for your booth.' },
   { href: '/shows', tag: 'The Programme Guide', title: 'Shows', blurb: 'Slots to fill your grid.' },
   { href: '/apps', tag: 'The Receivers', title: 'Apps', blurb: 'Players, bots and clients.' },
+  { href: '/plugins', tag: 'The Patch Bay', title: 'Plugins', blurb: 'Music sources beyond the built-ins.' },
 ] as const;
 
 export default function CommunityMenu() {

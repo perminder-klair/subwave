@@ -13,9 +13,10 @@ export interface CommunityCatalog {
   shows: Record<string, unknown>[];
   stations: Record<string, unknown>[];
   apps: Record<string, unknown>[];
+  plugins: Record<string, unknown>[];
 }
 
-const EMPTY: CommunityCatalog = { skills: [], personas: [], shows: [], stations: [], apps: [] };
+const EMPTY: CommunityCatalog = { skills: [], personas: [], shows: [], stations: [], apps: [], plugins: [] };
 
 const arr = (v: unknown): Record<string, unknown>[] =>
   Array.isArray(v) ? (v as Record<string, unknown>[]) : [];
@@ -36,6 +37,8 @@ export async function fetchCommunityCatalog(): Promise<CommunityCatalog> {
       // `apps` postdates the other four; arr() maps a missing key to [], so an
       // older catalog is an empty directory rather than a crash.
       apps: arr(data.apps),
+      // `plugins` (#2413) likewise: absent until the catalog carries it.
+      plugins: arr(data.plugins),
     };
   } catch {
     return EMPTY;

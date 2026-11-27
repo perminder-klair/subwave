@@ -551,7 +551,9 @@ function AddSourceHint({ adminFetch, onRescanned, routerUp }: { adminFetch: Admi
           Other servers come as source plugins. Copy a plugin folder into <code>state/router/plugins/</code> as root
           (<code>sudo cp -r</code>: the folder is root&apos;s, so plugin code cannot rewrite a plugin), then Rescan.
           Plugins are code that runs in the router — install only ones you have read and trust.{' '}
-          <Link href="/manual/music-sources" className="underline">Writing a plugin</Link>
+          <Link href="/plugins" className="underline">Find a plugin</Link>
+          {' · '}
+          <Link href="/manual/music-sources" className="underline">Installing and writing one</Link>
           <div className="mt-2">
             <Btn sm onClick={rescan} disabled={rescanning || !routerUp}>{rescanning ? 'Rescanning…' : 'Rescan plugins'}</Btn>
           </div>
