@@ -33,6 +33,7 @@ import {
   validateAgenticLeaningsReplacement,
   type PickResolution,
 } from './leanings-review.js';
+import type { PickNoteLanguage } from './pick-reason-language.js';
 
 export type LeaningsRoute = {
   kind: 'djAgentLeaningsReview' | 'djShortlistLeaningsReview';
@@ -80,6 +81,7 @@ export async function runLeaningsReview({
   reviewTimeoutMs,
   log,
   logEvent,
+  noteLanguage = null,
 }: {
   song: any;
   object: any;
@@ -96,6 +98,9 @@ export async function runLeaningsReview({
   reviewTimeoutMs: number;
   log: (line: string) => void;
   logEvent: (event: string, fields: Record<string, unknown>) => void;
+  // The on-air persona's note language (pick-reason-language.ts): the review
+  // writes its musicalReason in it, and the Booth line is worded for it.
+  noteLanguage?: PickNoteLanguage;
 }): Promise<LeaningsPassResult> {
   const preliminaryId = String(song.id);
   resolution.leaningsReview = { outcome: 'not-run', replacementId: null };
@@ -140,7 +145,7 @@ export async function runLeaningsReview({
   try {
     const compactById = new Map(compactCandidates.map((candidate) => [String(candidate.id), candidate]));
     const answer: any = await withDeadline(reviewTimeoutMs, route.kind, async signal => review({
-      system: agenticLeaningsReviewSystem(),
+      system: agenticLeaningsReviewSystem(noteLanguage),
       prompt: agenticLeaningsReviewPrompt({
         baseline: compactCandidates[0],
         challengers: compactCandidates.slice(1),
@@ -207,6 +212,7 @@ export async function runLeaningsReview({
       leaningsOwnerName: owner?.ownerName ?? (owner?.source === 'guest' ? 'The guest' : djName),
       basis: validation.basis,
       musicalReason: answer.musicalReason,
+      language: noteLanguage,
     });
     resolution.leaningsReview = {
       outcome: 'replaced', replacementId: String(replacement.id), track: agenticTrackRef(replacement),

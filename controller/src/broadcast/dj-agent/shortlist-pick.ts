@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { djObject, modelTolerant } from '../../llm/sdk.js';
 import { pickSchemaBase, pickSystem, transitionChoiceNudge } from './schemas.js';
 import { MUSICAL_REASON_UNAVAILABLE, type PickResolution } from './leanings-review.js';
+import { creditedNote, creditedTrack, isEnglishNote, noteLength, type PickNoteLanguage } from './pick-reason-language.js';
 import type { PickerCandidate, ShortlistCandidate, ShortlistSourceRun } from '../../music/shortlist.js';
 import { promptRecapEntries, type PromptMemoryEntry } from '../prompt-memory.js';
 import * as settings from '../../settings.js';
@@ -69,6 +70,10 @@ function comparable(value: unknown): string {
     .trim();
 }
 
+// English scrubs. On a non-English note (pick-reason-language.ts) the
+// backstage and queue ones only catch English leaking into it, and match no
+// ordinary word of another language. The first-person one would ("me" is
+// French, Spanish and Italian, and "i" an Italian article), so it is English-only.
 const BACKSTAGE_LANGUAGE = /\b(?:shortlist|candidate|baseline|challenger|preliminary (?:pick|choice)|controller|metadata|flowCloseness|leaningsMatches|musical leanings?|preferences?|tastes?|DJ)\b/i;
 const FIRST_PERSON_LANGUAGE = /\b(?:I|me|my|mine|we|us|our|ours)\b/i;
 const UNUSABLE_SELECTION_REASON = '[selection note unavailable]';
@@ -77,11 +82,16 @@ const QUEUE_LANGUAGE = /\b(?:next\s+up|up\s+next|coming\s+up|we(?:'|’)re\s+pla
 // The model owns only the musical clause. Identity and punctuation are added
 // from the selected library row, so a stale response can never mis-credit a
 // track after a guard correction.
-export function shortlistClauseSelectionReason(track: any, reason: unknown): string {
+// A non-English clause (`language`, pick-reason-language.ts) keeps its own
+// opening and capitals, and when it is unusable the note is the credit alone:
+// the English stand-in clause is never put under another language's credit.
+export function shortlistClauseSelectionReason(track: any, reason: unknown, language: PickNoteLanguage = null): string {
   const title = typeof track?.title === 'string' ? track.title.trim() : '';
   const artist = typeof track?.artist === 'string' ? track.artist.trim() : '';
+  const english = isEnglishNote(language);
+  // English re-closes the clause itself; another language keeps its own stop.
   const raw = typeof reason === 'string'
-    ? reason.replace(/\s+/g, ' ').trim().replace(/[.!?]+$/, '')
+    ? (english ? reason.replace(/\s+/g, ' ').trim().replace(/[.!?]+$/, '') : reason.replace(/\s+/g, ' ').trim())
     : '';
   const identityText = comparable(raw);
   const repeatsIdentity = [title, artist]
@@ -89,8 +99,12 @@ export function shortlistClauseSelectionReason(track: any, reason: unknown): str
     .filter((value) => value.length >= 3)
     .some((value) => ` ${identityText} `.includes(` ${value} `));
   const unsafe = raw === MUSICAL_REASON_UNAVAILABLE
-    || raw.length < 16 || raw.length > 180 || QUEUE_LANGUAGE.test(raw)
-    || BACKSTAGE_LANGUAGE.test(raw) || FIRST_PERSON_LANGUAGE.test(raw) || repeatsIdentity;
+    || noteLength(raw, language) < 16 || raw.length > 180 || QUEUE_LANGUAGE.test(raw)
+    || BACKSTAGE_LANGUAGE.test(raw) || (english && FIRST_PERSON_LANGUAGE.test(raw)) || repeatsIdentity;
+  if (!english) {
+    const credited = creditedTrack(track, language);
+    return unsafe ? credited : credited ? creditedNote(credited, raw, language) : raw;
+  }
   const clause = unsafe
     ? 'its musical character fits the surrounding sequence naturally'
     : raw.replace(/^(?:the selected track|this (?:track|song|piece))\s+/i, 'it ');
@@ -114,11 +128,11 @@ function shortlistDebugTools(sourceRuns: ShortlistSourceRun[]) {
 // A verified note can still be too thin to help an operator understand a
 // choice. Keep a controller-written, track-specific floor without spending a
 // second model call, worded like every other Shortlist Booth line.
-function usableSelectionReason(reason: unknown, song: { artist?: unknown; title?: unknown }): string {
+function usableSelectionReason(reason: unknown, song: { artist?: unknown; title?: unknown }, language: PickNoteLanguage = null): string {
   const note = typeof reason === 'string' ? reason.replace(/\s+/g, ' ').trim() : '';
-  if (note.length >= 24 && !QUEUE_LANGUAGE.test(note) && note !== UNUSABLE_SELECTION_REASON
+  if (noteLength(note, language) >= 24 && !QUEUE_LANGUAGE.test(note) && note !== UNUSABLE_SELECTION_REASON
     && !note.includes(MUSICAL_REASON_UNAVAILABLE)) return note;
-  return shortlistClauseSelectionReason(song, null);
+  return shortlistClauseSelectionReason(song, null, language);
 }
 
 // Leanings are private selection context, not boilerplate for every Booth
@@ -128,14 +142,15 @@ export function shortlistReasonForLeanings(
   reason: unknown,
   usedMusicalLeanings: boolean,
   song: { artist?: unknown; title?: unknown },
+  language: PickNoteLanguage = null,
 ): string {
   // The tie-break is a private diagnostic. Keep the model's track-specific
   // Booth reason intact when it was genuinely relevant; replacing it with a
   // terse trait discarded the useful editorial explanation.
   if (usedMusicalLeanings || !LEANINGS_REFERENCE.test(String(reason ?? ''))) {
-    return usableSelectionReason(reason, song);
+    return usableSelectionReason(reason, song, language);
   }
-  return usableSelectionReason('', song);
+  return usableSelectionReason('', song, language);
 }
 
 export function shortlistPickSchema(ids: string[]) {
@@ -262,6 +277,7 @@ export async function djPick({
   sourceRuns = [],
   context = {},
   shortlistResolution = {},
+  noteLanguage = null,
 }: {
   candidates: ShortlistCandidate[];
   showAt?: Date | null;
@@ -269,6 +285,9 @@ export async function djPick({
   sourceRuns?: ShortlistSourceRun[];
   context?: ShortlistSelectionContext;
   shortlistResolution?: ShortlistPickResolution;
+  // The on-air persona's note language (pick-reason-language.ts); pickSystem
+  // asks for it from the same persona.
+  noteLanguage?: PickNoteLanguage;
 }): Promise<ShortlistPick> {
   const ids = candidates.map((candidate) => candidate.id).filter((id): id is string => typeof id === 'string');
   const toolCalls = shortlistDebugTools(sourceRuns);
@@ -286,6 +305,6 @@ export async function djPick({
     telemetry: { toolCalls, steps: toolCalls.length + 1, shortlistResolution },
   });
   const track = candidates.find((candidate) => candidate.id === selection.id);
-  const selectionReason = shortlistClauseSelectionReason(track, selection.musicalReason);
+  const selectionReason = shortlistClauseSelectionReason(track, selection.musicalReason, noteLanguage);
   return { ...selection, selectionReason };
 }

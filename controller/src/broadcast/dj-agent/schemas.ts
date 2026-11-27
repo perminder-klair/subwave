@@ -13,6 +13,7 @@ import { autoVoiceAllowed } from '../voice-policy.js';
 import { SEED_NOT_A_PICK_CLAUSE } from '../../util/pick-seed.js';
 import { instruction } from '../../llm/dj.js';
 import { MUSICAL_REASON_UNAVAILABLE, EDITORIAL_LEANINGS_FIELDS, type AgenticLeaningsOption } from './leanings-review.js';
+import { pickNoteLanguage, pickNoteLanguageClause, type PickNoteLanguage } from './pick-reason-language.js';
 
 // Plain .nullable() fields, deliberately — GLM's malformed spellings of
 // "nothing" (the string "null", an omitted key, a double-JSON-encoded object)
@@ -147,8 +148,11 @@ export function agenticLeaningsReviewSchema(ids: string[], leaningsOptions: stri
   }), { objectFallbacks: { editorialEvidence: null, leaningsBasis: NO_AGENTIC_LEANINGS_INFLUENCE, musicalReason: MUSICAL_REASON_UNAVAILABLE } });
 }
 
-export function agenticLeaningsReviewSystem(): string {
-  return 'Perform one private music-editor review. Keep the baseline by default. Musical Leanings are a soft tie-breaker: swap only for a supported preference advantage and comparable flow. Interpret descriptive preferences using supplied facts about BOTH tracks; literal tag matches are not required. A shared preference alone never justifies a swap. Host preferences are primary. A matching challenger never obliges a change. Never invent tracks, evidence or musical traits. Record interpreted comparisons as editorial judgement, not proven musical quality.';
+// `noteLanguage`: the on-air persona's note language (pick-reason-language.ts);
+// null (English) leaves the instruction as it was.
+export function agenticLeaningsReviewSystem(noteLanguage: PickNoteLanguage = null): string {
+  return 'Perform one private music-editor review. Keep the baseline by default. Musical Leanings are a soft tie-breaker: swap only for a supported preference advantage and comparable flow. Interpret descriptive preferences using supplied facts about BOTH tracks; literal tag matches are not required. A shared preference alone never justifies a swap. Host preferences are primary. A matching challenger never obliges a change. Never invent tracks, evidence or musical traits. Record interpreted comparisons as editorial judgement, not proven musical quality.'
+    + pickNoteLanguageClause(noteLanguage, '"musicalReason"');
 }
 
 export function agenticLeaningsReviewPrompt({
@@ -395,7 +399,7 @@ ${dj.PICKER_CRITERIA}${nativeShortlist ? '' : `\n\n${instruction('picker', 'simi
 
 ${instruction('picker', nativeShortlist ? 'shortlist-listener-text' : 'listener-requests', { listenerText: LISTENER_TEXT_CLAUSE })}${dj.REQUESTER_NAME_CLAUSE}
 
-${findingCandidates}${dj.effectsGuidance()}${editorialLeaningsPrompt}`;
+${findingCandidates}${dj.effectsGuidance()}${editorialLeaningsPrompt}${pickNoteLanguageClause(pickNoteLanguage(persona), nativeShortlist ? '"musicalReason"' : 'the "reason" field')}`;
 }
 
 // Exported for scripts/llm-bench, like requestSchema above.

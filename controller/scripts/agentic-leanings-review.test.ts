@@ -404,17 +404,17 @@ for (const [route, preliminary, resolution] of [
 test('route wiring keeps telemetry and rationale verification specific to each picker', () => {
   assert.match(pickSource, /kind: 'djAgentLeaningsReview'/,
     'the separate review has a purpose-specific telemetry name');
-  assert.match(pickSource, /verifiedAgenticReason\(agenticSelectionReason\(replacement, leaningsReason\), true, replacement\)/,
+  assert.match(pickSource, /verifiedAgenticReason\(agenticSelectionReason\(replacement, leaningsReason, noteLanguage\), true, replacement, noteLanguage\)/,
     'an Agentic replacement is worded by the Agentic verifier');
   const finalReasonAt = pickSource.indexOf('// The Shortlist model\'s note');
   const agentReasonAt = pickSource.indexOf('} else if (agentPickResolution)', finalReasonAt);
   const finalReasonEnd = pickSource.indexOf('\n  if (useShortlist) {', agentReasonAt);
   const shortlistReasonBlock = pickSource.slice(finalReasonAt, agentReasonAt);
   const agentReasonBlock = pickSource.slice(agentReasonAt, finalReasonEnd);
-  assert.match(shortlistReasonBlock, /shortlistClauseSelectionReason\(song, object\.musicalReason\)/,
+  assert.match(shortlistReasonBlock, /shortlistClauseSelectionReason\(song, object\.musicalReason, noteLanguage\)/,
     'Shortlist final reasons are rebuilt from a model-written musical clause and verified identity');
   assert.doesNotMatch(shortlistReasonBlock, /agenticSelectionReason/);
-  assert.match(agentReasonBlock, /verifiedAgenticReason\(agenticSelectionReason\(song, object\.reason\)/,
+  assert.match(agentReasonBlock, /verifiedAgenticReason\(agenticSelectionReason\(song, object\.reason, noteLanguage\)/,
     'Agentic final reasons use the Agentic verifier and fallback wording');
   assert.doesNotMatch(agentReasonBlock, /shortlistSelectionReason/);
 });
@@ -507,7 +507,7 @@ test('the core-title match still refuses a note about another track', () => {
 });
 
 test('a discarded Agentic note is recorded with what the model wrote', () => {
-  assert.match(pickSource, /object\.reason === plainAgenticSelectionReason\(song\)\) \{\n\s+logEvent\('pick\.notePlain', \{ agent: 'pick', to: song\.id \?\? null, note: note\.slice\(0, 400\) \}\);/,
+  assert.match(pickSource, /object\.reason === plainAgenticSelectionReason\(song, noteLanguage\)\) \{\n\s+logEvent\('pick\.notePlain', \{ agent: 'pick', to: song\.id \?\? null, note: note\.slice\(0, 400\) \}\);/,
     'the first answer\'s note is logged when it becomes plain copy');
 });
 
@@ -549,5 +549,5 @@ test('a capitalised name nothing accounts for still becomes plain copy', () => {
 });
 
 test('the Agentic route hands the capitalised-name read its context names', () => {
-  assert.match(pickSource, /agenticDiscoverySelectionReason\(song, note, pickNoteReferences\(queue, pickAnchor, activeShow\)\)/);
+  assert.match(pickSource, /agenticDiscoverySelectionReason\(song, note, pickNoteReferences\(queue, pickAnchor, activeShow\), noteLanguage\)/);
 });

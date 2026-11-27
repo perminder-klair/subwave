@@ -6,6 +6,9 @@
 // actually accepted by the queue.
 
 import { bpmCompat, keyCompat } from '../../music/mix.js';
+import {
+  creditedNote, creditedTrack, isEnglishNote, noteLength, plainPickNote, unicodeComparable, type PickNoteLanguage,
+} from './pick-reason-language.js';
 
 // What modelTolerant writes when a review or Shortlist pick returns an
 // unusable musicalReason. It must never reach the Booth as if it were prose,
@@ -107,10 +110,12 @@ function coreName(raw: string): string {
 // Does the note say this name? The full name as before, or its core as whole
 // words — a short core ("Up") as a bare substring would match "upbeat", and a
 // core of one short word is too common to count as naming anything.
-function noteNames(note: string, raw: string): boolean {
-  const full = identityComparable(raw);
+// `compare` is identityComparable for an English note and the policy's
+// unicodeComparable for any other (pick-reason-language.ts).
+function noteNames(note: string, raw: string, compare: (value: unknown) => string = identityComparable): boolean {
+  const full = compare(raw);
   if (!full || note.includes(full)) return true;
-  const core = identityComparable(coreName(raw));
+  const core = compare(coreName(raw));
   if (!core || core === full) return false;
   if (!core.includes(' ') && core.length < 4) return false;
   return ` ${note} `.includes(` ${core} `);
@@ -119,12 +124,18 @@ function noteNames(note: string, raw: string): boolean {
 // Agentic reasons are verified against the final track at the queue boundary.
 // This keeps useful model variation while preventing a guard replacement from
 // inheriting another track's explanation or Shortlist-specific wording.
-export function agenticSelectionReason(track: any, reason: unknown): string {
+// `language` is the note's (pick-reason-language.ts): a non-English note is
+// kept on the same names-the-track rule, never rewritten into the English
+// "“Title” by Artist — fits …" template, and otherwise falls back to the
+// language-neutral credit.
+export function agenticSelectionReason(track: any, reason: unknown, language: PickNoteLanguage = null): string {
   const titleRaw = typeof track?.title === 'string' ? track.title.trim() : '';
   const artistRaw = typeof track?.artist === 'string' ? track.artist.trim() : '';
-  const note = identityComparable(reason);
-  const namesTitle = noteNames(note, titleRaw);
-  if (note && namesTitle && noteNames(note, artistRaw)) return String(reason).trim();
+  const compare = isEnglishNote(language) ? identityComparable : unicodeComparable;
+  const note = compare(reason);
+  const namesTitle = noteNames(note, titleRaw, compare);
+  if (note && namesTitle && noteNames(note, artistRaw, compare)) return String(reason).trim();
+  if (!isEnglishNote(language)) return plainAgenticSelectionReason(track, language);
 
   const raw = typeof reason === 'string' ? trimDanglingEnding(reason.replace(/\s+/g, ' ')) : '';
   if (raw && titleRaw && artistRaw && identityComparable(artistRaw) && !namesTitle) {
@@ -138,19 +149,21 @@ export function agenticSelectionReason(track: any, reason: unknown): string {
 
 // The plain copy a note becomes when it cannot be grounded on the track.
 // Exported so the pick path can tell a discarded note from a kept one.
-export function plainAgenticSelectionReason(track: any): string {
-  const titleRaw = typeof track?.title === 'string' ? track.title.trim() : '';
-  const artistRaw = typeof track?.artist === 'string' ? track.artist.trim() : '';
-  const credited = titleRaw && artistRaw ? `“${titleRaw}” by ${artistRaw}` : titleRaw ? `“${titleRaw}”` : artistRaw ? `A track by ${artistRaw}` : '';
-  return credited ? `${credited} offers a strong musical fit with the current flow.` : 'Selected for its strong musical fit with the current flow.';
+export function plainAgenticSelectionReason(track: any, language: PickNoteLanguage = null): string {
+  return plainPickNote(track, language);
 }
 
+// Both scrubs are English. On a non-English note they can only catch English
+// leaking into it ("next up", "the DJ's taste"), never the same idea said in
+// the note's own language, and they match no ordinary word of another
+// language, so they never drop one (pick-reason-language.ts).
 const QUEUE_LANGUAGE = /\b(?:next\s+up|up\s+next|coming\s+up|we(?:'|’)re\s+playing|we\s+have)\b/i;
 const LEANINGS_REFERENCE = /\b(?:reflecting\b.*\btaste\s+for|(?:musical\s+)?leanings?|broad\s+alternative\s+taste|(?:dj|host)(?:['’]s)?\s+(?:musical\s+)?(?:taste|tastes|preference|preferences|favo(?:u)?rites?)|(?:my|his|her|their)\s+(?:musical\s+)?(?:taste|tastes|preference|preferences)|[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}['’](?:s)?\s+(?:musical\s+)?(?:taste|tastes|preference|preferences|favo(?:u)?rites?))\b/i;
 
-function usableAgenticReason(reason: unknown, song: { artist?: unknown; title?: unknown }): string {
+function usableAgenticReason(reason: unknown, song: { artist?: unknown; title?: unknown }, language: PickNoteLanguage = null): string {
   const note = typeof reason === 'string' ? reason.replace(/\s+/g, ' ').trim() : '';
-  if (note.length >= 24 && !QUEUE_LANGUAGE.test(note) && note !== '[selection note unavailable]') return note;
+  if (noteLength(note, language) >= 24 && !QUEUE_LANGUAGE.test(note) && note !== '[selection note unavailable]') return note;
+  if (!isEnglishNote(language)) return plainPickNote(song, language);
   const artist = typeof song.artist === 'string' && song.artist.trim() ? song.artist.trim() : 'This artist';
   const title = typeof song.title === 'string' && song.title.trim() ? song.title.trim() : 'this track';
   return `${artist} — ${title}: selected for its fit with the current musical flow.`;
@@ -194,29 +207,27 @@ function namesForeignRun(raw: string, known: string[]): boolean {
 // `references` are the names a pick was handed as context (pick-note.ts
 // pickNoteReferences): the track it follows, what is on air, queued and
 // recently played, and the show's name, topic and genres.
-export function agenticDiscoverySelectionReason(track: any, reason: unknown, references: Array<string | null | undefined> = []): string {
+export function agenticDiscoverySelectionReason(track: any, reason: unknown, references: Array<string | null | undefined> = [], language: PickNoteLanguage = null): string {
   const raw = typeof reason === 'string' ? reason.replace(/\s+/g, ' ').trim() : '';
   const known = [...trackKnownNames(track), ...references.map((r) => (typeof r === 'string' ? r : ''))];
   const looksLikeNamedIdentity = /[“”"]/.test(raw) || namesForeignRun(raw, known);
-  if (raw.length >= 24 && !QUEUE_LANGUAGE.test(raw) && !looksLikeNamedIdentity) {
-    const title = typeof track?.title === 'string' ? track.title.trim() : '';
-    const artist = typeof track?.artist === 'string' ? track.artist.trim() : '';
-    const credited = title && artist ? `“${title}” by ${artist}` : title ? `“${title}”` : artist ? `A track by ${artist}` : '';
-    if (credited) return `${credited} — ${/[.!?]$/.test(raw) ? raw : `${raw}.`}`;
+  if (noteLength(raw, language) >= 24 && !QUEUE_LANGUAGE.test(raw) && !looksLikeNamedIdentity) {
+    const credited = creditedTrack(track, language);
+    if (credited) return creditedNote(credited, raw, language);
   }
-  return agenticSelectionReason(track, reason);
+  return agenticSelectionReason(track, reason, language);
 }
 
 export function agenticReasonMentionsLeanings(reason: unknown): boolean {
   return LEANINGS_REFERENCE.test(String(reason ?? ''));
 }
 
-export function leaningsBlindPickReason(reason: unknown, song: { artist?: unknown; title?: unknown }): string {
-  return agenticReasonMentionsLeanings(reason) ? usableAgenticReason('', song) : String(reason ?? '');
+export function leaningsBlindPickReason(reason: unknown, song: { artist?: unknown; title?: unknown }, language: PickNoteLanguage = null): string {
+  return agenticReasonMentionsLeanings(reason) ? usableAgenticReason('', song, language) : String(reason ?? '');
 }
 
-export function verifiedAgenticReason(reason: unknown, usedMusicalLeanings: boolean, song: { artist?: unknown; title?: unknown }): string {
-  return usableAgenticReason(usedMusicalLeanings ? reason : leaningsBlindPickReason(reason, song), song);
+export function verifiedAgenticReason(reason: unknown, usedMusicalLeanings: boolean, song: { artist?: unknown; title?: unknown }, language: PickNoteLanguage = null): string {
+  return usableAgenticReason(usedMusicalLeanings ? reason : leaningsBlindPickReason(reason, song, language), song, language);
 }
 
 function comparable(value: unknown): string {
@@ -642,13 +653,24 @@ export function agenticLeaningsSelectionReason({
   leaningsOwnerName,
   basis,
   musicalReason,
+  language = null,
 }: {
   replacement: { title?: unknown; artist?: unknown };
   djName: unknown;
   leaningsOwnerName?: string | null;
   basis: string;
   musicalReason: unknown;
+  // The note's language (pick-reason-language.ts). Every rewrite below is an
+  // English one, so a non-English note keeps the model's clause as written,
+  // after the credit, with the matched preference in brackets.
+  language?: PickNoteLanguage;
 }): string {
+  if (!isEnglishNote(language)) {
+    const credited = creditedTrack(replacement, language);
+    const clause = typeof musicalReason === 'string' ? musicalReason.replace(/\s+/g, ' ').trim().replace(/[.!?。！？]+$/u, '') : '';
+    const usable = clause && clause !== MUSICAL_REASON_UNAVAILABLE && noteLength(clause, language) >= 16;
+    return usable ? `${credited}: ${clause} (${basis})` : `${credited} (${basis})`;
+  }
   const title = typeof replacement.title === 'string' ? replacement.title.trim() : 'this track';
   const artist = typeof replacement.artist === 'string' ? replacement.artist.trim() : 'the selected artist';
   const presenter = typeof djName === 'string' && djName.trim() ? djName.trim() : 'The DJ';

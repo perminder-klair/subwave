@@ -134,8 +134,14 @@ ${instruction('pool-picker', 'source-tags')}
 ${instruction('pool-picker', 'recent-plays')}`;
 }
 
-export async function pickNextTrack({ candidates, recentPlays, context, show = null, current = null, recentTransitions = [], steer = null, count = 1, artistSpan = 1 }: {
+export async function pickNextTrack({ candidates, recentPlays, context, show = null, current = null, recentTransitions = [], steer = null, count = 1, artistSpan = 1, noteLanguageClause = '' }: {
   candidates: any[];
+  /**
+   * The note-language clause the caller's policy wrote for the on-air persona
+   * (broadcast/dj-agent/pick-reason-language.ts pickNoteLanguageClause), '' for
+   * English. Appended last to the system prompt; llm/ never decides it.
+   */
+  noteLanguageClause?: string;
   /** More than one asks for an ordered opening list (`ids`) instead of one pick. */
   count?: number;
   /** An opening list's artist spacing in places (music/steer.ts openingArtistSpan). */
@@ -202,7 +208,7 @@ export async function pickNextTrack({ candidates, recentPlays, context, show = n
   // (those tracks are queued as plain picks).
   if (count > 1) {
     return djObject({
-      system: `${pickerSystem(show, steer)}\n\n${instruction('pool-picker', 'preview', { count, span: artistSpan })}`,
+      system: `${pickerSystem(show, steer)}\n\n${instruction('pool-picker', 'preview', { count, span: artistSpan })}${noteLanguageClause}`,
       prompt: user,
       schema: z.object({
         // No `.max(count)`: a model that lists one too many should be trimmed
@@ -216,7 +222,7 @@ export async function pickNextTrack({ candidates, recentPlays, context, show = n
   }
 
   return djObject({
-    system: `${pickerSystem(show, steer)}${fxGuidance}${fxHistory}`,
+    system: `${pickerSystem(show, steer)}${fxGuidance}${fxHistory}${noteLanguageClause}`,
     prompt: user,
     schema: z.object({
       id: idSchema,

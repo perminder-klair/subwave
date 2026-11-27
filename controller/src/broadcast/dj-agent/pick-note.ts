@@ -13,9 +13,20 @@
 
 import * as settings from '../../settings.js';
 import { logEvent } from '../../observability/events.js';
+import { onAirPersona } from '../session.js';
+import { pickNoteLanguage, type PickNoteLanguage } from './pick-reason-language.js';
 import { misnamedPickNote, type ClaimTrack } from '../../util/request-claim.js';
 
 type Named = { title?: string | null; artist?: string | null } | null | undefined;
+
+// The language a pick made now writes its note in: the on-air persona's, the
+// one pickSystem's own prompt is voiced by (session.onAirPersona, which the
+// pick's look-ahead has already rolled). The rule is pick-reason-language.ts;
+// the session read stays here with the routes' other reads, since the policy
+// module sits under the session in the import graph.
+export function onAirPickNoteLanguage(): PickNoteLanguage {
+  return pickNoteLanguage(onAirPersona());
+}
 
 // The station's own names: whoever voices the line, the roster's host and
 // guests, the station itself. Shared with the request claim guard (#1918).

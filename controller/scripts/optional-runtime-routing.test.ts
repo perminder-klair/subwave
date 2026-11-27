@@ -29,7 +29,7 @@ test('Track Shortlist is controller-led with one bounded model choice', () => {
   assert.match(shortlistRoute, /buildShortlist\(/, 'Shortlist discovery is controller-led');
   assert.match(shortlistRoute, /djPick\(/, 'Shortlist makes one bounded structured choice');
   assert.doesNotMatch(shortlistRoute, /pickerAgent\.run/, 'Shortlist must not instantiate the picker tool loop');
-  assert.match(picker, /shortlistClauseSelectionReason\(song, object\.musicalReason\)/,
+  assert.match(picker, /shortlistClauseSelectionReason\(song, object\.musicalReason, noteLanguage\)/,
     'the final queued shortlist track must rebuild its Booth reason from verified identity');
   assert.match(djAgent, /shortlistRepick\s+\? shortlistPickSchema\(ids\)/,
     'a shortlist corrective re-pick must use the shortlist selection schema');
