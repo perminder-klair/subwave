@@ -37,7 +37,7 @@ The router (`router/`) speaks exactly the Subsonic dialect `controller/src/music
 
 | Module | Owns |
 | --- | --- |
-| `sdk/` | the plugin contract — publishable as `@subwave/source-sdk`, imports nothing from the router |
+| `sdk/` | the plugin contract — published as `@subwave/source-sdk` from `router/source-sdk/` (`publish-source-sdk.yml`), imports nothing from the router |
 | `host/ids.ts` | id namespacing |
 | `host/normalize.ts` | loose plugin objects → full Subsonic shapes |
 | `host/media.ts` | stream/art resolution and the media guard |

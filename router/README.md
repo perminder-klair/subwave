@@ -48,3 +48,7 @@ npm run conformance -- src/sources/jellyfin --builtin --config url=http://jellyf
 ```
 
 `npm test` runs it against every plugin that works offline. The live Jellyfin/Plex/Navidrome checks run when `CONFORMANCE_JELLYFIN_URL` / `_API_KEY`, `CONFORMANCE_PLEX_URL` / `_TOKEN` or `CONFORMANCE_NAVIDROME_URL` / `_USER` / `_PASS` are set.
+
+## Plugin SDK
+
+`src/sdk/` is the plugin contract, and `source-sdk/` publishes it to npm as [`@subwave/source-sdk`](source-sdk/README.md). The package's major version is the plugin `apiVersion`. `.github/workflows/publish-source-sdk.yml` publishes it on a release tag whenever `source-sdk/package.json` names a version npm doesn't have yet. To build it locally: `npm ci && npm --prefix source-sdk run build`.

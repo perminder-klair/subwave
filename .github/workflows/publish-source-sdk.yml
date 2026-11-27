@@ -1,0 +1,86 @@
+name: Publish source SDK
+
+# Publishes @subwave/source-sdk (router/source-sdk, built from router/src/sdk)
+# to npm. The package is versioned with the plugin apiVersion, not with the
+# station, so most station releases leave it alone: a tag push publishes only
+# when router/source-sdk/package.json names a version npm doesn't have yet.
+#
+# Bump that version in the PR that changes router/src/sdk: a minor for an
+# additive change (a new optional op or field), a major together with
+# SOURCE_API_VERSION for a breaking one (router/scripts/source-sdk.test.ts
+# holds the two together).
+#
+# Triggers:
+#   - push of a tag like v1.2.3 (release-please, through its PAT) → publish
+#   - manual workflow_dispatch → build + `npm publish --dry-run` only, from any
+#     ref, so a dispatch never publishes
+#
+# Needs the NPM_TOKEN secret: an npm automation (or granular, publish-scoped)
+# token for the @subwave scope. Without it the tag run warns and stops.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write   # npm --provenance
+
+concurrency:
+  group: publish-source-sdk
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Install router dependencies (typescript)
+        run: npm ci --no-audit --no-fund
+        working-directory: router
+
+      - name: Test the package against the router's contract
+        run: npm test -- source-sdk
+        working-directory: router
+
+      - name: Decide whether this version is new
+        id: version
+        working-directory: router/source-sdk
+        run: |
+          NAME=$(node -p "require('./package.json').name")
+          VERSION=$(node -p "require('./package.json').version")
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if npm view "$NAME@$VERSION" version >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::$NAME@$VERSION is already on npm; nothing to publish."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Dry run
+        if: github.event_name == 'workflow_dispatch'
+        run: npm publish --dry-run
+        working-directory: router/source-sdk
+
+      - name: Publish
+        if: github.event_name == 'push' && steps.version.outputs.exists == 'false'
+        working-directory: router/source-sdk
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PKG: ${{ steps.version.outputs.name }}@${{ steps.version.outputs.version }}
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::warning::NPM_TOKEN is not set; $PKG was not published."
+            exit 0
+          fi
+          npm publish --provenance --access public
+          echo "::notice::Published $PKG"

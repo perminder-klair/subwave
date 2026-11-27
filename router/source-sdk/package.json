@@ -1,0 +1,40 @@
+{
+  "name": "@subwave/source-sdk",
+  "version": "1.0.0",
+  "description": "Types and defineSource() for writing SUB/WAVE music-source plugins.",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/perminder-klair/subwave.git",
+    "directory": "router/source-sdk"
+  },
+  "homepage": "https://github.com/perminder-klair/subwave/blob/main/docs/music-source-plugins.md",
+  "keywords": [
+    "subwave",
+    "subsonic",
+    "music-source",
+    "plugin"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.json",
+    "prepack": "npm run build"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
