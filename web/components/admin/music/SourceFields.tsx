@@ -10,7 +10,7 @@ import { Label } from '../../ui/label';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '../../ui/select';
 import { Toggle } from '../ui';
 import type { MusicConfigField, MusicPluginInfo } from '../../../lib/schemas.generated';
-import type { ConfigValue, DraftSource } from './sourceDraft';
+import { storedSecretKeys, type ConfigValue, type DraftSource } from './sourceDraft';
 
 // Utilities rather than the admin's .field / .field-hint helpers, which are
 // scoped to .admin-root: the onboarding wizard renders this form too.
@@ -30,6 +30,8 @@ export function SourceFields({ plugin, source, onChange, idPrefix }: SourceField
     return <div className={HINT}>This source has no settings.</div>;
   }
   const set = (key: string, value: ConfigValue) => onChange({ ...source.config, [key]: value });
+  const stored = storedSecretKeys(source, plugin);
+  const borrowed = source.secretsFor !== undefined;
   return (
     <div className="grid gap-[18px]">
       {plugin.config.map((field) => (
@@ -39,7 +41,8 @@ export function SourceFields({ plugin, source, onChange, idPrefix }: SourceField
           id={`${idPrefix}-${field.key}`}
           value={source.config[field.key]}
           locked={plugin.envLocked.includes(field.key)}
-          stored={field.type === 'secret' && source.secretsSet.includes(field.key)}
+          stored={field.type === 'secret' && stored.includes(field.key)}
+          borrowed={borrowed}
           onChange={(v) => set(field.key, v)}
         />
       ))}
@@ -53,10 +56,12 @@ interface FieldProps {
   value: ConfigValue | undefined;
   locked: boolean;
   stored: boolean;
+  /** The stored secret is the direct Navidrome connection's. */
+  borrowed?: boolean;
   onChange: (value: ConfigValue) => void;
 }
 
-function Field({ field, id, value, locked, stored, onChange }: FieldProps) {
+function Field({ field, id, value, locked, stored, borrowed, onChange }: FieldProps) {
   const label = `${field.label}${field.required ? '' : ' (optional)'}`;
   const hint = locked ? (
     <div className={HINT}>
@@ -121,7 +126,8 @@ function Field({ field, id, value, locked, stored, onChange }: FieldProps) {
       />
       {hint ?? (secret ? (
         <div className={HINT}>
-          Write-only — the saved value never leaves the server.{stored ? ' Leave blank to keep the one on file.' : ''}
+          Write-only — the saved value never leaves the server.
+          {stored ? (borrowed ? ' Leave blank to use the station\'s Navidrome password.' : ' Leave blank to keep the one on file.') : ''}
         </div>
       ) : null)}
     </div>

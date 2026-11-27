@@ -14,6 +14,7 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import Link from 'next/link';
+import { Route } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { adminJson, useAdminQuery, type AdminFetch } from '../../../lib/admin-query';
 import { errorMessage, notify } from '../../../lib/notify';
@@ -41,7 +42,9 @@ import {
   changesTrackIds,
   choiceOf,
   draftDirty,
+  isRoutedNavidrome,
   missingFields,
+  navidromeFromDirect,
   seedableSources,
   selectablePlugins,
   selectionLabel,
@@ -106,6 +109,9 @@ function SourceEditor({ adminFetch, view, settings }: { adminFetch: AdminFetch; 
   const qc = useQueryClient();
   const plugins = view.router?.plugins ?? [];
   const nav = useNavidromeDraft(settings.navidrome, adminFetch);
+  // A fresh router Navidrome source starts from the station's own connection.
+  const freshSource = (plugin: MusicPluginInfo | undefined): DraftSource =>
+    plugin?.name === DIRECT_NAVIDROME ? navidromeFromDirect(plugin, settings.navidrome) : blankSource(plugin);
 
   // Draft, seeded from the saved selection once (and again after a save);
   // a health refetch must not clobber what the operator is typing. Sources
@@ -138,9 +144,12 @@ function SourceEditor({ adminFetch, view, settings }: { adminFetch: AdminFetch; 
   const options = useMemo(() => {
     const base = sourceOptions(view.router ? view.router.plugins : null, view.routerError);
     // Advanced is a card only while it is on air or chosen; otherwise a link below.
-    const adv: SourceOption = { id: ADVANCED, label: 'Combined', blurb: 'Several libraries merged into one station, or Navidrome through the router.' };
+    const shown = choice === ADVANCED ? { mode: draftMode, sources } : view;
+    const adv: SourceOption = isRoutedNavidrome(shown)
+      ? { id: ADVANCED, label: 'Navidrome via router', blurb: 'Your Navidrome, served through the music router. Same server, same track ids.' }
+      : { id: ADVANCED, label: 'Combined', blurb: 'Several libraries merged into one station, through the music router.' };
     return savedChoice === ADVANCED || choice === ADVANCED ? [...base, adv] : base;
-  }, [view.router, view.routerError, savedChoice, choice]);
+  }, [view, savedChoice, choice, draftMode, sources]);
 
   const onAirProblem = view.mode === 'router'
     ? (!view.router ? view.routerError ?? 'router unreachable' : view.router.active.find((a) => a.health.state !== 'healthy')?.health.error ?? null)
@@ -156,13 +165,19 @@ function SourceEditor({ adminFetch, view, settings }: { adminFetch: AdminFetch; 
     setMode('router');
     if (id === ADVANCED) {
       setAdvanced(true);
-      if (!sources.length || sources.some((s) => !s.plugin)) setSources(view.sources.length ? view.sources : [blankSource(selectablePlugins(plugins)[0])]);
+      if (!sources.length || sources.some((s) => !s.plugin)) {
+        // Nothing routed yet: start from the station's own Navidrome, the one
+        // advanced setup that needs nothing new, and the base a merge adds to.
+        const choices = selectablePlugins(plugins);
+        const first = choices.find((p) => p.name === DIRECT_NAVIDROME && settings.navidrome?.url) ?? choices[0];
+        setSources(view.sources.length ? view.sources : [freshSource(first)]);
+      }
       return;
     }
     setAdvanced(false);
     setMerge(false);
     const saved = view.sources.find((s) => s.plugin === id);
-    setSources([saved ?? blankSource(plugins.find((p) => p.name === id))]);
+    setSources([saved ?? freshSource(plugins.find((p) => p.name === id))]);
   };
 
   const navTarget = draftMode === 'navidrome';
@@ -319,9 +334,10 @@ function SourceEditor({ adminFetch, view, settings }: { adminFetch: AdminFetch; 
           <SourcePicker options={options} value={choice} onChange={pick} onAir={savedChoice} onAirProblem={onAirProblem} />
           <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 text-[12px] text-muted">
             {choice !== ADVANCED && savedChoice !== ADVANCED && view.router ? (
-              <button type="button" className="cursor-pointer underline underline-offset-2 hover:text-ink" onClick={() => pick(ADVANCED)}>
-                Combine several libraries (advanced)
-              </button>
+              <Btn sm onClick={() => pick(ADVANCED)} className="gap-2">
+                <Route size={14} aria-hidden="true" />
+                Advanced: route Navidrome through the router, or combine libraries
+              </Btn>
             ) : <span />}
             <AddSourceHint adminFetch={adminFetch} onRescanned={reload} routerUp={!!view.router} />
           </div>
@@ -343,7 +359,7 @@ function SourceEditor({ adminFetch, view, settings }: { adminFetch: AdminFetch; 
           </details>
         </>
       ) : choice === ADVANCED ? (
-        <AdvancedSources plugins={plugins} merge={merge} setMerge={setMerge} sources={sources} setSources={setSources} adminFetch={adminFetch} />
+        <AdvancedSources plugins={plugins} merge={merge} setMerge={setMerge} sources={sources} setSources={setSources} freshSource={freshSource} adminFetch={adminFetch} />
       ) : sources[0] ? (
         <PluginSourceCard plugins={plugins} source={sources[0]} onChange={(s) => setSources([s])} adminFetch={adminFetch} />
       ) : null}
@@ -444,20 +460,27 @@ function TestButton({ adminFetch, source }: { adminFetch: AdminFetch; source: Dr
 
 // ── Advanced: several sources merged, or Navidrome through the router ──
 
-function AdvancedSources({ plugins, merge, setMerge, sources, setSources, adminFetch }: {
+function AdvancedSources({ plugins, merge, setMerge, sources, setSources, freshSource, adminFetch }: {
   plugins: MusicPluginInfo[];
   merge: boolean;
   setMerge: (v: boolean) => void;
   sources: DraftSource[];
   setSources: (s: DraftSource[]) => void;
+  freshSource: (plugin: MusicPluginInfo | undefined) => DraftSource;
   adminFetch: AdminFetch;
 }) {
   const choices = selectablePlugins(plugins);
   const update = (i: number, next: DraftSource) => setSources(sources.map((s, j) => (j === i ? next : s)));
   return (
     <>
-      <Card title="Combine libraries" sub="experimental">
+      <Card title="Through the music router" sub="advanced">
         <div className="grid gap-3">
+          <div className="field-hint">
+            The router serves the station from source plugins instead of a direct connection. With one source this is
+            mostly for trying the router out: routing your own Navidrome keeps every track id, so tags, likes and the
+            blocklist stay put and nothing re-links, and switching back is just as quick. Turn on merging to add a
+            second library, such as Jellyfin, Plex or an installed plugin.
+          </div>
           <div className="flex items-center gap-3">
             <Toggle
               on={merge}
@@ -468,7 +491,7 @@ function AdvancedSources({ plugins, merge, setMerge, sources, setSources, adminF
                 if (!next && sources.length > 1) setSources(sources.slice(0, 1));
               }}
             />
-            <span className="text-[13px]">Serve more than one library as one station</span>
+            <span className="text-[13px]">Merge: serve more than one library as one station (experimental)</span>
           </div>
           <div className="field-hint">
             Lists from every source are interleaved; each track still streams from the server it lives on. Nothing is
@@ -486,7 +509,7 @@ function AdvancedSources({ plugins, merge, setMerge, sources, setSources, adminF
             right={merge && sources.length > 1 ? <Btn sm onClick={() => setSources(sources.filter((_, j) => j !== i))}>Remove</Btn> : undefined}
           >
             <div className="grid gap-[18px]">
-              <Select value={source.plugin} onValueChange={(name: string) => update(i, blankSource(plugins.find((p) => p.name === name)))}>
+              <Select value={source.plugin} onValueChange={(name: string) => update(i, freshSource(plugins.find((p) => p.name === name)))}>
                 <SelectTrigger className="w-[320px] max-w-full" aria-label="Music source plugin">
                   <SelectValue placeholder="Choose a source…" />
                 </SelectTrigger>
@@ -513,7 +536,7 @@ function AdvancedSources({ plugins, merge, setMerge, sources, setSources, adminF
             disabled={sources.length >= choices.length}
             onClick={() => {
               const next = choices.find((p) => !sources.some((s) => s.plugin === p.name));
-              if (next) setSources([...sources, blankSource(next)]);
+              if (next) setSources([...sources, freshSource(next)]);
             }}
           >
             Add another source

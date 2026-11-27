@@ -243,6 +243,21 @@ export function keepStoredSecrets(
   });
 }
 
+/**
+ * The stored sources a draft's blank secrets may fall back to, with the
+ * station's direct Navidrome connection standing in as a `navidrome` source
+ * while no router Navidrome source is stored. Routing the station's own
+ * Navidrome then needs no password typed again, and storedSecretsFor's rule
+ * still holds: the password only goes to the server it was stored for.
+ */
+export function withDirectNavidrome(
+  prev: MusicSourceEntry[],
+  direct: { url: string; user: string; password: string } | null | undefined,
+): MusicSourceEntry[] {
+  if (!direct?.url || !direct.password || prev.some((p) => p.plugin === 'navidrome')) return prev;
+  return [...prev, { plugin: 'navidrome', config: { url: direct.url, user: direct.user, password: direct.password } }];
+}
+
 /** Secret keys a draft left blank that will fall back to a stored value. */
 export function keptSecretKeys(entry: MusicSourceEntry, prev: MusicSourceEntry[], plugin: MusicPluginInfo | undefined): string[] {
   const old = storedSecretsFor(entry, prev, plugin);

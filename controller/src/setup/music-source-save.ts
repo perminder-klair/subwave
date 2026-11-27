@@ -22,11 +22,13 @@ import {
   routerStatus,
   selectionIdentity,
   setCurrentSelection,
+  withDirectNavidrome,
   writeRouterConfig,
 } from './music-source.js';
 import {
   missingMusicFields,
   musicSelectionPatchSchema,
+  musicSourceRawIds,
   type MusicSelection,
   type RouterStatus,
 } from '../schemas/music-source.js';
@@ -52,17 +54,13 @@ export async function prepareSelection(
   } catch (err: any) {
     return { ok: false, code: 503, error: err?.message || 'the music router is not reachable' };
   }
-  const sources = draft.sources.map((s) => ({
-    ...s,
-    // A Navidrome library moving behind the router keeps the ids the station
-    // already stores, unless the operator chose otherwise.
-    rawIds: s.rawIds ?? (s.plugin === 'navidrome' ? true : undefined),
-  }));
+  const sources = draft.sources.map((s) => ({ ...s, rawIds: musicSourceRawIds(s) }));
+  const stored = withDirectNavidrome(prev.sources, await directNavidrome());
   for (const entry of sources) {
     const plugin = status.plugins.find((p) => p.name === entry.plugin);
     if (!plugin) return { ok: false, code: 400, error: `no music-source plugin named '${entry.plugin}' is installed in the router` };
     if (plugin.error) return { ok: false, code: 400, error: `${plugin.label} cannot load: ${plugin.error}` };
-    const missing = missingMusicFields(entry, plugin, keptSecretKeys(entry, prev.sources, plugin));
+    const missing = missingMusicFields(entry, plugin, keptSecretKeys(entry, stored, plugin));
     if (missing.length) {
       const labels = missing.map((k) => plugin.config.find((f) => f.key === k)?.label ?? k);
       return { ok: false, code: 400, error: `${plugin.label} needs: ${labels.join(', ')}` };
@@ -70,9 +68,18 @@ export async function prepareSelection(
   }
   return {
     ok: true,
-    selection: { mode: 'router', merge: draft.merge, sources: keepStoredSecrets(sources, prev.sources, status.plugins) },
+    selection: { mode: 'router', merge: draft.merge, sources: keepStoredSecrets(sources, stored, status.plugins) },
     status,
   };
+}
+
+/**
+ * The station's stored direct Navidrome connection (env applied), whichever
+ * mode is live: the one place its password may come from when the router's
+ * Navidrome plugin points at the same server.
+ */
+export async function directNavidrome(): Promise<{ url: string; user: string; password: string }> {
+  return resolveNavidrome((await loadSetupConfig()).navidrome, NAVIDROME_ENV_ENABLED);
 }
 
 /**
@@ -117,7 +124,7 @@ export async function applySelection(selection: MusicSelection, prev: MusicSelec
   // The stored direct connection, whichever mode is live: it is what direct
   // mode serves, so it lets the identity see that the Navidrome plugin keeping
   // its ids on the same server is the same library.
-  const direct = resolveNavidrome((await loadSetupConfig()).navidrome, NAVIDROME_ENV_ENABLED);
+  const direct = await directNavidrome();
   if (selection.mode === 'router') {
     Object.assign(config.navidrome, routerConnection(auth ?? readRouterAuth()));
   } else {

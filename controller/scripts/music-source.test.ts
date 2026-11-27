@@ -133,6 +133,37 @@ test('selection identity: direct Navidrome and its id-keeping router twin are on
   assert.notEqual(ms.selectionIdentity(direct, [navidrome], url), ms.selectionIdentity(twin(url, false), [navidrome], url), 'prefixed ids are new ids');
   assert.notEqual(ms.selectionIdentity(direct, [navidrome], url), ms.selectionIdentity(twin('http://other:4533'), [navidrome], url));
   assert.equal(ms.selectionIdentity(direct, [navidrome]), 'navidrome', 'no stored URL: as before');
+  // The admin form's draft never sets rawIds; the save defaults it on for
+  // Navidrome, and the identity reads the same default, so the form no longer
+  // warns of a re-link the save will not run.
+  const draft = { mode: 'router' as const, merge: false, sources: [{ plugin: 'navidrome', config: { url, user: 'u', password: '' } }] };
+  assert.equal(ms.selectionIdentity(direct, [navidrome], url), ms.selectionIdentity(draft, [navidrome], url), 'an unset rawIds is the save\'s default');
+  assert.equal(schema.musicSourceRawIds({ plugin: 'navidrome' }), true);
+  assert.equal(schema.musicSourceRawIds({ plugin: 'navidrome', rawIds: false }), false, 'an explicit choice stands');
+  assert.equal(schema.musicSourceRawIds({ plugin: 'jellyfin' }), undefined);
+});
+
+// Routing the station's own Navidrome used to ask for its password again,
+// because only router sources counted as stored.
+test('the router\'s Navidrome plugin reuses the direct password, only for the same server', () => {
+  const navidrome = { ...jellyfin, name: 'navidrome', label: 'Navidrome', config: [
+    { key: 'url', label: 'Server URL', type: 'url' as const, required: true },
+    { key: 'user', label: 'Username', type: 'string' as const, required: true },
+    { key: 'password', label: 'Password', type: 'secret' as const, required: true },
+  ] };
+  const direct = { url: 'http://nd:4533', user: 'dj', password: 'DIRECT' };
+  const stored = ms.withDirectNavidrome([], direct);
+  const same = { plugin: 'navidrome', config: { url: 'http://nd:4533', user: 'dj', password: '' } };
+  assert.equal(ms.keepStoredSecrets([same], stored, [navidrome])[0]!.config.password, 'DIRECT');
+  assert.deepEqual(schema.missingMusicFields(same, navidrome, ms.keptSecretKeys(same, stored, navidrome)), []);
+  const elsewhere = { plugin: 'navidrome', config: { url: 'http://attacker.example', user: 'dj', password: '' } };
+  assert.equal(ms.keepStoredSecrets([elsewhere], stored, [navidrome])[0]!.config.password, '', 'never sent to another host');
+  // A router Navidrome source already on file is the stored one; the direct
+  // connection does not stand in for it.
+  const routed = [{ plugin: 'navidrome', config: { url: 'http://nd:4533', user: 'dj', password: 'ROUTED' } }];
+  assert.equal(ms.withDirectNavidrome(routed, direct), routed);
+  assert.deepEqual(ms.withDirectNavidrome([], { url: 'http://nd:4533', user: 'dj', password: '' }), [], 'no stored password, nothing to reuse');
+  assert.deepEqual(ms.withDirectNavidrome([], null), []);
 });
 
 // #1827 review: every non-secret field counted, so flipping a display toggle
