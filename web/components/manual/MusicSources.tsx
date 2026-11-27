@@ -84,17 +84,104 @@ PLEX_TOKEN=…`}</CodeBlock>
         <p className="bs-eyebrow">PLUGINS</p>
         <h2>Any backend, as a plugin.</h2>
         <p>
-          A source plugin is a folder with a manifest and one JavaScript file. Drop it into{' '}
-          <code className="bs-code-inline">state/router/plugins/</code> as root
-          (<code className="bs-code-inline">sudo cp -r</code>), press{' '}
-          <strong>Rescan plugins</strong> (Source tab → <em>Don&rsquo;t see your server?</em>), and it appears as a card with a settings form built
-          from its manifest. Plugins are code that runs in the router — install only ones you have
-          read and trust.
+          A server SUB/WAVE doesn&rsquo;t know yet can be added as a <em>source plugin</em>: a folder
+          with a manifest (<code className="bs-code-inline">subwave-source.json</code>, which names the
+          plugin and describes its settings form) and one JavaScript file that answers the router&rsquo;s
+          questions — find a song, list albums, stream a track. The router does the rest, so a plugin
+          only has to talk to its own backend.
+        </p>
+        <div className="bs-callout">
+          <div className="bs-eyebrow">PLUGINS ARE CODE</div>
+          <p>
+            A plugin runs inside the router with network access. It never sees the station&rsquo;s other
+            settings or keys, but install only plugins you have read and trust.
+          </p>
+        </div>
+
+      </section>
+
+      <section className="bs-section">
+        <p className="bs-eyebrow">INSTALL A PLUGIN</p>
+        <h2>Copy, rescan, switch.</h2>
+        <p>
+          <strong>1. Copy the plugin&rsquo;s folder</strong> into your station&rsquo;s plugins folder, as
+          root. The folder belongs to root, so plugin code can never rewrite a plugin.
+        </p>
+        <table className="bs-doc-table">
+          <thead>
+            <tr>
+              <th>Install</th>
+              <th>Plugins folder</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Compose</strong> (the CLI, raw compose, a clone)</td>
+              <td><code className="bs-code-inline">state/router/plugins/</code>, or <code className="bs-code-inline">$STATE_DIR/router/plugins/</code> if you set it</td>
+            </tr>
+            <tr>
+              <td><strong>All-in-one image</strong></td>
+              <td><code className="bs-code-inline">router/plugins/</code> in the folder you mount at <code className="bs-code-inline">/var/sub-wave</code></td>
+            </tr>
+            <tr>
+              <td><strong>Unraid</strong></td>
+              <td><code className="bs-code-inline">router/plugins/</code> in the Appdata path, e.g. <code className="bs-code-inline">/mnt/user/appdata/subwave/router/plugins/</code></td>
+            </tr>
+          </tbody>
+        </table>
+        <p>
+          <strong>2. Mount any files it reads.</strong> A plugin that reads music from the host needs it
+          mounted into the router, read-only: a <code className="bs-code-inline">volumes:</code> line on the
+          compose <code className="bs-code-inline">router</code> service, or an extra path on the all-in-one
+          container (on Unraid, <em>Add another Path, Port, Variable…</em>). The plugin&rsquo;s README says what
+          it needs.
         </p>
         <p>
-          Writing one, the full contract, a worked example and the conformance kit are in{' '}
+          <strong>3. Rescan.</strong> In <Link href="/admin/music">Admin → Music source</Link>, open{' '}
+          <em>Don&rsquo;t see your server?</em> and press <strong>Rescan plugins</strong>. The plugin appears
+          as a card tagged <em>installed</em>, with its settings form. One that fails to load says why there,
+          and the Doctor lists it.
+        </p>
+        <p>
+          <strong>4. Switch.</strong> Pick its card, fill in the settings and press{' '}
+          <strong>Switch to …</strong>: the same test and confirmation as any source.
+        </p>
+        <div className="bs-callout">
+          <div className="bs-eyebrow">TRY THE EXAMPLE</div>
+          <p>
+            SUB/WAVE ships one example plugin, <em>Music folder</em>, which plays audio files straight from a
+            folder laid out as <code className="bs-code-inline">Artist/Album/01 Title.flac</code>. It lives in
+            the repository&rsquo;s <code className="bs-code-inline">docs/examples/sources/folder</code> (a CLI install
+            doesn&rsquo;t include it, so clone or download that folder). On a compose install, copy it in, mount your music and restart the router, then Rescan, choose{' '}
+            <strong>Music folder</strong> and set <em>Folder</em> to <code className="bs-code-inline">/music</code>.
+          </p>
+        </div>
+        <CodeBlock>{`sudo cp -r docs/examples/sources/folder state/router/plugins/
+# docker-compose.yml, under the router service's volumes:
+#   - /path/to/your/music:/music:ro
+docker compose up -d router`}</CodeBlock>
+      </section>
+
+      <section className="bs-section">
+        <p className="bs-eyebrow">WRITE A PLUGIN</p>
+        <h2>One manifest, one file.</h2>
+        <p>
+          A plugin implements ten required functions (song, album, artist, genres, album lists, songs by
+          genre, random songs, search, stream and cover art) and any optional ones its backend supports:
+          stars, playlists, lyrics, similar songs, play counts. It returns its backend&rsquo;s own ids and
+          whatever fields it knows; the router namespaces the ids and fills in the rest. A missing optional
+          function never stops the music, and the Service matrix shows what a source supports.
+        </p>
+        <p>
+          A conformance kit checks a plugin against everything the station relies on, from stable ids to
+          real audio and range requests:
+        </p>
+        <CodeBlock>{`npm --prefix router install
+npm --prefix router run conformance -- ./my-source --config url=http://server:8096 --config apiKey=…`}</CodeBlock>
+        <p>
+          The full contract, the manifest fields and a walkthrough of the example are in{' '}
           <a href="https://github.com/perminder-klair/subwave/blob/main/docs/music-source-plugins.md" className="bs-link">
-            docs/music-source-plugins.md
+            the plugin guide
           </a>.
         </p>
       </section>
