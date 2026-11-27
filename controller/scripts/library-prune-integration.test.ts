@@ -72,7 +72,7 @@ const db = await import('../src/music/library-db.js');
 const rotation = await import('../src/music/id-rotation.js');
 const heldRows = await import('../src/music/held-rows.js');
 const ms = await import('../src/setup/music-source.js');
-const { pendingSourceSwitch } = await import('../src/music/source-switch.js');
+const { pendingSourceSwitch, clearSourceSwitch } = await import('../src/music/source-switch.js');
 await db.open({ embeddingDim: 8, adoptStoredDim: true });
 
 function vectors(id: string) {
@@ -229,4 +229,78 @@ test('a complete empty walk keeps all rows and skips confirmation in analyzer an
     assertPreserved('missing-1', before);
     assert.deepEqual(requests, ['getAlbumList2'], 'empty walks must not enter adoptAndPrune');
   }
+});
+
+// #2423: the station streams from the new source as soon as a switch is saved,
+// but the rows still name the old one's ids until a walk carries them across.
+// Picked meanwhile, one is pushed with the new connection and dropped unplayed.
+test('a pending switch serves only the library rows a walk after it vouched for', async () => {
+  heldRows.recordHeldRows([]);
+  db.upsertTrackMeta('nd-old', { title: 'Harbour', artist: 'Fixture', album: 'Night', duration: 200 });
+  db.upsertTrackMeta('jf-new', { title: 'Harbour', artist: 'Fixture', album: 'Night', duration: 201 });
+  assert.equal(heldRows.servedFilter(), null, 'no switch and no hold: nothing is filtered');
+
+  await ms.markSourceSwitch('navidrome', 'router');
+  assert.deepEqual(
+    heldRows.rejectHeld([{ id: 'keep-1' }, { id: 'missing-1' }, { id: 'nd-old' }]),
+    [],
+    'right after the save no row is known to be on the new source',
+  );
+  assert.equal(heldRows.isHeld('keep-1'), true);
+  assert.equal(heldRows.heldIds().size, 0, 'and none is offered to the operator for removal');
+
+  const live = new Set(['keep-1', 'keep-2', 'jf-new']);
+  scanning = true;
+  await rotation.adoptAndPrune(live);
+  assert.ok(pendingSourceSwitch(), 'the switch stays open while the source scans');
+  assert.deepEqual(
+    heldRows.rejectHeld([{ id: 'keep-1' }, { id: 'jf-new' }, { id: 'missing-1' }]),
+    [{ id: 'keep-1' }, { id: 'jf-new' }],
+    'what that walk saw, carried rows included, can be picked meanwhile',
+  );
+
+  scanning = false;
+  await rotation.adoptAndPrune(live);
+  assert.equal(pendingSourceSwitch(), null);
+  assert.equal(heldRows.switchVouchedIds(), null, 'a spent switch restricts nothing');
+  assert.equal(heldRows.servedFilter(), null);
+});
+
+test('rows vouched for an earlier switch are not served after a newer one', async () => {
+  const live = new Set(['keep-1', 'keep-2']);
+  await ms.markSourceSwitch('navidrome', 'router');
+  scanning = true;
+  await rotation.adoptAndPrune(live);
+  assert.deepEqual(heldRows.rejectHeld([{ id: 'keep-1' }]), [{ id: 'keep-1' }]);
+
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  await ms.markSourceSwitch('router', 'navidrome');
+  assert.deepEqual(heldRows.rejectHeld([{ id: 'keep-1' }]), [], 'that walk spoke for the previous source');
+
+  scanning = false;
+  await rotation.adoptAndPrune(live);
+  assert.equal(pendingSourceSwitch(), null);
+});
+
+// Last: it sets when this process resolved its selection, which makes every
+// later marker in the file newer than the walk.
+test('a walk that began before the switch leaves the rows, the holds and the switch to the next walk', async () => {
+  heldRows.recordHeldRows([]);
+  ms.setCurrentSelection(ms.readSelection(null));
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  await ms.markSourceSwitch('router', 'navidrome');
+  const before = vectors('missing-1');
+
+  // The old library listed keep-1 and keep-2: an up-to-date walk would prune missing-1.
+  const result = await rotation.adoptAndPrune(new Set(['keep-1', 'keep-2']));
+  assert.equal(result.pruned, 0, 'what the old library lacked is the new source\'s to judge');
+  assert.equal(db.trackCount(), 3);
+  assertPreserved('missing-1', before);
+  assert.equal(heldRows.heldIds().size, 0, 'nor does it hold rows by the old library');
+  assert.ok(pendingSourceSwitch(), 'the switch is left for the walk that follows');
+  assert.deepEqual(heldRows.rejectHeld([{ id: 'keep-1' }]), [], 'and it vouches for nothing');
+  assert.deepEqual(requests, [], 'it does not ask the source whether it is scanning');
+
+  clearSourceSwitch();
+  heldRows.clearSwitchVouched();
 });

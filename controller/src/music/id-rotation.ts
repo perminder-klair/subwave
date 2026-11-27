@@ -17,7 +17,7 @@ import * as settings from '../settings.js';
 import { canonicalId } from './id-canonical.js';
 import { reportRotation, reportSwitchBlocks } from './tagger-progress.js';
 import { decidePrune, type PruneDecision } from './prune-policy.js';
-import { recordHeldRows } from './held-rows.js';
+import { clearSwitchVouched, recordHeldRows, recordSwitchVouched } from './held-rows.js';
 import { clearSourceSwitch, pendingSourceSwitch, strandedTrackBlocks, switchedAfter } from './source-switch.js';
 import { currentSelectionSince } from '../setup/music-source.js';
 
@@ -82,7 +82,11 @@ export async function adoptAndPrune(
   // the old library; it leaves the marker for the walk that follows it.
   const marker = pendingSourceSwitch();
   const switched = marker && !switchedAfter(marker, currentSelectionSince()) ? marker : null;
-  if (marker && !switched) {
+  // A walk of the old library cannot say which rows the new source serves, so
+  // it leaves both records alone: the switch's (nothing vouched for yet) and
+  // the walk hold, which it would otherwise fill with the new source's rows.
+  const stale = marker !== null && switched === null;
+  if (stale) {
     console.log('[id-rotation] music-source switch recorded after this walk began — left for the next walk');
   }
   // A source still scanning serves rows whose tags it has not read yet (a new
@@ -93,9 +97,13 @@ export async function adoptAndPrune(
   const scanning = switched ? await subsonic.getScanStatus() : undefined;
   const { adopted } = db.adoptRotatedIds(liveIds, { matchByMetadata: switched !== null });
   if (switched && scanning === true) {
+    // What this walk saw is on the new source (carried rows included, under
+    // their new ids), so it can be picked while the rest waits for the scan.
+    recordSwitchVouched(switched.at, liveIds);
     console.log(`[id-rotation] music-source switch: carried ${adopted} track(s) so far; the source is still scanning, so the switch stays open until a walk after the scan`);
   } else if (switched) {
     clearSourceSwitch();
+    clearSwitchVouched();
     console.log(`[id-rotation] music-source switch: carried ${adopted} track(s) across by id or metadata`);
     await reportStrandedBlocks(liveIds);
   }
@@ -106,6 +114,9 @@ export async function adoptAndPrune(
     // A stopped child may have missed the previous notification entirely.
     reportRotation({ adopted });
   }
+  // Nor may it prune: the rows it did not see are the new source's. The
+  // reconcile that follows it (source-switch.ts afterMaintenanceRun) decides.
+  if (stale) return { adopted, pruned: 0 };
   const missing = db.countMissingTracks(liveIds);
   if (missing === 0) {
     recordHeldRows([]);
