@@ -3065,7 +3065,8 @@ header.bs-masthead-lift {
     gap: 8px;
     margin: clamp(18px, 3vw, 28px) 0 0;
 }
-.bs-manual-figure img {
+.bs-manual-figure img,
+.bs-manual-figure video {
     display: block;
     width: 100%;
     height: auto;

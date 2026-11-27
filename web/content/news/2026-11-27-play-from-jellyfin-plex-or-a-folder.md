@@ -10,6 +10,10 @@ Since the first release, SUB/WAVE has had one rule about music: it plays your ow
 
 So the station now plays from whichever one you run.
 
+<video controls playsinline preload="metadata" poster="/video/play-from-jellyfin-plex-or-a-folder.webp" aria-label="A 35-second animation of a rack of music sources: Navidrome, Jellyfin, Plex, a music folder and an installed plugin. A red cable moves from one source to the next, carrying tags for likes, mood tags, analysis and the blocklist, then feeds several sources into one on-air station">
+  <source src="/video/play-from-jellyfin-plex-or-a-folder.mp4" type="video/mp4">
+</video>
+
 ## Where is your music?
 
 There is a new page in the admin: **Music source**. It opens on one question, *where is your music?*, with a card for each answer:

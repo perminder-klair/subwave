@@ -32,6 +32,22 @@ export default function MusicSources() {
           or reach Navidrome through the router. Nothing is de-duplicated, so an album both servers
           hold appears twice.
         </p>
+        <figure className="bs-manual-figure">
+          <video
+            controls
+            playsInline
+            preload="metadata"
+            poster="/video/play-from-jellyfin-plex-or-a-folder.webp"
+            width={1280}
+            height={720}
+            aria-label="A rack of music sources: Navidrome, Jellyfin, Plex, a music folder and an installed plugin. A red cable moves from one source to the next, carrying likes, mood tags, analysis and the blocklist, then feeds several sources into one on-air station."
+          >
+            <source src="/video/play-from-jellyfin-plex-or-a-folder.mp4" type="video/mp4" />
+          </video>
+          <figcaption className="bs-manual-figcaption">
+            <b>FIG.</b> One station, any library: switch sources and your tags and likes come along.
+          </figcaption>
+        </figure>
       </section>
 
       <section className="bs-section">
