@@ -7,6 +7,9 @@ import { cn } from '../../../lib/cn';
  
 import { SkeletonText } from '@/components/ui/skeleton';
 import type { Track } from './types';
+import { AdminResponseError } from '../../../lib/admin-query';
+import { libraryKeys } from './queries';
+import { useAdminQuery } from './useAdminQuery';
 
 const ENERGY_SEG: { id: string; label: string }[] = [
   { id: 'none', label: 'none' },
@@ -52,6 +55,53 @@ function eraSourceNote(track: Track): string {
   }
 }
 
+interface TrackFileInfo {
+  filePath: string | null;
+  fileSuffix: string | null;
+  fileSize: number | null;
+  bitRate: number | null;
+}
+
+function fileMeta(f: TrackFileInfo): string {
+  const parts: string[] = [];
+  if (f.fileSuffix) parts.push(f.fileSuffix.toUpperCase());
+  if (f.bitRate) parts.push(`${f.bitRate} kbps`);
+  if (f.fileSize) parts.push(`${(f.fileSize / 1048576).toFixed(1)} MB`);
+  return parts.join(' · ');
+}
+
+// The file behind the row, read when the editor opens: two copies of one song
+// look identical in every list, and only the path tells them apart.
+function TrackFileLine({ id }: { id: string }) {
+  const q = useAdminQuery<TrackFileInfo>({
+    key: libraryKeys.trackFile(id),
+    path: `/library/track/${encodeURIComponent(id)}/file`,
+    staleTime: 5 * 60_000,
+  });
+  const f = q.data;
+  return (
+    <div className="grid gap-1.5">
+      <Eyebrow>file</Eyebrow>
+      {q.isError ? (
+        <span className="text-[11px] text-muted">
+          {q.error instanceof AdminResponseError && q.error.status === 404
+            ? 'not in the library index'
+            : 'could not read the file'}
+        </span>
+      ) : !f ? (
+        <SkeletonText lines={1} />
+      ) : (
+        <div className="grid min-w-0 gap-0.5">
+          <span className="font-mono text-[11px] break-all text-ink" title={f.filePath ?? undefined}>
+            {f.filePath || 'no path recorded'}
+          </span>
+          {fileMeta(f) && <span className="text-[11px] text-muted">{fileMeta(f)}</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ManualTagEditor(props: {
   track: Track;
   vocab: string[];
@@ -60,6 +110,14 @@ export function ManualTagEditor(props: {
   onSave: (moods: string[], energy: string | null, applyToAlbum: boolean) => void;
   onSaveEraYear: (originalYear: number | null, applyToAlbum: boolean) => void;
   onCancel: () => void;
+  // Likes on the track, operator's and listeners' alike: the one place to clear
+  // them (the heart only ever removes the operator's own). Omitted, or 0: no button.
+  likeCount?: number;
+  // likesBusy: any like write on the track (heart or clear) is in flight, so the
+  // button is disabled. clearingLikes: that write is this clear, so it says so.
+  likesBusy?: boolean;
+  clearingLikes?: boolean;
+  onClearLikes?: () => void;
 }) {
   const { track, vocab, busy, eraBusy } = props;
   const [sel, setSel] = useState<string[]>((track.moods || []).slice(0, 3));
@@ -83,6 +141,7 @@ export function ManualTagEditor(props: {
   return (
     // Renders as a sibling of .lib-row, so the testid is the only way to scope to it.
     <div data-testid="manual-tag-editor" className="grid gap-3 border-b border-ink bg-[var(--ink-softer)] px-4 py-3">
+      <TrackFileLine id={track.id} />
       <div className="grid gap-1.5">
         <Eyebrow>moods · up to 3</Eyebrow>
         <div className="flex flex-wrap gap-1.5">
@@ -160,6 +219,17 @@ export function ManualTagEditor(props: {
         <Btn sm tone="danger" onClick={() => props.onSave([], null, applyToAlbum)} disabled={busy || eraBusy}>
           Clear tags
         </Btn>
+        {props.onClearLikes && (props.likeCount ?? 0) > 0 && (
+          <Btn
+            sm
+            tone="danger"
+            onClick={props.onClearLikes}
+            disabled={busy || eraBusy || !!props.likesBusy || !!props.clearingLikes}
+            title="drops listener likes too: un-hearting only removes yours"
+          >
+            {props.clearingLikes ? 'Clearing…' : `Clear all likes (${props.likeCount})`}
+          </Btn>
+        )}
         <Btn sm onClick={props.onCancel} disabled={busy || eraBusy}>Cancel</Btn>
       </div>
     </div>

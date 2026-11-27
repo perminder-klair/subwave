@@ -51,6 +51,9 @@ interface TrackTableProps {
   // which the heart never does.
   likeIndex: LikeIndex;
   liking: string | null;
+  // Set only by Clear all likes, so the editor's button reads "Clearing…" for
+  // a clear and never for a heart toggle (which still disables it, via liking).
+  clearingLikes: string | null;
   onToggleLike: (t: Track, liked: boolean) => void;
   onClearLikes: (t: Track) => void;
 }
@@ -201,7 +204,7 @@ export function TrackTable(p: TrackTableProps) {
                 tone={editing ? 'accent' : undefined}
                 onClick={() => p.onEdit(t)}
                 disabled={!!p.manualBusy}
-                title="Edit moods manually"
+                title="Edit infos manually"
               >
                 {editing ? <X size={12} /> : <Pencil size={12} />}
               </Btn>
@@ -248,6 +251,10 @@ export function TrackTable(p: TrackTableProps) {
               onSave={(moods, energy, applyToAlbum) => p.onSaveManual(t, moods, energy, applyToAlbum)}
               onSaveEraYear={(originalYear, applyToAlbum) => p.onSaveEraYear(t, originalYear, applyToAlbum)}
               onCancel={p.onCancelEdit}
+              likeCount={like.count}
+              likesBusy={p.liking === t.id}
+              clearingLikes={p.clearingLikes === t.id}
+              onClearLikes={() => p.onClearLikes(t)}
             />
           )}
           </Fragment>
@@ -316,7 +323,7 @@ export function RowActionsMenu({
             </button>
           )}
           <button type="button" className={MENU_ITEM} disabled={disabled} onClick={() => run(() => onEdit(track))}>
-            {editing ? <X size={13} /> : <Pencil size={13} />} {editing ? 'Close mood editor' : 'Edit moods'}
+            {editing ? <X size={13} /> : <Pencil size={13} />} {editing ? 'Close editor' : 'Edit infos'}
           </button>
           <button type="button" className={MENU_ITEM} disabled={disabled} onClick={() => run(() => onRetag(track))}>
             {tagged ? <RotateCcw size={13} /> : <Sparkles size={13} />} {tagged ? 'Retag with AI' : 'Tag with AI'}

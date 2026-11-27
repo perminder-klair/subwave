@@ -28,7 +28,7 @@ AUTH = base64.b64encode(b"test:test").decode()
 
 ROW = ".lib-row"
 TITLE = ".lib-title"
-EDIT_BTN = '[title="Edit moods manually"]'
+EDIT_BTN = '[title="Edit infos manually"]'
 BLOCK_BTN = '[title="Never play this on air"]'
 BLOCKED_BADGE = ".lib-btag"
 FLASHED_ROW = ".lib-row.flash"

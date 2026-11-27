@@ -52,7 +52,7 @@ TITLE = ".lib-title"
 MOOD_CHIP = ".lib-chip"
 ACTIVE_CHIP = ".lib-active-chip"
 BLOCK_BTN = '[title="Never play this on air"]'
-EDIT_BTN = '[title="Edit moods manually"]'
+EDIT_BTN = '[title="Edit infos manually"]'
 HEART_OFF = '[title="Heart this track"]'
 HEART_ON = '[title="Remove your heart"]'
 BLOCKED_BADGE = ".lib-btag"

@@ -343,14 +343,19 @@ curation you set by hand, which is not.
 
 ### Clearing them
 
-Yes. Per track, from the row actions in **Admin → Library**:
+Yes. Per track, in **Admin → Library**:
 
-- **Un-heart** as the operator — removes only your heart. If it was the last
-  like standing and Navidrome starring is on, the track is unstarred there too.
-- **Clear likes** — drops the listener likes on that track as well.
+- **Un-heart** (the row's heart) as the operator — removes only your heart. If
+  it was the last like standing and Navidrome starring is on, the track is
+  unstarred there too.
+- **Clear all likes** — drops the listener likes on that track as well. It sits
+  in the track editor (the row's pencil, "Edit infos manually"; "Edit infos" in
+  the phone row menu) beside **Clear tags**, shown while the track has likes,
+  and in the phone row menu.
 
 Note the asymmetry: un-hearting as the operator leaves listener likes in place;
-**Clear likes** removes both.
+**Clear all likes** removes both, and is how a track that only listeners liked
+leaves the Liked list, even after it has left the library.
 
 To wipe the whole store there is no button — it's `DELETE /likes` on the admin
 API:

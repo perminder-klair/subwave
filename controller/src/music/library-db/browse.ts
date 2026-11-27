@@ -227,4 +227,26 @@ export function allTaggedSampled(max: number, totalTagged: number): ObservatoryT
   return (requireDb().prepare(sql).all(m, total) as ObservatorySourceRow[]).map(rowToObservatory);
 }
 
+// Where a track's file sits, as Navidrome reports it: the one thing that tells
+// two copies of the same song apart in the Library (same title, artist, album).
+export interface TrackFile {
+  id: string;
+  filePath: string | null;
+  fileSuffix: string | null;
+  fileSize: number | null;
+  bitRate: number | null;
+  durationSec: number | null;
+}
 
+export function trackFile(id: string): TrackFile | null {
+  const r = requireDb().prepare(
+    'SELECT id, file_path, file_suffix, file_size, bit_rate, duration_sec FROM tracks WHERE id = ?',
+  ).get(id) as {
+    id: string; file_path: string | null; file_suffix: string | null; file_size: number | null;
+    bit_rate: number | null; duration_sec: number | null;
+  } | undefined;
+  return r ? {
+    id: r.id, filePath: r.file_path, fileSuffix: r.file_suffix, fileSize: r.file_size,
+    bitRate: r.bit_rate, durationSec: r.duration_sec,
+  } : null;
+}
