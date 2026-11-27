@@ -7,6 +7,7 @@ import { cn } from '../../../lib/cn';
  
 import { SkeletonText } from '@/components/ui/skeleton';
 import type { Track } from './types';
+import { AdminResponseError } from '../../../lib/admin-query';
 import { libraryKeys } from './queries';
 import { useAdminQuery } from './useAdminQuery';
 
@@ -82,7 +83,11 @@ function TrackFileLine({ id }: { id: string }) {
     <div className="grid gap-1.5">
       <Eyebrow>file</Eyebrow>
       {q.isError ? (
-        <span className="text-[11px] text-muted">not in the library index</span>
+        <span className="text-[11px] text-muted">
+          {q.error instanceof AdminResponseError && q.error.status === 404
+            ? 'not in the library index'
+            : 'could not read the file'}
+        </span>
       ) : !f ? (
         <SkeletonText lines={1} />
       ) : (
@@ -108,6 +113,9 @@ export function ManualTagEditor(props: {
   // Likes on the track, operator's and listeners' alike: the one place to clear
   // them (the heart only ever removes the operator's own). Omitted, or 0: no button.
   likeCount?: number;
+  // likesBusy: any like write on the track (heart or clear) is in flight, so the
+  // button is disabled. clearingLikes: that write is this clear, so it says so.
+  likesBusy?: boolean;
   clearingLikes?: boolean;
   onClearLikes?: () => void;
 }) {
@@ -216,7 +224,7 @@ export function ManualTagEditor(props: {
             sm
             tone="danger"
             onClick={props.onClearLikes}
-            disabled={busy || eraBusy || !!props.clearingLikes}
+            disabled={busy || eraBusy || !!props.likesBusy || !!props.clearingLikes}
             title="drops listener likes too: un-hearting only removes yours"
           >
             {props.clearingLikes ? 'Clearing…' : `Clear all likes (${props.likeCount})`}

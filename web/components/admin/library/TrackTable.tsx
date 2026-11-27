@@ -51,6 +51,9 @@ interface TrackTableProps {
   // which the heart never does.
   likeIndex: LikeIndex;
   liking: string | null;
+  // Set only by Clear all likes, so the editor's button reads "Clearing…" for
+  // a clear and never for a heart toggle (which still disables it, via liking).
+  clearingLikes: string | null;
   onToggleLike: (t: Track, liked: boolean) => void;
   onClearLikes: (t: Track) => void;
 }
@@ -249,7 +252,8 @@ export function TrackTable(p: TrackTableProps) {
               onSaveEraYear={(originalYear, applyToAlbum) => p.onSaveEraYear(t, originalYear, applyToAlbum)}
               onCancel={p.onCancelEdit}
               likeCount={like.count}
-              clearingLikes={p.liking === t.id}
+              likesBusy={p.liking === t.id}
+              clearingLikes={p.clearingLikes === t.id}
               onClearLikes={() => p.onClearLikes(t)}
             />
           )}

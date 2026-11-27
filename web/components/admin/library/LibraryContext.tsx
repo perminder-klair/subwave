@@ -49,6 +49,9 @@ export interface LibraryShared {
 
   likeIndex: LikeIndex;
   liking: string | null;
+  // The track whose likes Clear all likes is dropping: its own state, so a heart
+  // toggle (which sets `liking`) never reads as a clear.
+  clearingLikes: string | null;
   toggleLike: (track: Track, isLiked: boolean) => Promise<void>;
   clearLikes: (track: Track) => Promise<void>;
 
@@ -165,6 +168,9 @@ export function LibraryProvider({
   );
 
   const [liking, setLiking] = useState<string | null>(null);
+  const [clearingLikes, setClearingLikes] = useState<string | null>(null);
+  // Declared here, ahead of clearLikes, which closes a cleared track's editor.
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   const likeIndexQuery = useQuery({
     queryKey: libraryKeys.likeIndex(),
@@ -236,16 +242,22 @@ export function LibraryProvider({
   // deliberately never does.
   const clearLikes = useCallback(async (track: Track) => {
     setLiking(track.id);
+    setClearingLikes(track.id);
     try {
       const j = await adminJson<{ removed?: number }>(
         adminFetch, `/likes/song/${encodeURIComponent(track.id)}`, { method: 'DELETE' },
       );
       patchLike(track.id, null);
+      // The button lives in the track's editor, and on the Liked list the row
+      // leaves with the clear: close the editor so it does not reopen, stale, on
+      // the same track in another tab (editingId outlives the tab switch).
+      setEditingId(curr => (curr === track.id ? null : curr));
       notify.ok(`Cleared ${j.removed ?? 0} like${j.removed === 1 ? '' : 's'} on “${track.title || track.id}”`);
     } catch (err) {
       notify.err(errorMessage(err));
     } finally {
       setLiking(null);
+      setClearingLikes(null);
     }
   }, [adminFetch, patchLike]);
 
@@ -353,7 +365,6 @@ export function LibraryProvider({
   const [queuing, setQueuing] = useState<string | null>(null);
   const [retagging, setRetagging] = useState<string | null>(null);
   const [flashId, setFlashId] = useState<string | null>(null);
-  const [editingId, setEditingId] = useState<string | null>(null);
   const [manualBusy, setManualBusy] = useState<string | null>(null);
   // Separate from manualBusy: one spinner covering both would grey out the tag
   // chips while a year is saving.
@@ -578,7 +589,7 @@ export function LibraryProvider({
 
   const value = useMemo<LibraryShared>(() => ({
     adminFetch, ready, coverage, reloadCoverage, tagger, restampBlockMarks,
-    likeIndex, liking, toggleLike, clearLikes,
+    likeIndex, liking, clearingLikes, toggleLike, clearLikes,
     selected, toggleSelect, toggleAllRows, clearSelection,
     playlists, plBusy, addSelectedToPlaylist,
     vocab, seedVocab, ensureVocab,
@@ -587,7 +598,7 @@ export function LibraryProvider({
     blockTrack, unblockRow, removeBlockEntry,
   }), [
     adminFetch, ready, coverage, reloadCoverage, tagger, restampBlockMarks,
-    likeIndex, liking, toggleLike, clearLikes,
+    likeIndex, liking, clearingLikes, toggleLike, clearLikes,
     selected, toggleSelect, toggleAllRows, clearSelection,
     playlists, plBusy, addSelectedToPlaylist,
     vocab, seedVocab, ensureVocab,
