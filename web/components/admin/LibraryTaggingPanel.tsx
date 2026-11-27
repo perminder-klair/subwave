@@ -146,6 +146,10 @@ export interface TaggerState {
   holds?: string[];
   // Library rows the last walk kept but did not see, out of picks (controller music/held-rows.ts).
   heldRows?: number;
+  /** A music-source switch whose carry-across walk has not finished. */
+  switchPending?: boolean;
+  /** The re-link waits for the new source to finish scanning, then runs again. */
+  switchAwaitingScan?: boolean;
 }
 
 // Rides along on /settings, so it needs no extra request on any tab.

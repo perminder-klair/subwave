@@ -124,7 +124,7 @@ services:
       - TTS_HEAVY_URL=${TTS_HEAVY_URL:-http://tts-heavy:8080}
       # Acoustic-analysis sidecar (default-on below). Probed, then local venv.
       - ANALYZE_URL=${ANALYZE_URL:-http://analyzer:8080}
-      # The music router (below). Only used when Settings → Music source selects it.
+      # The music router (below). Only used when Admin → Music source selects it.
       - MUSIC_ROUTER_URL=${MUSIC_ROUTER_URL:-http://router:4534}
       # The router's uid (see the router service's `user:`); the controller hands it state/router/config.json and data/.
       - ROUTER_UID=${ROUTER_UID:-1000}
@@ -162,7 +162,7 @@ services:
   # -------------------------------------------------------------------------
   # ROUTER — music sources beyond Navidrome (#692)
   # -------------------------------------------------------------------------
-  # Idle until Admin → Settings → Music source selects it. Dev runs `tsx watch`
+  # Idle until Admin → Music source selects it. Dev runs `tsx watch`
   # against bind-mounted source, like the controller. To develop SUB/WAVE with
   # no music server at all, pick "Demo library" in the onboarding wizard (or
   # set ROUTER_SOURCE=mock here for a router that serves it before setup).

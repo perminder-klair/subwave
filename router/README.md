@@ -2,7 +2,7 @@
 
 Serves the Subsonic API the SUB/WAVE controller already speaks, and answers it from **music-source plugins**: Jellyfin, Plex, Navidrome, a generated demo library, and anything installed in `state/router/plugins/`. It is what lets a station play from something other than Navidrome without the controller, Liquidsoap or the analyzer knowing.
 
-It ships as the `router` service in every compose file and idles until **Admin → Settings → Music source** selects it. See [`docs/internals/music-sources.md`](../docs/internals/music-sources.md) for how it fits, and [`docs/music-source-plugins.md`](../docs/music-source-plugins.md) to write a plugin.
+It ships as the `router` service in every compose file and idles until a source other than direct Navidrome is chosen in **Admin → Music source**. See [`docs/internals/music-sources.md`](../docs/internals/music-sources.md) for how it fits, and [`docs/music-source-plugins.md`](../docs/music-source-plugins.md) to write a plugin.
 
 ## Run it
 

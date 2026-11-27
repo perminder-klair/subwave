@@ -41,7 +41,7 @@ export function decidePrune(opts: {
     return {
       prune: false,
       reason: 'scanning',
-      message: `Navidrome is scanning its library, so the ${opts.missing.toLocaleString('en-GB')} tracks this walk did not see were kept; the next walk after the scan decides`,
+      message: `The music source is scanning its library, so the ${opts.missing.toLocaleString('en-GB')} tracks this walk did not see were kept; the next walk after the scan decides`,
     };
   }
   const threshold = pruneHoldThreshold(opts.knownTracks);

@@ -42,6 +42,10 @@ import {
   Boxes,
   Webhook,
   Telescope,
+  Activity,
+  Music2,
+  Cable,
+  Grid3x3,
 } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import type { SignInResult } from '../../lib/adminAuth';
@@ -216,6 +220,18 @@ const NAV_SECTIONS: NavSection[] = [
           { href: '/admin/connect?tab=endpoints', id: 'connect-endpoints', label: 'API', icon: Braces, tab: 'endpoints' },
           { href: '/admin/connect?tab=mcp', id: 'connect-mcp', label: 'MCP', icon: Boxes, tab: 'mcp' },
           { href: '/admin/connect?tab=webhooks', id: 'connect-webhooks', label: 'Webhooks', icon: Webhook, tab: 'webhooks' },
+        ],
+      },
+      {
+        href: '/admin/music',
+        id: 'music',
+        label: 'Music source',
+        icon: Music2,
+        children: [
+          { href: '/admin/music?tab=source', id: 'music-source', label: 'Source', icon: Music2, tab: 'source', defaultTab: true },
+          { href: '/admin/music?tab=channels', id: 'music-channels', label: 'Channels', icon: Cable, tab: 'channels' },
+          { href: '/admin/music?tab=signal', id: 'music-signal', label: 'Signal path', icon: Activity, tab: 'signal' },
+          { href: '/admin/music?tab=matrix', id: 'music-matrix', label: 'Service matrix', icon: Grid3x3, tab: 'matrix' },
         ],
       },
       { href: '/admin/settings', id: 'settings', label: 'Settings', icon: SlidersHorizontal },

@@ -35,7 +35,9 @@ export default function QuickStart() {
             against the env <code className="bs-code-inline">init</code> just
             picked. After that,{' '}
             <code className="bs-code-inline">setup</code> asks for your Navidrome,
-            LLM, and DJ persona settings and renders jingles. From then on,{' '}
+            LLM, and DJ persona settings and renders jingles (on Jellyfin or Plex,
+            pick it in the browser wizard at <code className="bs-code-inline">/onboarding</code>{' '}
+            or Admin → Music source afterwards). From then on,{' '}
             <code className="bs-code-inline">subwave start / stop / logs / doctor</code>{' '}
             run the station from anywhere on your shell.
           </p>
@@ -88,7 +90,7 @@ export default function QuickStart() {
         <h2>One sentence in your coding agent.</h2>
         <p>
           The repo ships an agent skill that handles setup, deploy, and update. It pings
-          Navidrome and Ollama, boots the stack, generates jingles, and checks that the stream is
+          your music server and Ollama, boots the stack, generates jingles, and checks that the stream is
           on-air. It works with <strong>Claude Code</strong>, <strong>Codex</strong>,{' '}
           <strong>Cursor</strong>, or anything else that reads{' '}
           <code className="bs-code-inline">AGENTS.md</code>.

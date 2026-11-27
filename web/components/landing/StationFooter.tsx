@@ -131,7 +131,7 @@ export default function StationFooter({ djName }: { djName?: string }) {
           sm:flex-row sm:flex-wrap sm:items-baseline sm:justify-between sm:gap-4 sm:text-left"
       >
         <span className="font-bold text-ink">SUB/WAVE · EST. 2026</span>
-        <span>Navidrome · Liquidsoap · Icecast · your LLM · your voice</span>
+        <span>Your library · Liquidsoap · Icecast · your LLM · your voice</span>
         <span>
           {djName ? `${djName} on the desk · ` : ''}
           <AnimatedLink

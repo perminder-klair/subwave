@@ -107,7 +107,7 @@ is the second kind:
   personas plus an LLM — owns the pacing, not the listener. (Operators *can*
   skip via the admin API; listeners cannot.)
 - **AI as the DJ, not the catalogue.** The music is your own library, served
-  by Navidrome over the Subsonic API. The LLM picks what's next and talks
+  by Navidrome, Jellyfin, Plex or a source plugin. The LLM picks what's next and talks
   between tracks. It doesn't generate music and it doesn't replace your taste.
 - **Self-hosted and swappable.** Runs on one Linux box behind Cloudflare. The
   LLM provider is swappable at runtime (Ollama, Anthropic, OpenAI, Google,
@@ -117,13 +117,14 @@ is the second kind:
 
 ```bash
 curl -fsSL https://cli.getsubwave.com | sh    # installs, then offers to init + start
-subwave setup                              # connect Navidrome + LLM
+subwave setup                              # connect your music + LLM
 ```
 
 Two Enter prompts during the installer (`Run subwave init now?`, then
 `Bring the stack up now?`) and the stack is on-air. `subwave setup`
 connects Navidrome and your LLM, or do the same in the browser at
-`http://localhost:7700/onboarding`.
+`http://localhost:7700/onboarding`, which also offers Jellyfin, Plex,
+installed source plugins and a no-setup demo library.
 
 No clone, no Node on the host. `subwave status / logs / doctor / update`
 work from anywhere afterwards.
@@ -139,8 +140,9 @@ curl -O https://raw.githubusercontent.com/perminder-klair/subwave/main/.env.exam
 mv .env.example .env
 # Edit .env: set ADMIN_USER, ADMIN_PASS, SITE_URL (three vars, that's it).
 docker compose up -d
-# Then open https://your-host/onboarding. The web wizard collects Navidrome,
-# LLM, TTS, DJ persona, and offers to render jingles.
+# Then open https://your-host/onboarding. The web wizard collects your music
+# source (Navidrome, Jellyfin, Plex or the demo library), LLM, TTS, DJ persona,
+# and offers to render jingles.
 ```
 
 Functionally identical: same images, same state layout, same persistence.

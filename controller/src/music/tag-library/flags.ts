@@ -117,7 +117,7 @@ export async function walkNavidrome(
     acceptReplaced = process.argv.includes('--accept-replaced'),
   }: { confirmReplaced?: boolean; acceptReplaced?: boolean } = {},
 ): Promise<{ walked: number; liveIds: Set<string>; replacedHeld: number }> {
-  reportProgress({ phase: 'walk', label: 'Scanning Navidrome library', done: 0 });
+  reportProgress({ phase: 'walk', label: 'Scanning the music library', done: 0 });
   let walked = 0;
   const liveIds = new Set<string>();
   // Blast radius of the era gate, reported once at the end so an operator sees
@@ -185,7 +185,7 @@ export async function walkNavidrome(
     walked += 1;
     if (walked % 500 === 0) {
       console.log(`[tag] walked ${walked} tracks`);
-      reportProgress({ phase: 'walk', label: 'Scanning Navidrome library', done: walked });
+      reportProgress({ phase: 'walk', label: 'Scanning the music library', done: walked });
     }
   }
   logEvent('info', `Scanned ${walked.toLocaleString('en-GB')} tracks`);
@@ -279,7 +279,7 @@ export async function reconcileOnly() {
       heldMessage = held.message;
       logEvent('warning', held.message, { hold: true });
     }
-    console.log(`[tag] reconcile pruned ${pruned} orphaned tracks no longer in Navidrome`);
+    console.log(`[tag] reconcile pruned ${pruned} orphaned tracks no longer on the music source`);
     reportCatalogueReady(walked);
     const resolved = await backfillOriginalYears(pendingOriginalYearIds(false), false, 4);
     if (resolved) console.log(`[tag] reconcile resolved ${resolved} original years via MusicBrainz`);
@@ -289,7 +289,7 @@ export async function reconcileOnly() {
   }
   const parts = [
     adopted > 0 ? `Re-linked ${adopted} track${adopted === 1 ? '' : 's'} after a Navidrome ID migration` : '',
-    pruned > 0 ? `Removed ${pruned} track${pruned === 1 ? '' : 's'} no longer in Navidrome` : '',
+    pruned > 0 ? `Removed ${pruned} track${pruned === 1 ? '' : 's'} no longer on the music source` : '',
     heldMessage ? 'Removal of missing tracks on hold (see the log)' : '',
     replacedHeld > 0 ? `Re-analysis of ${replacedHeld.toLocaleString('en-GB')} replaced file${replacedHeld === 1 ? '' : 's'} on hold (see the log)` : '',
   ].filter(Boolean);

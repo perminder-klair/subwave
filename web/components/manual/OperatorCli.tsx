@@ -45,7 +45,7 @@ export default function OperatorCli() {
           </li>
           <li>
             <strong>doctor</strong> — a full diagnostic sweep: the Docker daemon, every
-            container, the controller&rsquo;s HTTP health, Navidrome reachability, and recent
+            container, the controller&rsquo;s HTTP health, music source reachability, and recent
             errors in the logs.
           </li>
           <li>

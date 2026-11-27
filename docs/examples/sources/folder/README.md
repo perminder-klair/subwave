@@ -27,7 +27,7 @@ Artist and album come from the folder names, track number and title from the fil
    ```
 
    then `docker compose up -d router`.
-3. Admin → Settings → Music source → **Rescan plugins**, choose **Music folder**, set *Folder* to `/music`, **Test connection**, save.
+3. Admin → Music source → *Don't see your server?* → **Rescan plugins**, choose the **Music folder** card, set *Folder* to `/music`, then **Switch to Music folder…**.
 
 ## Check it
 

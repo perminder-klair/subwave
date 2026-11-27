@@ -673,7 +673,7 @@ export interface SettingsData {
     passSet?: boolean;
     env?: { url?: boolean; user?: boolean; pass?: boolean };
   };
-  // Which backend the station plays from (#692); Settings → Music source.
+  // Which backend the station plays from (#692); chosen in Admin → Music source.
   musicMode?: 'navidrome' | 'router';
   streamOnAir?: boolean;
   // What timezone '' (Auto) resolves to — the controller's own zone.

@@ -71,6 +71,8 @@ globalThis.fetch = (input, init) => {
 const db = await import('../src/music/library-db.js');
 const rotation = await import('../src/music/id-rotation.js');
 const heldRows = await import('../src/music/held-rows.js');
+const ms = await import('../src/setup/music-source.js');
+const { pendingSourceSwitch } = await import('../src/music/source-switch.js');
 await db.open({ embeddingDim: 8, adoptStoredDim: true });
 
 function vectors(id: string) {
@@ -186,6 +188,30 @@ for (const confirmMassPrune of [false, true]) {
     assert.equal(heldRows.heldIds().size, 0, 'the record goes with the rows');
   });
 }
+
+// A source set up minutes ago lists every file at once and reads their tags
+// over the next while. The walk after a switch carries what already matches,
+// but keeps the switch open until a walk after the scan, or the rest of the
+// library would never be matched on real tags.
+test('a switch walk while the new source is scanning carries what matches and keeps the switch open', async () => {
+  db.upsertTrackMeta('nd-old', { title: 'Harbour', artist: 'Fixture', album: 'Night', duration: 200 });
+  db.upsertTrackTags('nd-old', { moods: ['nocturnal'], source: 'manual', energy: 'low', confidence: 1 });
+  db.upsertTrackMeta('jf-new', { title: 'Harbour', artist: 'Fixture', album: 'Night', duration: 201 });
+  const live = new Set(['keep-1', 'keep-2', 'jf-new']);
+  await ms.markSourceSwitch('navidrome', 'router');
+
+  scanning = true;
+  const during = await rotation.adoptAndPrune(live);
+  assert.equal(during.adopted, 1, 'what already matches is carried');
+  assert.deepEqual(db.getTrack('jf-new')?.moods, ['nocturnal']);
+  assert.ok(pendingSourceSwitch(), 'the switch stays open while the source scans');
+  assert.equal(during.held?.reason, 'scanning');
+
+  scanning = false;
+  const afterScan = await rotation.adoptAndPrune(live);
+  assert.equal(pendingSourceSwitch(), null, 'a walk after the scan spends it');
+  assert.equal(afterScan.pruned, 1);
+});
 
 test('a complete empty walk keeps all rows and skips confirmation in analyzer and reconcile', async () => {
   walk = 'empty';

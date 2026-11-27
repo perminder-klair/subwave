@@ -6,12 +6,14 @@ import EditorialReveal from './EditorialReveal';
 
 const COMPATIBLE = [
   'Navidrome',
+  'Jellyfin',
+  'Plex',
   'Subsonic',
   'Airsonic',
   'Gonic',
   'Funkwhale',
-  'Nextcloud Music',
-  'anything Subsonic-API compatible',
+  'a folder of files',
+  'anything with a source plugin',
 ];
 
 export default function Navidrome() {
@@ -24,8 +26,8 @@ export default function Navidrome() {
           <p className="text-muted">
             SUB/WAVE is the DJ, the mixer, and the broadcast layer. The music
             comes from <strong className="text-ink">your</strong>{' '}
-            Navidrome, the self-hosted music server with a Subsonic API. Run
-            Navidrome on your homelab, point SUB/WAVE at it, and the DJ
+            library: Navidrome, Jellyfin or Plex on your homelab, or anything
+            a source plugin can read. Point SUB/WAVE at it, and the DJ
             picks from your collection. Nobody else&rsquo;s algorithm. Nobody else&rsquo;s catalogue.
           </p>
 
@@ -33,7 +35,8 @@ export default function Navidrome() {
             <li><strong>Your taste, not a recommendation engine.</strong> The picker reads the metadata you tagged (genres, moods, your own folders) and chooses from there.</li>
             <li><strong>No licensing fees.</strong> You already own (or, you know, have on disk) the music. SUB/WAVE doesn&rsquo;t add a streaming bill on top.</li>
             <li><strong>Private by default.</strong> Listeners hit one MP3 stream. Nobody outside your stack ever sees your library, your tags, or who requested what.</li>
-            <li><strong>BYO Subsonic-compatible server.</strong> Subsonic, Airsonic, Gonic, Funkwhale. If it speaks the Subsonic API, it works.</li>
+            <li><strong>The server you already run.</strong> Navidrome, Jellyfin and Plex are built in, and any Subsonic-compatible server works. Something else? A source plugin is one small file.</li>
+            <li><strong>Switch without starting over.</strong> Move from one server to another and your mood tags, analysis and likes follow the music.</li>
             <li><strong>Scrobbles like a real station.</strong> Every spin can report to Last.fm or ListenBrainz, including your own self-hosted instance.</li>
           </ul>
 
@@ -42,11 +45,11 @@ export default function Navidrome() {
               Connect your library <span aria-hidden="true">&nbsp;→</span>
             </Link>
             <AnimatedLink
-              href="https://www.navidrome.org/"
+              href="/manual/music-sources"
               variant="arrow"
               className="text-[12px] font-semibold tracking-[0.15em] text-ink uppercase hover:text-vermilion"
             >
-              New to Navidrome?
+              Supported libraries
             </AnimatedLink>
           </div>
         </div>
@@ -57,8 +60,8 @@ export default function Navidrome() {
             <div className="bs-pipe-row">
               <div className="bs-pipe-icon">♪</div>
               <div className="bs-pipe-meta">
-                <div className="bs-pipe-name">Navidrome</div>
-                <div className="bs-pipe-sub">navidrome.local:4533</div>
+                <div className="bs-pipe-name">Your music server</div>
+                <div className="bs-pipe-sub">navidrome · jellyfin · plex</div>
               </div>
               <div className="bs-pipe-status">
                 <span className="bs-live-dot" /> CONNECTED
@@ -67,7 +70,7 @@ export default function Navidrome() {
           </div>
 
           <div className="bs-pipe-arrow">
-            <span>SUBSONIC API</span>
+            <span>SUBSONIC API · SOURCE PLUGINS</span>
             <div className="bs-pipe-line" />
           </div>
 

@@ -114,6 +114,14 @@ export default function AdminSettings() {
             applied to every spoken line). Edit the vocabulary and every show, festival,
             and auto-DJ pick draws from it.
           </li>
+          <li>
+            <strong>Music source</strong> — where the music comes from. Four tabs:{' '}
+            <strong>Source</strong> (pick Navidrome, Jellyfin, Plex, a plugin or the demo
+            library, test it and switch), <strong>Source channels</strong> (each source&apos;s
+            health, counts and speed), <strong>Signal path</strong> (the station&apos;s live
+            requests to its library) and <strong>Service matrix</strong> (what each source
+            supports). See <Link href="/manual/music-sources" className="bs-link">Music sources</Link>.
+          </li>
         </ul>
         <div className="bs-manual-figrow">
           <ManualFigure
@@ -147,8 +155,8 @@ export default function AdminSettings() {
           </li>
           <li>
             <strong>Library tagger</strong> — the embedding provider and mood-propagation
-            settings behind the mood tags, plus where you kick off a tagging run. It sits
-            under Music Source, since it works on the library that source provides.
+            settings behind the mood tags, plus where you kick off a tagging run. It works
+            on the library your music source provides.
           </li>
           <li>
             <strong>Music Selection</strong> — choose how tracks are selected (Agentic

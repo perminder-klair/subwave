@@ -166,7 +166,7 @@ services:
       # Acoustic-analysis sidecar (default-on below). Probed first, then a
       # local venv; falls through to NULL analysis. See music/analyzer.ts.
       - ANALYZE_URL=\${ANALYZE_URL:-http://analyzer:8080}
-      # The music router (below). Only used when Settings → Music source selects it.
+      # The music router (below). Only used when Admin → Music source selects it.
       - MUSIC_ROUTER_URL=\${MUSIC_ROUTER_URL:-http://router:4534}
       # The router's uid (see the router service's \`user:\`); the controller hands it state/router/config.json and data/.
       - ROUTER_UID=\${ROUTER_UID:-1000}
@@ -196,8 +196,8 @@ services:
   # -------------------------------------------------------------------------
   # Speaks the Subsonic API the controller already uses and answers it from
   # music-source plugins: Jellyfin, Plex, Navidrome, the demo library, and any
-  # plugin dropped into state/router/plugins/. Idle until Admin → Settings →
-  # Music source selects it — a Navidrome station never routes through it.
+  # plugin dropped into state/router/plugins/. Idle until Admin → Music source
+  # selects it — a Navidrome station never routes through it.
   # Internal only: the controller, Liquidsoap and the analyzer reach it on the
   # compose network as http://router:4534. It mounts ONLY state/router (its
   # config, plugins and plugin data): plugins are code, and must not see the
@@ -601,7 +601,7 @@ services:
       - TTS_HEAVY_URL=\${TTS_HEAVY_URL:-http://tts-heavy:8080}
       # Acoustic-analysis sidecar (default-on below). Probed, then local venv.
       - ANALYZE_URL=\${ANALYZE_URL:-http://analyzer:8080}
-      # The music router (below). Only used when Settings → Music source selects it.
+      # The music router (below). Only used when Admin → Music source selects it.
       - MUSIC_ROUTER_URL=\${MUSIC_ROUTER_URL:-http://router:4534}
       # The router's uid (see the router service's \`user:\`); the controller hands it state/router/config.json and data/.
       - ROUTER_UID=\${ROUTER_UID:-1000}
@@ -632,8 +632,8 @@ services:
   # -------------------------------------------------------------------------
   # Speaks the Subsonic API the controller already uses and answers it from
   # music-source plugins: Jellyfin, Plex, Navidrome, the demo library, and any
-  # plugin dropped into state/router/plugins/. Idle until Admin → Settings →
-  # Music source selects it — a Navidrome station never routes through it.
+  # plugin dropped into state/router/plugins/. Idle until Admin → Music source
+  # selects it — a Navidrome station never routes through it.
   # Internal only: the controller, Liquidsoap and the analyzer reach it on the
   # compose network as http://router:4534. It mounts ONLY state/router (its
   # config, plugins and plugin data): plugins are code, and must not see the
@@ -990,7 +990,7 @@ services:
       - TTS_HEAVY_URL=\${TTS_HEAVY_URL:-http://tts-heavy:8080}
       # Acoustic-analysis sidecar (default-on below). Probed, then local venv.
       - ANALYZE_URL=\${ANALYZE_URL:-http://analyzer:8080}
-      # The music router (below). Only used when Settings → Music source selects it.
+      # The music router (below). Only used when Admin → Music source selects it.
       - MUSIC_ROUTER_URL=\${MUSIC_ROUTER_URL:-http://router:4534}
       # The router's uid (see the router service's \`user:\`); the controller hands it state/router/config.json and data/.
       - ROUTER_UID=\${ROUTER_UID:-1000}
@@ -1028,7 +1028,7 @@ services:
   # -------------------------------------------------------------------------
   # ROUTER — music sources beyond Navidrome (#692)
   # -------------------------------------------------------------------------
-  # Idle until Admin → Settings → Music source selects it. Dev runs \`tsx watch\`
+  # Idle until Admin → Music source selects it. Dev runs \`tsx watch\`
   # against bind-mounted source, like the controller. To develop SUB/WAVE with
   # no music server at all, pick "Demo library" in the onboarding wizard (or
   # set ROUTER_SOURCE=mock here for a router that serves it before setup).
@@ -1489,7 +1489,7 @@ SITE_URL=
 # MUSIC_LIBRARY_PATH=
 #
 # Music router (#692) — Jellyfin, Plex or a plugin instead of Navidrome. Pick
-# the source in Admin → Settings → Music source (or the onboarding wizard);
+# the source in Admin → Music source (or the onboarding wizard);
 # these only pin a field from env, which then locks it in the form. They reach
 # the \`router\` service, never the controller.
 # JELLYFIN_URL=http://host.docker.internal:8096

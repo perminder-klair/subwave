@@ -48,8 +48,8 @@ export default function SetupOverview() {
     <SetupPage
       eyebrow="SELF-HOSTED · OPEN SOURCE"
       title="Run your own SUB/WAVE."
-      meta="≈ 10 min · 4 commands · needs Navidrome + an LLM"
-      intro="SUB/WAVE points at your Navidrome library and a language model. The model is a local Ollama box by default, or any hosted provider you like. Once it's running, the AI DJ broadcasts from your homelab, picks tracks from your own collection, and takes requests from anyone you share the URL with."
+      meta="≈ 10 min · 4 commands · needs your music library + an LLM"
+      intro="SUB/WAVE points at your music library (Navidrome, Jellyfin or Plex) and a language model. The model is a local Ollama box by default, or any hosted provider you like. Once it's running, the AI DJ broadcasts from your homelab, picks tracks from your own collection, and takes requests from anyone you share the URL with."
       current="/setup"
       heroAside={
         <div className="bs-dj-glyph" aria-hidden="true">
@@ -61,7 +61,7 @@ export default function SetupOverview() {
         <div className="bs-faststart">
           <p className="bs-eyebrow">THE FAST PATH</p>
           <p>
-            Already have Docker, Navidrome, and an LLM reachable? One curl, two
+            Already have Docker, a music server, and an LLM reachable? One curl, two
             Enters, and the station is on the air. The installer chains
             straight into <code className="bs-code-inline">init</code> and{' '}
             <code className="bs-code-inline">start</code>, then{' '}
@@ -78,7 +78,9 @@ export default function SetupOverview() {
             <code className="bs-code-inline">init</code> ends with{' '}
             <em>Bring the stack up now?</em> Yes again brings up Docker. Then{' '}
             <code className="bs-code-inline">setup</code> prompts for Navidrome
-            and your LLM, persists everything, and renders the station jingles.{' '}
+            and your LLM, persists everything, and renders the station jingles.
+            On Jellyfin or Plex? Choose it in the browser wizard or Admin → Music
+            source instead.{' '}
             <Link href="/setup/quick-start" className="bs-link">
               Full walkthrough →
             </Link>

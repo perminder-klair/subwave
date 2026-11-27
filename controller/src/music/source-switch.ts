@@ -61,13 +61,21 @@ export function switchedAfter(marker: SourceSwitchMarker, sinceMs: number | null
  * run exits. A run that started before the switch could not carry it across,
  * so a reconcile walk follows — unless the operator stopped the run, which
  * is not the moment to start another one. A run that started after the
- * switch had its chance; retrying it here could loop.
+ * switch had its chance, unless it ended cleanly with the marker kept (the
+ * source was scanning): that one waits for the scan, which cannot loop,
+ * since the next walk finds the scan over and spends the marker.
  */
 export function afterMaintenanceRun(
   marker: SourceSwitchMarker | null,
   run: { startedAt: string; outcome: 'ok' | 'failed' | 'stopped' },
-): 'reconcile' | 'stopped' | null {
-  if (!marker || !switchedAfter(marker, Date.parse(run.startedAt))) return null;
+): 'reconcile' | 'stopped' | 'await-scan' | null {
+  if (!marker) return null;
+  if (!switchedAfter(marker, Date.parse(run.startedAt))) {
+    // A run that began after the switch and finished cleanly still left the
+    // marker: its walk found the source scanning (id-rotation adoptAndPrune),
+    // so the re-link waits for the scan to end. A failed one is not retried.
+    return run.outcome === 'ok' ? 'await-scan' : null;
+  }
   return run.outcome === 'stopped' ? 'stopped' : 'reconcile';
 }
 

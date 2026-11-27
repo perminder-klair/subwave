@@ -110,7 +110,7 @@ test('a walk that began before the switch leaves the marker for the walk after i
   assert.equal(carried.source, 'manual');
 });
 
-test('a run that predates the switch is followed by a reconcile; a later one is not', () => {
+test('a run that predates the switch is followed by a reconcile; a later one only waits for a scan', () => {
   const marker = { at: '2026-10-07T12:00:00.000Z', from: 'navidrome', to: 'router' };
   const before = '2026-10-07T11:59:00.000Z';
   const after = '2026-10-07T12:00:01.000Z';
@@ -119,6 +119,10 @@ test('a run that predates the switch is followed by a reconcile; a later one is 
   assert.equal(afterMaintenanceRun(marker, { startedAt: before, outcome: 'failed' }), 'reconcile');
   assert.equal(afterMaintenanceRun(marker, { startedAt: before, outcome: 'stopped' }), 'stopped', 'Stop is not the moment to start another run');
   assert.equal(afterMaintenanceRun(marker, { startedAt: after, outcome: 'failed' }), null, 'it had its chance; retrying could loop');
+  // A clean run after the switch that still left the marker found the source
+  // scanning (id-rotation adoptAndPrune): the re-link waits for the scan.
+  assert.equal(afterMaintenanceRun(marker, { startedAt: after, outcome: 'ok' }), 'await-scan');
+  assert.equal(afterMaintenanceRun(marker, { startedAt: after, outcome: 'stopped' }), null);
   assert.equal(switchedAfter(marker, null), false, 'an unknown start keeps the original behaviour');
   assert.equal(switchedAfter(marker, Date.parse(marker.at)), false, 'a connection loaded at the same moment is the new one');
 });

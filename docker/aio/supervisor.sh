@@ -1073,8 +1073,8 @@ run_controller() {
 	node_modules/.bin/tsx src/server.ts
 }
 
-# Music router (#692) — music sources beyond Navidrome. Idle until Settings →
-# Music source selects it. Loopback only: the controller, Liquidsoap and the
+# Music router (#692) — music sources beyond Navidrome. Idle until Admin → Music source
+# selects it. Loopback only: the controller, Liquidsoap and the
 # local analyzer are all in this container. Unlike the compose service it
 # shares the container's whole filesystem, so plugin code (third-party) must
 # not run as root beside secrets.env: it runs as ROUTER_UID:ROUTER_GID with no

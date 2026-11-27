@@ -36,7 +36,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { V3Alert } from '@/components/ui/alert';
 import { SourceFields } from '../admin/music/SourceFields';
-import { blankSource, missingFields, selectablePlugins, type DraftSource } from '../admin/music/sourceDraft';
+import { DIRECT_NAVIDROME, blankSource, missingFields, sourceOptions, type DraftSource, type SourceChoice } from '../admin/music/sourceDraft';
+import { SourcePicker } from '../admin/music/SourcePicker';
 import type { MusicPluginInfo, RouterTestResult } from '@/lib/schemas.generated';
 import {
   DJ_BRAIN_BASE_URL,
@@ -99,28 +100,58 @@ const navidromeStepSchema = z.object({
   pass: z.string(),
 });
 
-// Step 1 is "where the music comes from": Navidrome directly (the default, the
-// form below), or the SUB/WAVE music router serving Jellyfin, Plex, an
-// installed plugin or the demo library (#692).
+// Step 1 is "where is your music?" (#692): the same source cards as Admin →
+// Music source. Navidrome is the direct connection (the form below); the rest
+// are served by the SUB/WAVE music router. The demo library needs no setup, so
+// a newcomer without a server is never stuck here.
 export function NavidromeStep({ w }: { w: WizardController }) {
-  // Follows the wizard's music mode — which opens on what the station plays
-  // from once that loads — until the operator picks a side here.
-  const [chosen, setChosen] = useState<'navidrome' | 'router' | null>(null);
-  const mode = chosen ?? w.data.music.mode;
-  return mode === 'router'
-    ? <RouterSourceStep w={w} onMode={setChosen} />
-    : <NavidromeForm w={w} onMode={setChosen} />;
-}
+  const [plugins, setPlugins] = useState<MusicPluginInfo[] | null>(null);
+  const [routerError, setRouterError] = useState<string | null>(null);
+  // Follows the wizard's music mode, which opens on what the station plays
+  // from once that loads, until the operator picks a card.
+  const [chosen, setChosen] = useState<SourceChoice | null>(null);
+  const choice: SourceChoice = chosen ?? (w.data.music.mode === 'router' ? w.data.music.sources[0]?.plugin || DIRECT_NAVIDROME : DIRECT_NAVIDROME);
 
-function ModeSwitch({ mode, onMode }: { mode: 'navidrome' | 'router'; onMode: (m: 'navidrome' | 'router') => void }) {
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      try {
+        const r = await w.auth.adminFetch('/settings/music-source', { signal: AbortSignal.timeout(20000) });
+        const j = (await r.json().catch(() => ({}))) as { router?: { plugins: MusicPluginInfo[] } | null; routerError?: string | null };
+        if (!live) return;
+        if (j.router) setPlugins(j.router.plugins);
+        else setRouterError(j.routerError || `controller returned HTTP ${r.status}`);
+      } catch (err: unknown) {
+        if (live) setRouterError(err instanceof Error ? err.message : 'could not reach the controller');
+      }
+    })();
+    return () => { live = false; };
+  }, [w.auth]);
+
+  const loading = !plugins && !routerError;
+  const options = sourceOptions(plugins, routerError).map((o) => (loading && o.id !== DIRECT_NAVIDROME ? { ...o, disabled: 'checking the music router…' } : o));
+  const plugin = plugins?.find((p) => p.name === choice);
+
   return (
-    <div className="mb-4 flex flex-wrap gap-2" role="group" aria-label="Music source">
-      <Button type="button" variant={mode === 'navidrome' ? 'solid' : 'outline'} onClick={() => onMode('navidrome')}>
-        Navidrome
-      </Button>
-      <Button type="button" variant={mode === 'router' ? 'solid' : 'outline'} onClick={() => onMode('router')}>
-        Jellyfin · Plex · other
-      </Button>
+    <div>
+      <StepHeader
+        title="Where is your music?"
+        blurb="Pick the library the AI DJ plays from. No server ready? Start with the demo library and connect yours later in Admin → Music source."
+      />
+      <div className="mb-6">
+        <SourcePicker options={options} value={choice} onChange={setChosen} narrow />
+      </div>
+      {choice === DIRECT_NAVIDROME ? (
+        <NavidromeForm w={w} />
+      ) : plugin ? (
+        <RouterSourceForm key={plugin.name} w={w} plugin={plugin} />
+      ) : routerError ? (
+        <V3Alert tone="error" title="music router unreachable">
+          {routerError}. Start it with <code>docker compose up -d router</code> and come back, or connect Navidrome instead.
+        </V3Alert>
+      ) : (
+        <p className="text-sm text-muted">Loading sources…</p>
+      )}
     </div>
   );
 }
@@ -140,36 +171,13 @@ function LicensingNote() {
   );
 }
 
-function RouterSourceStep({ w, onMode }: { w: WizardController; onMode: (m: 'navidrome' | 'router') => void }) {
-  const [plugins, setPlugins] = useState<MusicPluginInfo[] | null>(null);
-  const [routerError, setRouterError] = useState<string | null>(null);
-  const [source, setSource] = useState<DraftSource>(() => w.data.music.sources[0] ?? { plugin: '', config: {}, secretsSet: [] });
+function RouterSourceForm({ w, plugin }: { w: WizardController; plugin: MusicPluginInfo }) {
+  const saved = w.data.music.sources[0];
+  const [source, setSource] = useState<DraftSource>(() => (saved?.plugin === plugin.name ? saved : blankSource(plugin)));
   const [testing, setTesting] = useState(false);
   const [test, setTest] = useState<{ ok: boolean | null; msg?: string }>({ ok: null });
-
-  useEffect(() => {
-    let live = true;
-    (async () => {
-      try {
-        const r = await w.auth.adminFetch('/settings/music-source', { signal: AbortSignal.timeout(20000) });
-        const j = (await r.json().catch(() => ({}))) as { router?: { plugins: MusicPluginInfo[] } | null; routerError?: string | null };
-        if (!live) return;
-        if (!j.router) {
-          setRouterError(j.routerError || `controller returned HTTP ${r.status}`);
-          return;
-        }
-        const usable = selectablePlugins(j.router.plugins);
-        setPlugins(usable);
-        setSource((s) => (s.plugin ? s : blankSource(usable.find((p) => p.name === 'jellyfin') ?? usable[0])));
-      } catch (err: unknown) {
-        if (live) setRouterError(err instanceof Error ? err.message : 'could not reach the controller');
-      }
-    })();
-    return () => { live = false; };
-  }, [w.auth]);
-
-  const plugin = plugins?.find((p) => p.name === source.plugin);
   const missing = missingFields(source, plugin);
+  const demo = plugin.name === 'mock';
 
   const onTest = async () => {
     setTesting(true);
@@ -194,70 +202,46 @@ function RouterSourceStep({ w, onMode }: { w: WizardController; onMode: (m: 'nav
 
   const onNext = (ev: React.FormEvent) => {
     ev.preventDefault();
-    if (!plugin || missing.length) return;
-    w.patch({ music: { ...w.data.music, mode: 'router', sources: [source], label: plugin.label } });
+    if (missing.length) return;
+    w.patch({ music: { ...w.data.music, mode: 'router', sources: [source], label: demo ? 'Demo library' : plugin.label } });
     w.next();
   };
 
   return (
     <form onSubmit={onNext} noValidate>
-      <StepHeader
-        title="Choose your music source"
-        blurb="SUB/WAVE's music router plays from Jellyfin, Plex, or any installed source plugin. Pick one and point it at your library."
-      />
-      <ModeSwitch mode="router" onMode={onMode} />
-      {routerError ? (
-        <V3Alert tone="error" title="music router unreachable">
-          {routerError}. Start it with <code>docker compose up -d router</code> and come back, or connect Navidrome instead.
-        </V3Alert>
-      ) : !plugins ? (
-        <p className="text-sm text-muted">Loading sources…</p>
-      ) : (
-        <div className="grid gap-4">
-          <Field>
-            <span className={WIZARD_LABEL_CLASS}>Source</span>
-            <Select
-              value={source.plugin}
-              onValueChange={(name: string) => {
-                setSource(blankSource(plugins.find((p) => p.name === name)));
-                setTest({ ok: null });
-              }}
-            >
-              <SelectTrigger className="w-[320px] max-w-full" aria-label="Music source plugin"><SelectValue placeholder="Choose…" /></SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  {plugins.map((p) => <SelectItem key={p.name} value={p.name}>{p.label}</SelectItem>)}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-            {plugin?.description && <p className="text-xs text-muted">{plugin.description}</p>}
-          </Field>
-          {plugin && (
-            <SourceFields
-              plugin={plugin}
-              source={source}
-              idPrefix="wizard-src"
-              onChange={(config) => {
-                setSource({ ...source, config });
-                setTest({ ok: null });
-              }}
-            />
-          )}
+      <div className="grid gap-4">
+        {demo ? (
+          <p className="text-sm leading-relaxed text-muted">
+            The demo library is generated tones, not music: enough to hear the DJ, the jingles and the mixer working.
+            Connect your real library any time from Admin → Music source.
+          </p>
+        ) : (
+          <SourceFields
+            plugin={plugin}
+            source={source}
+            idPrefix="wizard-src"
+            onChange={(config) => {
+              setSource({ ...source, config });
+              setTest({ ok: null });
+            }}
+          />
+        )}
+        {!demo && (
           <div>
-            <Button type="button" variant="solid" onClick={onTest} disabled={testing || !plugin || missing.length > 0}>
+            <Button type="button" variant="solid" onClick={onTest} disabled={testing || missing.length > 0}>
               {testing ? 'Testing…' : 'Test connection'}
             </Button>
             <TestPill result={test} />
           </div>
-          <LicensingNote />
-          <NextButton disabled={!plugin || missing.length > 0} />
-        </div>
-      )}
+        )}
+        {!demo && <LicensingNote />}
+        <NextButton disabled={missing.length > 0} />
+      </div>
     </form>
   );
 }
 
-function NavidromeForm({ w, onMode }: { w: WizardController; onMode: (m: 'navidrome' | 'router') => void }) {
+function NavidromeForm({ w }: { w: WizardController }) {
   const [busy, setBusy] = useState(false);
   const form = useZodForm(navidromeStepSchema, { ...w.data.navidrome });
   const values = form.watch();
@@ -293,11 +277,6 @@ function NavidromeForm({ w, onMode }: { w: WizardController; onMode: (m: 'navidr
 
   return (
     <form onSubmit={onNext} noValidate>
-      <StepHeader
-        title="Connect Navidrome"
-        blurb="SUB/WAVE plays from your Subsonic-compatible music library. Point it at your Navidrome and the AI DJ takes over."
-      />
-      <ModeSwitch mode="navidrome" onMode={onMode} />
       <div className="grid gap-3">
         <TextField
           control={form.control}
@@ -869,7 +848,7 @@ export function ReviewStep({
   };
   const rows: Array<[string, string]> = [
     w.data.music.mode === 'router'
-      ? ['Music', `${w.data.music.label || w.data.music.sources[0]?.plugin || '—'} (via the music router)`]
+      ? ['Music', w.data.music.label || w.data.music.sources[0]?.plugin || '—']
       : ['Navidrome', w.data.navidrome.url ? `${w.data.navidrome.user} @ ${w.data.navidrome.url}` : '— skipped —'],
     ...(w.hosted
       ? [['DJ & voice', 'Managed by SUB/WAVE Cloud'] as [string, string]]

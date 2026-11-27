@@ -12,7 +12,15 @@ my-source/
   index.mjs             # export default (ctx) => ({ ...ops })
 ```
 
-Install it by copying the folder to `state/router/plugins/my-source/` and pressing **Rescan plugins** in Admin → Settings → Music source. That folder belongs to root, so plugin code can never rewrite a plugin; copy as root (`sudo cp -r my-source state/router/plugins/`). It then appears in the source picker, with a settings form drawn from your manifest.
+Install it by copying the folder into the station's `router/plugins/` folder and pressing **Rescan plugins** in Admin → Music source (Source tab → *Don't see your server?*). It then appears as a card in the source picker, tagged *installed*, with a settings form drawn from your manifest. That folder belongs to root, so plugin code can never rewrite a plugin; copy as root. Where it is:
+
+| Install | Plugins folder |
+| --- | --- |
+| Compose (CLI, raw compose, a clone) | `$STATE_DIR/router/plugins/` — `./state/router/plugins/` unless you set `STATE_DIR` |
+| All-in-one image | `router/plugins/` inside the folder you mount at `/var/sub-wave` |
+| Unraid | `router/plugins/` inside the container's *Appdata* path, e.g. `/mnt/user/appdata/subwave/router/plugins/` |
+
+A plugin that reads files from the host (like the folder example) also needs them mounted into the router: a `volumes:` line on the compose `router` service, or an extra path on the all-in-one container (Unraid: *Add another Path, Port, Variable…*), since there the router shares the one container.
 
 > **Plugins are code.** They run inside the router with network access. Install only plugins you have read and trust. The router only sees `state/router/`, not the rest of the station's state, but a plugin can still reach anything the router can reach on the network.
 
@@ -53,7 +61,7 @@ export default (ctx) => ({
 });
 ```
 
-The default export is a factory the router calls with a context whenever the operator's selection is (re)applied. If you want types, `import { defineSource } from '@subwave/source-sdk'` and wrap the factory (`router/src/sdk/` is that package). A plugin ships as **one bundled ES module**: nothing is installed inside the container, so either use only Node built-ins (`node:fs`, `node:crypto`, `fetch`) or bundle your dependencies (esbuild, rollup). A backend that needs another language belongs in its own service that your plugin talks to over HTTP.
+The default export is a factory the router calls with a context whenever the operator's selection is (re)applied. The types live in [`router/src/sdk/`](../router/src/sdk/) (`defineSource`, `SourceFactory`, `Song`, …). They are not published as a package yet, so to type-check a plugin outside this repo, copy `types.ts` next to it and use `import type` (a plugin ships as one module with nothing installed beside it, so `defineSource` is only a convenience: it returns the factory unchanged). A plugin ships as **one bundled ES module**: nothing is installed inside the container, so either use only Node built-ins (`node:fs`, `node:crypto`, `fetch`) or bundle your dependencies (esbuild, rollup). A backend that needs another language belongs in its own service that your plugin talks to over HTTP.
 
 ### The context
 
@@ -129,7 +137,7 @@ npm --prefix router run conformance -- /path/to/my-source --config url=http://em
 
 It checks the manifest, every required op, that ids are publishable and stable across two independent instances, that `stream` returns at least 4 KiB of non-text audio, Range handling, cover art, and each optional op you implement. Add `--allow-writes` to also exercise stars and a scratch playlist (it deletes what it creates). It exits non-zero on any failure, so it can gate your plugin's own CI.
 
-Then, in the admin UI: install, **Rescan plugins**, pick it, **Test connection**, save. The Library health card shows its counts and capabilities, and the Doctor reports it under *Music library*.
+Then, in the admin UI: install, **Rescan plugins**, pick its card, fill in the settings and press **Switch to …**, which tests it before anything changes. The **Source channels** tab shows its counts, latency and capabilities, **Signal path** shows each request the station makes to it, and the Doctor reports a plugin that failed to load under *plugins*.
 
 ## Versioning
 

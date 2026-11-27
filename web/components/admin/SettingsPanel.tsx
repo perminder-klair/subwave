@@ -627,7 +627,7 @@ export default function SettingsPanel({ hosted = false }: { hosted?: boolean }) 
               />
             )}
             {activeSection === 'music' && (
-              <MusicSourceSection data={data} adminFetch={adminFetch} refresh={refresh} />
+              <MusicSourceSection />
             )}
             {activeSection === 'theme' && (
               <ThemeSection

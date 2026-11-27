@@ -115,11 +115,21 @@ export function considerIdRotationRecovery(track: {
 const TAGGER_LOG_TAIL = 30;
 
 // Single snapshot source so GET /settings and GET /library/tagger can't drift.
-export function taggerView(): TaggerState & { heldRows: number } {
+export function taggerView(): TaggerState & { heldRows: number; switchPending: boolean; switchAwaitingScan: boolean } {
   // heldRows: library rows the last complete walk kept but did not see, out of
   // the pick paths until a walk sees them or the operator confirms the removal
   // (music/held-rows.ts). Read from the file, so it outlives a restart.
-  return { ...tagger, lastLog: tagger.lastLog.slice(-TAGGER_LOG_TAIL), heldRows: heldIds().size };
+  // switchPending: a music-source switch whose carry-across walk has not
+  // finished yet (the marker file), so the Music source page can show the
+  // re-link in progress rather than only a toast.
+  return {
+    ...tagger,
+    lastLog: tagger.lastLog.slice(-TAGGER_LOG_TAIL),
+    heldRows: heldIds().size,
+    switchPending: pendingSourceSwitch() !== null,
+    // The re-link is waiting for the new source to finish scanning (awaitScanThenReconcile).
+    switchAwaitingScan: scanWait !== null,
+  };
 }
 
 function stripLogPrefix(s: string): string {
@@ -355,7 +365,9 @@ export function switchBlocksMessage(r: SwitchBlocksReport): string {
 // the marker alone. Carry the library across now that the slot is free.
 function resumeSourceSwitch(startedAt: string, outcome: TaggerLastRun['outcome']): void {
   const next = afterMaintenanceRun(pendingSourceSwitch(), { startedAt, outcome });
-  if (next === 'stopped') {
+  if (next === 'await-scan') {
+    awaitScanThenReconcile();
+  } else if (next === 'stopped') {
     queue.log('scheduler', 'The music source changed during the stopped run — run Reconcile to re-link the library');
   } else if (next === 'reconcile' && !tagger.running) {
     // A run started meanwhile began after the switch, so its walk carries it.
@@ -609,6 +621,38 @@ function spawnChild(
     runEnd.exited(tagger.lastRun);
   });
   queue.log('scheduler', `${label} started${detail ? ` (${detail})` : ''}`);
+}
+
+// The walk after a switch found the new source still scanning (a server set
+// up minutes ago lists every file at once and reads their tags over the next
+// while), carried what already matched and kept the switch open. Re-walk once
+// the scan is over, so the rest of the library is matched on real tags.
+// Polled, because nothing tells the controller when a backend's scan ends.
+export const SWITCH_SCAN_POLL_MS = 60_000;
+export const SWITCH_SCAN_GIVE_UP_MS = 6 * 60 * 60_000;
+let scanWait: { timer: NodeJS.Timeout; since: number } | null = null;
+
+export function awaitScanThenReconcile(pollMs = SWITCH_SCAN_POLL_MS, since = Date.now()): void {
+  if (scanWait) return;
+  const tick = async () => {
+    scanWait = null;
+    if (!pendingSourceSwitch() || tagger.running) return; // done meanwhile, or a run whose exit decides
+    const scanning = await subsonic.getScanStatus().catch(() => null);
+    if (scanning === true) {
+      if (Date.now() - since > SWITCH_SCAN_GIVE_UP_MS) {
+        queue.log('scheduler', 'The music source is still scanning after six hours — run Reconcile once it finishes to re-link the library');
+        return;
+      }
+      scanWait = { timer: setTimeout(() => void tick(), pollMs), since };
+      scanWait.timer.unref();
+      return;
+    }
+    queue.log('scheduler', 'The music source finished scanning — re-linking the library now');
+    startReconcile();
+  };
+  queue.log('scheduler', 'The music source is still scanning — the library is re-linked once the scan finishes');
+  scanWait = { timer: setTimeout(() => void tick(), pollMs), since };
+  scanWait.timer.unref();
 }
 
 // A switch marker still pending at boot is a carry-across walk that never ran
