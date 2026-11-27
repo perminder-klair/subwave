@@ -8,12 +8,11 @@
 
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { rmSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runConformance, type Report } from './conformance.js';
-import { PASS, USER, configWith, startRouter, type RunningRouter } from './helpers.js';
+import { PASS, USER, configWith, makeMusicFolder, startRouter, type RunningRouter } from './helpers.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SOURCES = resolve(here, '../src/sources');
@@ -48,39 +47,9 @@ test('the minimal fixture passes with only the required ops', async () => {
   assert.ok(report.checks.some((c) => c.outcome === 'skip'), 'optional ops are reported as skipped');
 });
 
-// A 16-bit mono WAV of `seconds` of silence: real audio bytes, well over the
-// 4 KiB floor, with no dependency to make it.
-function wav(seconds: number): Buffer {
-  const rate = 8000;
-  const data = Buffer.alloc(rate * 2 * seconds);
-  const h = Buffer.alloc(44);
-  h.write('RIFF', 0, 'ascii');
-  h.writeUInt32LE(36 + data.length, 4);
-  h.write('WAVEfmt ', 8, 'ascii');
-  h.writeUInt32LE(16, 16);
-  h.writeUInt16LE(1, 20);
-  h.writeUInt16LE(1, 22);
-  h.writeUInt32LE(rate, 24);
-  h.writeUInt32LE(rate * 2, 28);
-  h.writeUInt16LE(2, 32);
-  h.writeUInt16LE(16, 34);
-  h.write('data', 36, 'ascii');
-  h.writeUInt32LE(data.length, 40);
-  return Buffer.concat([h, data]);
-}
-
 test('the documented example plugin (a music folder) passes, as a third-party plugin', async () => {
-  const music = mkdtempSync(join(tmpdir(), 'conformance-folder-'));
+  const music = makeMusicFolder();
   try {
-    for (const [artist, album, tracks] of [
-      ['Sigur Rós', 'Takk...', ['01 Takk.wav', '02 Glósóli.wav']],
-      ['Boards of Canada', 'Music Has the Right to Children', ['01 Wildlife Analysis.wav', '02 An Eagle in Your Mind.wav', '03 The Color of the Fire.wav']],
-    ] as const) {
-      const dir = join(music, artist, album);
-      mkdirSync(dir, { recursive: true });
-      for (const t of tracks) writeFileSync(join(dir, t), wav(1));
-      writeFileSync(join(dir, 'cover.jpg'), Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16, 74, 70, 73, 70]));
-    }
     const report = await runConformance(resolve(here, '../../docs/examples/sources/folder'), { config: { path: music } });
     assertPasses(report);
     assert.equal(report.checks.find((c) => c.name.startsWith('stream honours Range'))?.outcome, 'pass');

@@ -1,16 +1,18 @@
 // @subwave/source-sdk (router/source-sdk) is built from src/sdk, the same
 // files the router type-checks against. These pin what the published package
 // promises: its major is the plugin apiVersion, it builds to a self-contained
-// module with no dependencies, and plain-JS plugins can type against it.
+// module with no dependencies, plain-JS plugins can type against it, and its
+// `conformance` command runs the router's kit from one bundled file.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { SOURCE_API_VERSION } from '../src/sdk/types.js';
+import { makeMusicFolder } from './helpers.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const PKG_DIR = resolve(here, '../source-sdk');
@@ -26,6 +28,7 @@ test('the package carries no dependencies, so it is safe as a dev dependency of 
   assert.equal(pkg.dependencies, undefined);
   assert.equal(pkg.peerDependencies, undefined);
   assert.deepEqual(pkg.files, ['dist']);
+  assert.deepEqual(pkg.bin, { 'subwave-source-sdk': 'dist/cli.js' });
 });
 
 test('it builds from src/sdk to a module that imports only its own files', async () => {
@@ -100,4 +103,42 @@ test('it builds from src/sdk to a module that imports only its own files', async
     rmSync(out, { recursive: true, force: true });
   }
   assert.equal(existsSync(out), false);
+});
+
+test('`conformance` runs the kit from the bundle alone, with no node_modules beside it', () => {
+  const work = mkdtempSync(join(tmpdir(), 'source-sdk-bin-'));
+  const music = makeMusicFolder();
+  const folder = resolve(here, '../../docs/examples/sources/folder');
+  try {
+    // An empty folder outside the repo: an import the bundle didn't inline has
+    // no node_modules to fall back on, so it fails here rather than for an author.
+    const cli = join(work, 'cli.js');
+    execFileSync(process.execPath, [join(PKG_DIR, 'build-bin.mjs'), cli], { stdio: 'pipe' });
+    const imports = [...readFileSync(cli, 'utf8').matchAll(/^import\b[^;]*?\bfrom\s+"([^"]+)"/gm)].map((m) => m[1]);
+    for (const i of imports) assert.ok(i!.startsWith('node:'), `the bundle imports ${i}`);
+
+    const run = (...args: string[]) => spawnSync(process.execPath, [cli, ...args], { cwd: work, encoding: 'utf8' });
+
+    const pass = run('conformance', folder, '--config', `path=${music}`, '--json');
+    assert.equal(pass.status, 0, pass.stderr);
+    const report = JSON.parse(pass.stdout) as { plugin: string; ok: boolean; checks: { outcome: string }[] };
+    assert.equal(report.plugin, 'folder');
+    assert.equal(report.ok, true);
+    assert.ok(report.checks.length > 10);
+
+    // A plugin whose required config is missing fails, with the reason.
+    const fail = run('conformance', resolve(here, 'fixtures/plugins/good'));
+    assert.equal(fail.status, 1);
+    assert.match(fail.stdout, /missing required config: greeting/);
+    assert.match(fail.stdout, /FAIL/);
+
+    assert.equal(run('conformance').status, 2, 'no plugin folder is a usage error');
+    assert.equal(run('nonsense').status, 2);
+    const help = run('--help');
+    assert.equal(help.status, 0);
+    assert.match(help.stdout, /npx @subwave\/source-sdk conformance <plugin-dir>/);
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+    rmSync(music, { recursive: true, force: true });
+  }
 });

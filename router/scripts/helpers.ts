@@ -80,3 +80,40 @@ export async function startRouter(opts: { pluginsDir?: string; env?: Record<stri
 export function configWith(sources: unknown[], extra: Record<string, unknown> = {}) {
   return { version: 1, auth: { user: USER, pass: PASS }, merge: false, sources, ...extra };
 }
+
+// A 16-bit mono WAV of `seconds` of silence: real audio bytes, well over the
+// 4 KiB floor, with no dependency to make it.
+export function wav(seconds: number): Buffer {
+  const rate = 8000;
+  const data = Buffer.alloc(rate * 2 * seconds);
+  const h = Buffer.alloc(44);
+  h.write('RIFF', 0, 'ascii');
+  h.writeUInt32LE(36 + data.length, 4);
+  h.write('WAVEfmt ', 8, 'ascii');
+  h.writeUInt32LE(16, 16);
+  h.writeUInt16LE(1, 20);
+  h.writeUInt16LE(1, 22);
+  h.writeUInt32LE(rate, 24);
+  h.writeUInt32LE(rate * 2, 28);
+  h.writeUInt16LE(2, 32);
+  h.writeUInt16LE(16, 34);
+  h.write('data', 36, 'ascii');
+  h.writeUInt32LE(data.length, 40);
+  return Buffer.concat([h, data]);
+}
+
+/** A music folder in the Artist/Album/NN Title layout the folder example reads:
+ *  two albums of silent WAVs, each with a cover. The caller removes it. */
+export function makeMusicFolder(): string {
+  const music = mkdtempSync(join(tmpdir(), 'conformance-folder-'));
+  for (const [artist, album, tracks] of [
+    ['Sigur Rós', 'Takk...', ['01 Takk.wav', '02 Glósóli.wav']],
+    ['Boards of Canada', 'Music Has the Right to Children', ['01 Wildlife Analysis.wav', '02 An Eagle in Your Mind.wav', '03 The Color of the Fire.wav']],
+  ] as const) {
+    const dir = join(music, artist, album);
+    mkdirSync(dir, { recursive: true });
+    for (const t of tracks) writeFileSync(join(dir, t), wav(1));
+    writeFileSync(join(dir, 'cover.jpg'), Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16, 74, 70, 73, 70]));
+  }
+  return music;
+}

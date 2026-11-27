@@ -176,8 +176,7 @@ docker compose up -d router`}</CodeBlock>
           A conformance kit checks a plugin against everything the station relies on, from stable ids to
           real audio and range requests:
         </p>
-        <CodeBlock>{`npm --prefix router install
-npm --prefix router run conformance -- ./my-source --config url=http://server:8096 --config apiKey=…`}</CodeBlock>
+        <CodeBlock>{`npx @subwave/source-sdk conformance ./my-source --config url=http://server:8096 --config apiKey=…`}</CodeBlock>
         <p>
           The full contract, the manifest fields and a walkthrough of the example are in{' '}
           <a href="https://github.com/perminder-klair/subwave/blob/main/docs/music-source-plugins.md" className="bs-link">

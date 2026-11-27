@@ -11,6 +11,8 @@ npm run lint      # tsc --noEmit — CI's merge gate for this package
 npm run conformance -- <plugin-dir> [--config k=v] [--builtin] [--allow-writes]
 ```
 
+`scripts/conformance.ts` is a library (nothing runs on import): `scripts/conformance-cli.ts` is the npm script, and `source-sdk/bin.ts` bundles the same kit into the published package as `npx @subwave/source-sdk conformance`. A runtime import added to the kit's path is bundled in, so keep it to Node built-ins and what `src/` already uses; `scripts/source-sdk.test.ts` fails if the bundle imports anything but `node:`.
+
 ESM, `module: NodeNext` (relative imports end in `.js`), `verbatimModuleSyntax` (type-only imports say `import type`). `tsx` runs the source; there is no build step, and runtime deps are only `express`, `zod`, `tsx`.
 
 ## Layout

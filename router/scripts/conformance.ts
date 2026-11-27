@@ -2,6 +2,12 @@
 // music-source plugin, through the same enforcement layer the router uses.
 //
 //   npm run conformance -- <plugin-dir> [--config key=value ...] [--builtin] [--allow-writes] [--json]
+//   npx @subwave/source-sdk conformance <plugin-dir> [...]   (outside this repo)
+//
+// A library: scripts/conformance-cli.ts is `npm run conformance`, and
+// source-sdk/bin.ts bundles conformanceMain() into the published package, so
+// a plugin author can run the same kit without cloning SUB/WAVE. Nothing here
+// runs on import, which is what lets it be bundled.
 //
 // Reads only, unless --allow-writes: then it also stars/unstars a track and
 // creates, edits and deletes a scratch playlist on the backend.
@@ -11,7 +17,6 @@
 import { resolve } from 'node:path';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { pathToFileURL } from 'node:url';
 import { loadPlugin } from '../src/host/loader.js';
 import { resolveConfig } from '../src/host/manifest.js';
 import { prefixedCodec } from '../src/host/ids.js';
@@ -296,12 +301,16 @@ function parseArgs(argv: string[]): { dir?: string; opts: ConformanceOptions; js
 
 const MARK: Record<Outcome, string> = { pass: '✓', warn: '!', fail: '✗', skip: '-' };
 
-const isMain = process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href;
-if (isMain) {
-  const { dir, opts, json } = parseArgs(process.argv.slice(2));
+/**
+ * The command line: runs the kit on argv and returns the exit code (0 = every
+ * check passed, 1 = one failed, 2 = usage). Each caller passes its own usage
+ * line, since only the in-repo one offers --builtin.
+ */
+export async function conformanceMain(argv: string[], usage: string): Promise<number> {
+  const { dir, opts, json } = parseArgs(argv);
   if (!dir) {
-    console.error('usage: npm run conformance -- <plugin-dir> [--config key=value ...] [--builtin] [--allow-writes] [--json]');
-    process.exit(2);
+    console.error(`usage: ${usage}`);
+    return 2;
   }
   const report = await runConformance(dir, opts);
   if (json) console.log(JSON.stringify(report, null, 2));
@@ -310,5 +319,5 @@ if (isMain) {
     for (const c of report.checks) console.log(`  ${MARK[c.outcome]} ${c.name}${c.detail ? ` — ${c.detail}` : ''}`);
     console.log(`\n${report.ok ? 'PASS' : 'FAIL'}\n`);
   }
-  process.exit(report.ok ? 0 : 1);
+  return report.ok ? 0 : 1;
 }

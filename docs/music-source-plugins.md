@@ -128,12 +128,13 @@ Leave any of these out and the station degrades instead of failing — the admin
 
 ## Test it
 
-The conformance kit runs the contract the station relies on, through the router's own enforcement layer:
+The conformance kit runs the contract the station relies on, through the router's own enforcement layer. It ships in the SDK package, so it needs no SUB/WAVE checkout:
 
 ```bash
-npm --prefix router install
-npm --prefix router run conformance -- /path/to/my-source --config url=http://emby:8096 --config apiKey=…
+npx @subwave/source-sdk conformance /path/to/my-source --config url=http://emby:8096 --config apiKey=…
 ```
+
+From a checkout (for a contract change that isn't released yet), the same kit is `npm --prefix router install && npm --prefix router run conformance -- /path/to/my-source …`.
 
 It checks the manifest, every required op, that ids are publishable and stable across two independent instances, that `stream` returns at least 4 KiB of non-text audio, Range handling, cover art, and each optional op you implement. Add `--allow-writes` to also exercise stars and a scratch playlist (it deletes what it creates). It exits non-zero on any failure, so it can gate your plugin's own CI.
 
