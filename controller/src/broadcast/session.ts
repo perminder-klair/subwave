@@ -15,6 +15,7 @@ import { snapshotBoothCarry, type BoothCarry } from './booth-carry.js';
 import { BOUNDARY_MAX_HORIZON_SEC, nextShowBoundaryMs, showKeyAt, showRunContinues, showTakeoverStartedAt } from './show-boundary.js';
 import type { Persona } from './queue/types.js';
 import { leaningsBlindPickReason } from './dj-agent/leanings-review.js';
+import { pickNoteLanguage } from './dj-agent/pick-reason-language.js';
 
 // Type-only import, erased at runtime, so no cycle with context.ts.
 export type SessionContext = Awaited<ReturnType<typeof getFullContext>> & { episodeOccurrenceId?: string | null };
@@ -903,6 +904,11 @@ export function windowMessages() {
     });
   }
   const recent = _session.messages.slice(-WINDOW_TURNS);
+  // A pick note that names a preference is replaced in the language this
+  // session's notes are written in (pick-reason-language.ts): its own
+  // persona's, never English copy among a Greek host's notes.
+  const sessionPersonaId = _session.persona?.id;
+  const noteLanguage = pickNoteLanguage((sessionPersonaId && settings.resolvePersonaById(sessionPersonaId)) || settings.getEffectivePersona());
   // The current ask the agent should respond to; older pick events are filtered.
   let lastPickEventIdx = -1;
   for (let i = recent.length - 1; i >= 0; i--) {
@@ -936,7 +942,7 @@ export function windowMessages() {
     // Keep the operator's original reason on disk, but remove preference prose
     // from model history, including sessions written before this guard existed.
     const promptText = m.role === 'dj' && m.kind === 'pick'
-      ? leaningsBlindPickReason(m.text, { title: m.meta?.title, artist: m.meta?.artist })
+      ? leaningsBlindPickReason(m.text, { title: m.meta?.title, artist: m.meta?.artist }, noteLanguage)
       : m.text;
     const text = m.meta?.promptSuffix ? `${promptText}${m.meta.promptSuffix}` : promptText;
     const content = (m.role === 'dj' && m.kind === 'pick')

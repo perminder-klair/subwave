@@ -62,7 +62,8 @@ import { shortlistSourceHint } from '../music/shortlist-presentation.js';
 import type { Persona } from './queue/types.js';
 import { recordShortlistPick } from '../stats.js';
 import { predecessorContext, predecessorPrompt } from './dj-agent/pick-context.js';
-import { groundPickNote, pickNoteReferences, stationClaimNames } from './dj-agent/pick-note.js';
+import { groundPickNote, onAirPickNoteLanguage, pickNoteReferences, stationClaimNames } from './dj-agent/pick-note.js';
+import type { PickNoteLanguage } from './dj-agent/pick-reason-language.js';
 
 // Re-exported so every existing `from './dj-agent.js'` import keeps working —
 // including scripts/llm-bench, which sits outside tsconfig's include and so
@@ -108,14 +109,14 @@ export function resolveRepickId<T extends { id?: unknown }>(
 // the pick-anchor artist guard (#1124) reuses this same constrained re-pick
 // but for a valid pick it wants to swap off the anchor artist, so the bad-id
 // wording would be false and confuse the model.
-async function repickFromSeen({ seen, badId, predecessor, showAt = null, playlistResolved = true, reason = null, telemetryKind = 'djAgentRepick', selectionContext = {}, shortlistResolution = null, health, log }: { log: (kind: string, line: string) => void; health?: { modelFailed: boolean }; seen: Map<string, any>; badId: string | null; predecessor?: ReturnType<typeof predecessorContext>; showAt?: Date | null; playlistResolved?: boolean; reason?: string | null; telemetryKind?: 'djAgentRepick' | 'djShortlistRepick'; selectionContext?: ShortlistSelectionContext; shortlistResolution?: ShortlistPickResolution | null }) {
+async function repickFromSeen({ seen, badId, predecessor, showAt = null, playlistResolved = true, reason = null, telemetryKind = 'djAgentRepick', selectionContext = {}, shortlistResolution = null, health, log, noteLanguage = null }: { log: (kind: string, line: string) => void; health?: { modelFailed: boolean }; seen: Map<string, any>; badId: string | null; predecessor?: ReturnType<typeof predecessorContext>; showAt?: Date | null; playlistResolved?: boolean; reason?: string | null; telemetryKind?: 'djAgentRepick' | 'djShortlistRepick'; selectionContext?: ShortlistSelectionContext; shortlistResolution?: ShortlistPickResolution | null; noteLanguage?: PickNoteLanguage }) {
   const ids = [...seen.keys()];
   if (ids.length === 0) return null;
   const shortlistRepick = telemetryKind === 'djShortlistRepick';
   // The corrective call's eligible subset retains shortlist fit order. Never
   // reopen discovery or return the rejected artist/album when the model fails.
   const fallback = (error: string) => shortlistRepick
-    ? guardedShortlistFallback(seen.values(), { health, log, stage: 'repick', error }) : null;
+    ? guardedShortlistFallback(seen.values(), { health, log, stage: 'repick', error, noteLanguage }) : null;
   const schema = shortlistRepick
     ? shortlistPickSchema(ids)
     : modelTolerant(pickSchemaBase().omit({ usedMusicalLeanings: true, leaningsTieBreak: true }).extend({
@@ -169,7 +170,7 @@ async function repickFromSeen({ seen, badId, predecessor, showAt = null, playlis
     if (!shortlistRepick) return outcome;
 
     const track = seen.get(outcome.id);
-    const selectionReason = shortlistClauseSelectionReason(track, outcome.musicalReason);
+    const selectionReason = shortlistClauseSelectionReason(track, outcome.musicalReason, noteLanguage);
     return { ...outcome, selectionReason, reason: selectionReason };
   } catch (err: any) {
     return fallback(String(err?.message || err));
@@ -455,9 +456,9 @@ export async function livePickerScope(queue: any, { audioWaypoint = null, showAt
 
 // All controller choices use their already-guarded, fit-ordered subset. Every
 // stage has the same breaker attribution, neutral reason and Events/Booth log.
-function guardedShortlistFallback(candidates: Iterable<any>, { health, log, stage, error }: {
+function guardedShortlistFallback(candidates: Iterable<any>, { health, log, stage, error, noteLanguage = null }: {
   health?: { modelFailed: boolean }; log: (kind: string, line: string) => void;
-  stage: 'pick' | 'repick' | 'guard'; error: string;
+  stage: 'pick' | 'repick' | 'guard'; error: string; noteLanguage?: PickNoteLanguage;
 }) {
   const tracks = [...candidates];
   const track = tracks[0];
@@ -465,7 +466,7 @@ function guardedShortlistFallback(candidates: Iterable<any>, { health, log, stag
   if (health) health.modelFailed = true;
   log('shortlist', `Track Shortlist ${stage} fallback: ${error} — taking the best-fitting eligible shortlist track without another model call`);
   logEvent('shortlist.modelFallback', { stage, error, candidates: tracks.length, id: track.id });
-  const selectionReason = shortlistClauseSelectionReason(track, '');
+  const selectionReason = shortlistClauseSelectionReason(track, '', noteLanguage);
   return { id: String(track.id), musicalReason: '', transition: null, selectionReason, reason: selectionReason };
 }
 
@@ -585,6 +586,10 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
   // prepared copy, not the raw one this function was handed.
   if (pickContext) ctx = pickContext;
   const useShortlist = settings.get().llm?.trackSelection === 'shortlist';
+  // The language every note of this pick is written and worded in: the on-air
+  // persona's, read once so the prompt and the Booth line cannot disagree
+  // (pick-reason-language.ts; null is English, as before).
+  const noteLanguage = onAirPickNoteLanguage();
   const anchorAnalysis = pickAnchor ? library.bpmKeyFor(pickAnchor) : null;
   const selectionContext = selectionContextForPick(queue, ctx, {
     scope, wantLink, audioWaypoint, pickAnchor, predecessor, rankTarget, explore, useShortlist,
@@ -666,6 +671,7 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
         sourceRuns: shortlist.sourceRuns,
         context: selectionContext,
         shortlistResolution: shortlistPickResolution,
+        noteLanguage,
       });
     } catch (err: any) {
       // djObject has already spent both of its attempts on this model. The
@@ -674,7 +680,7 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
       // move without paying the pool's two more attempts on the model that
       // just failed. The failure still reaches the breaker (health).
       selection = guardedShortlistFallback(shortlist.candidates, {
-        health, log: (kind, line) => queue.log(kind, line), stage: 'pick', error: String(err?.message || err),
+        health, log: (kind, line) => queue.log(kind, line), stage: 'pick', error: String(err?.message || err), noteLanguage,
       })!;
     }
     object = { ...selection, reason: selection.selectionReason };
@@ -738,7 +744,7 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
       // A Shortlist reason names the track it was built for, which djPick
       // could not resolve from the unrepaired id.
       if (useShortlist) {
-        const selectionReason = shortlistClauseSelectionReason(song, object.musicalReason);
+        const selectionReason = shortlistClauseSelectionReason(song, object.musicalReason, noteLanguage);
         object = { ...object, selectionReason, reason: selectionReason };
       }
     }
@@ -752,6 +758,7 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
       selectionContext,
       shortlistResolution: shortlistPickResolution,
       health,
+      noteLanguage,
     });
     if (repicked) {
       logEvent('pick.repicked', { agent: 'pick', from: object?.id ?? null, to: repicked.id, candidates: extras.seen.size });
@@ -805,11 +812,11 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
     // Read the model's own note before the verified identity is prefixed to
     // it (#1978): a note describing another candidate becomes plain copy.
     const note = groundPickNote(queue, object.reason, { track: song, candidates: extras.seen.values(), pickAnchor, show: activeShow, route: 'pick' });
-    object = { ...object, reason: agenticDiscoverySelectionReason(song, note, pickNoteReferences(queue, pickAnchor, activeShow)) };
+    object = { ...object, reason: agenticDiscoverySelectionReason(song, note, pickNoteReferences(queue, pickAnchor, activeShow), noteLanguage) };
     // A note that names nothing on the queued track becomes plain copy too.
     // Keep what the model wrote, so a formatting miss in the identity check
     // can be told from a note about another track.
-    if (note?.trim() && object.reason === plainAgenticSelectionReason(song)) {
+    if (note?.trim() && object.reason === plainAgenticSelectionReason(song, noteLanguage)) {
       logEvent('pick.notePlain', { agent: 'pick', to: song.id ?? null, note: note.slice(0, 400) });
     }
   }
@@ -836,6 +843,7 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
     djName: session.onAirPersona()?.name ?? null,
     context: selectionContext,
     resolution: pickResolution,
+    noteLanguage,
     route: useShortlist
       ? {
         kind: 'djShortlistLeaningsReview',
@@ -855,7 +863,7 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
         failureEvent: 'pick.leaningsReviewFailed',
         failureFields: { agent: 'pick' },
         replacementReason: (replacement, leaningsReason) =>
-          verifiedAgenticReason(agenticSelectionReason(replacement, leaningsReason), true, replacement),
+          verifiedAgenticReason(agenticSelectionReason(replacement, leaningsReason, noteLanguage), true, replacement, noteLanguage),
       },
     review: (request) => djObject(request),
     reviewTimeoutMs: agentDeadline(),
@@ -906,7 +914,7 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
   const guardRepick = (alt: Map<string, any>, reason: string) => {
     if (health.modelFailed) {
       return Promise.resolve(guardedShortlistFallback(alt.values(), {
-        health, log: (kind, line) => queue.log(kind, line), stage: 'guard', error: reason,
+        health, log: (kind, line) => queue.log(kind, line), stage: 'guard', error: reason, noteLanguage,
       }));
     }
     return repickFromSeen({
@@ -918,6 +926,7 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
       selectionContext,
       shortlistResolution: shortlistPickResolution,
       health,
+      noteLanguage,
     });
   };
   // Read once: the album guard below steps around the same neighbours, and two
@@ -1085,8 +1094,8 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
     // the queue-collision re-composition below reads the same clause.
     object.musicalReason = groundPickNote(queue, object.musicalReason, { track: song, candidates: extras.seen.values(), pickAnchor, show: activeShow, route: 'shortlist' });
     object.reason = replacementSurvivedGuards
-      ? shortlistReasonForLeanings(object.reason, true, song)
-      : shortlistClauseSelectionReason(song, object.musicalReason);
+      ? shortlistReasonForLeanings(object.reason, true, song, noteLanguage)
+      : shortlistClauseSelectionReason(song, object.musicalReason, noteLanguage);
     if (shortlistPickResolution) {
       shortlistPickResolution.final = agenticTrackRef(song);
       shortlistPickResolution.reason = object.reason ?? null;
@@ -1109,7 +1118,7 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
     // (#1978); the first answer's was grounded above and already carries the
     // verified identity, so this pass leaves it as it is.
     object.reason = groundPickNote(queue, object.reason, { track: song, candidates: extras.seen.values(), pickAnchor, show: activeShow, route: 'pick' });
-    object.reason = verifiedAgenticReason(agenticSelectionReason(song, object.reason), leaningsReplacementSurvivedGuards, song);
+    object.reason = verifiedAgenticReason(agenticSelectionReason(song, object.reason, noteLanguage), leaningsReplacementSurvivedGuards, song, noteLanguage);
     agentPickResolution.final = agenticTrackRef(song);
     agentPickResolution.reason = object.reason ?? null;
   }
@@ -1194,7 +1203,7 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
       ? 'queue-collision'
       : shortlistPickResolution.leaningsReview?.rejectionReason ?? null;
     if (!shortlistPickResolution.usedMusicalLeanings && queued === -1) {
-      object.reason = shortlistClauseSelectionReason(song, object.musicalReason);
+      object.reason = shortlistClauseSelectionReason(song, object.musicalReason, noteLanguage);
       shortlistPickResolution.reason = object.reason;
     }
     const selectionRecord = {
@@ -1240,7 +1249,7 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
     // airs or enters the session, and Debug should not retain preference copy
     // beside a false verified flag.
     if (!agentPickResolution.usedMusicalLeanings) {
-      object.reason = verifiedAgenticReason(agenticSelectionReason(song, object.reason), false, song);
+      object.reason = verifiedAgenticReason(agenticSelectionReason(song, object.reason, noteLanguage), false, song, noteLanguage);
       agentPickResolution.reason = object.reason;
     }
     logEvent('pick.leaningsReview', {

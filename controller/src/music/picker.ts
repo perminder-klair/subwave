@@ -29,7 +29,8 @@ import type { Steer } from '../schemas/steer.js';
 import { hardRecentFor, showNoRepeatGuard, strictShowLibraryPoolSliced } from './show-recency.js';
 import * as likes from '../broadcast/likes.js';
 import { ARTIST_VARIETY_WINDOW } from '../broadcast/dj-agent/artist-guard.js';
-import { groundPickNote } from '../broadcast/dj-agent/pick-note.js';
+import { groundPickNote, onAirPickNoteLanguage } from '../broadcast/dj-agent/pick-note.js';
+import { pickNoteLanguageClause } from '../broadcast/dj-agent/pick-reason-language.js';
 
 // Raw Subsonic child, slimTrack library row, or Last.fm stub. A structural
 // superset of show-filter's FilterTrack and recency's CandidateLike.
@@ -805,6 +806,9 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
   try {
     // Same show-brief plumbing as the agent picker, whose fallback this is.
     pickRaw = await dj.pickNextTrack({
+      // The reason is the Booth's pick line: in the on-air persona's language
+      // (pick-reason-language.ts), '' and so unchanged for English.
+      noteLanguageClause: pickNoteLanguageClause(onAirPickNoteLanguage(), 'the "reason" field'),
       count: preview?.count ?? 1,
       artistSpan: openingArtistSpan(varietyWindow),
       steer: steer?.prompt || null,
