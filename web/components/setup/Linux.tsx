@@ -74,7 +74,7 @@ newgrp docker`}</CodeBlock>
             </p>
             <CodeBlock>{`subwave setup`}</CodeBlock>
             <p>
-              Navidrome, the LLM, TTS and the DJ persona, then jingle rendering.
+              Navidrome, the LLM, TTS and the DJ persona, then jingle rendering (Jellyfin or Plex: pick it at /onboarding instead).
               If your reverse proxy already fronts this host, choose{' '}
               <strong>prod-byo</strong> at init time — that's the compose shape
               without the bundled Caddy, described on{' '}

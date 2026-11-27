@@ -145,13 +145,13 @@ npm install
 npm run setup                                 # pick mode, answer prompts, done
 ```
 
-The CLI wizard prompts for mode (dev / prod / prod-byo), runs preflight (node, docker), collects Navidrome + LLM + admin creds + SITE_URL (prod only) + timezone, then brings the stack up and renders jingles.
+The CLI wizard prompts for mode (dev / prod / prod-byo), runs preflight (node, docker), collects Navidrome + LLM + admin creds + SITE_URL (prod only) + timezone, then brings the stack up and renders jingles. To play from Jellyfin, Plex, a source plugin or the demo library instead, choose it in the browser wizard or Admin → Music source afterwards; the CLI wizard asks only for Navidrome.
 
 ### What every path writes to
 
 All three paths converge on the same files:
 
-- `state/setup-config.json` — Navidrome creds + the "setup complete" timestamp
+- `state/setup-config.json` — the music source (Navidrome creds, or the router's selected sources) + the "setup complete" timestamp
 - `state/secrets.env` (mode 0600) — cloud LLM/TTS API keys
 - `state/settings.json` — DJ persona, jingle ratio, TTS choices (via the existing admin settings flow)
 - root `.env` — `ADMIN_USER`, `ADMIN_PASS`, `SITE_URL`, `TZ`, etc.
@@ -166,8 +166,8 @@ Env vars in `.env` always win when set — the wizards only fill in fields env d
 |---|---|---|
 | Where it runs | Your terminal | A browser, anywhere on the network |
 | Requires | Node 20+, npm, a cloned repo | A browser + the stack up |
-| Collects | Mode + Navidrome + LLM + admin + SITE_URL + TZ | Navidrome + LLM + TTS + DJ persona + jingles |
-| Probes | Live (Navidrome ping, LLM tag call from the host) | Live (via controller endpoints, run inside the container) |
+| Collects | Mode + Navidrome + LLM + admin + SITE_URL + TZ | Music source (Navidrome, Jellyfin, Plex, a plugin or the demo library) + LLM + TTS + DJ persona + jingles |
+| Probes | Live (Navidrome ping, LLM tag call from the host) | Live (via controller endpoints and the music router, run inside the container) |
 | Persists to | `state/setup-config.json`, `state/secrets.env`, `.env`, POST `/settings` | Same |
 | Renders jingles | Optional final step | One-click button on the Jingles step |
 | Bypass with | `node bin/subwave setup` (skips npm's buffering) | Visit `/onboarding` after the stack is up |

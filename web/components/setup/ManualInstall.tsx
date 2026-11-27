@@ -87,7 +87,9 @@ $EDITOR .env`}</CodeBlock>
                 Internal-only.
               </li>
               <li><strong>controller</strong> — the DJ brain. This is the one that talks to
-              Navidrome and your LLM.</li>
+              your music source and your LLM.</li>
+              <li><strong>router</strong> — the music router. Idle on a Navidrome station; it serves
+              Jellyfin, Plex, the demo library and source plugins when one is chosen. Internal-only.</li>
               <li><strong>web</strong> — Next.js UI, internal-only</li>
               <li>
                 <strong>caddy</strong> — the only thing bound to a host port (
@@ -159,7 +161,8 @@ $EDITOR .env`}</CodeBlock>
               these, tests them against the live service, and saves them:
             </p>
             <ul className="bs-list">
-              <li><strong>Navidrome</strong> — URL + user + pass. Saved to{' '}
+              <li><strong>Music source</strong> — Navidrome (URL + user + pass), Jellyfin or Plex
+              (URL + API key or token), an installed plugin, or the demo library. Saved to{' '}
               <code className="bs-code-inline">state/setup-config.json</code>.</li>
               <li><strong>LLM provider + model</strong> — Ollama (homelab default,
               no key), Anthropic, OpenAI, Google, DeepSeek, OpenRouter, Vercel AI Gateway,

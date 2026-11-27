@@ -151,6 +151,11 @@ Pin `SUBWAVE_VERSION` in `.env` first if you want a repeatable version rather
 than whatever `latest` resolves to today. Same flow with
 `-f docker-compose.byo.yml`.
 
+`pull` only refreshes images for the services your compose file already lists.
+When a release adds a service (the music `router`, for one), download the
+release's `docker-compose.yml` (or `.byo.yml`) over yours first, keeping your
+`.env`, then pull and `up -d`. The CLI's `subwave sync` does this for you.
+
 ### Clone install
 
 ```bash
@@ -261,6 +266,12 @@ with them. Two consequences worth knowing before you do it:
   migrations. An older build opening a newer database mostly just ignores the
   extra columns, but a few historical steps rebuilt tables outright, and across
   one of those a downgrade is not a supported path.
+- **A station playing from Jellyfin, Plex or a plugin needs the router.** A
+  version from before the music router knows only Navidrome: it ignores the
+  saved source and plays the Navidrome connection on file, if there is one,
+  with your library's tags still on the other source's track ids. Switch back
+  to Navidrome in Admin → Music source *before* rolling back past it, so the
+  re-link runs while the newer version is still there to do it.
 
 So: rolling back **one release** is routine. Rolling back **several**, or
 across a release whose notes mention a schema change, is the case where you

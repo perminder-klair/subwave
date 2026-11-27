@@ -103,7 +103,7 @@ export default function MacOs() {
               <code className="bs-code-inline">init</code> writes the install to{' '}
               <code className="bs-code-inline">~/subwave</code> and brings the
               stack up; <code className="bs-code-inline">setup</code> asks for
-              Navidrome, your LLM, and the DJ persona, then renders the jingles.
+              Navidrome, your LLM, and the DJ persona, then renders the jingles (on Jellyfin or Plex, pick it at /onboarding instead).
               Full walkthrough on{' '}
               <Link href="/setup/quick-start" className="bs-link">Quick Start</Link>.
             </p>
@@ -126,7 +126,7 @@ export default function MacOs() {
             </p>
             <CodeBlock>{`subwave doctor`}</CodeBlock>
             <p className="text-muted">
-              The full diagnostic sweep: containers, Navidrome reachability, the
+              The full diagnostic sweep: containers, music source reachability, the
               LLM, and whether the stream is actually on air.
             </p>
           </div>
@@ -212,12 +212,13 @@ DOCKER_DEFAULT_PLATFORM=linux/amd64`}</CodeBlock>
         <h2>The four things that catch people.</h2>
 
         <div className="bs-callout">
-          <div className="bs-eyebrow">NAVIDROME ON THE SAME MAC? NOT LOCALHOST</div>
+          <div className="bs-eyebrow">MUSIC SERVER ON THE SAME MAC? NOT LOCALHOST</div>
           <p>
             Inside a container, <code className="bs-code-inline">localhost</code>{' '}
             is the container. Point the wizard at{' '}
             <code className="bs-code-inline">http://host.docker.internal:4533</code>{' '}
-            instead — every compose file already maps that name to the host
+            (Navidrome; Jellyfin is <code className="bs-code-inline">:8096</code>, Plex{' '}
+            <code className="bs-code-inline">:32400</code>) instead — every compose file already maps that name to the host
             gateway. Same rule for an Ollama box running on the Mac:{' '}
             <code className="bs-code-inline">http://host.docker.internal:11434</code>.
           </p>

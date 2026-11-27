@@ -39,7 +39,8 @@ export default function Prerequisites() {
               backends can be added as{' '}
               <Link href="/manual/music-sources" className="bs-link">source plugins</Link>.
               No server yet? The wizard&apos;s demo library lets you hear the
-              station first.{' '}
+              station first, and you can connect your library later from
+              Admin → Music source.{' '}
               <a
                 href="https://www.navidrome.org/"
                 target="_blank"
@@ -77,7 +78,7 @@ export default function Prerequisites() {
         <p className="bs-eyebrow">READY?</p>
         <h2>Pick an install path.</h2>
         <p>
-          With Navidrome and an LLM reachable, head to{' '}
+          With your music server (or the demo library) and an LLM reachable, head to{' '}
           <Link href="/setup/quick-start" className="bs-link">Quick Start</Link> for
           the wizard, or <Link href="/setup/manual" className="bs-link">Manual
           Install</Link> to run the commands yourself.

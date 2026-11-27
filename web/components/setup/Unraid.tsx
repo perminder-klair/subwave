@@ -125,7 +125,7 @@ export default function Unraid() {
               Sign in with the{' '}
               <code className="bs-code-inline">ADMIN_USER</code> /{' '}
               <code className="bs-code-inline">ADMIN_PASS</code> you set, and the
-              wizard collects the rest: Navidrome, the LLM provider, TTS, and the
+              wizard collects the rest: your music source (Navidrome, Jellyfin, Plex or the demo library), the LLM provider, TTS, and the
               DJ persona. The player lives at{' '}
               <code className="bs-code-inline">http://YOUR-UNRAID-IP:7700</code>.
             </p>
@@ -250,7 +250,7 @@ export default function Unraid() {
             <h3>Finish setup in the browser</h3>
             <CodeBlock>{`open http://YOUR-UNRAID-IP:7700/onboarding`}</CodeBlock>
             <p>
-              Same wizard as the one-click path: Navidrome, the LLM provider,
+              Same wizard as the one-click path: your music source, the LLM provider,
               TTS, and the DJ persona.
             </p>
           </div>

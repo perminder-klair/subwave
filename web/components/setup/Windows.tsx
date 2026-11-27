@@ -191,7 +191,7 @@ notepad .env`}</CodeBlock>
         <CodeBlock lang="powershell">{`docker compose up -d
 start http://localhost:7700/onboarding`}</CodeBlock>
         <p>
-          The browser wizard collects Navidrome, the LLM, TTS and the DJ persona,
+          The browser wizard collects your music source (Navidrome, Jellyfin, Plex or the demo library), the LLM, TTS and the DJ persona,
           exactly as <code className="bs-code-inline">subwave setup</code> would.
           From then on the stack is <code className="bs-code-inline">docker compose ps</code>,{' '}
           <code className="bs-code-inline">logs -f</code>, and{' '}
@@ -204,13 +204,14 @@ start http://localhost:7700/onboarding`}</CodeBlock>
         <h2>Worth knowing either way.</h2>
         <ul className="bs-checklist">
           <li>
-            <strong>Navidrome on this PC isn't localhost.</strong>
+            <strong>A music server on this PC isn't localhost.</strong>
             <p>
               From inside a container,{' '}
               <code className="bs-code-inline">localhost</code> is the container.
               Point the wizard at{' '}
               <code className="bs-code-inline">http://host.docker.internal:4533</code>{' '}
-              — the compose files already map that name to the host gateway. Same
+              (Navidrome; Jellyfin is <code className="bs-code-inline">:8096</code>, Plex{' '}
+              <code className="bs-code-inline">:32400</code>) — the compose files already map that name to the host gateway. Same
               for Ollama on{' '}
               <code className="bs-code-inline">http://host.docker.internal:11434</code>.
             </p>

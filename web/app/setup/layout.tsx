@@ -6,7 +6,7 @@ import { SETUP_PAGES } from '@/components/setup/pages';
 export const metadata: Metadata = {
   title: 'SUB/WAVE — Setup',
   description:
-    'Run your own SUB/WAVE — connect it to your Navidrome library and an LLM provider (Ollama by default) in about ten minutes.',
+    'Run your own SUB/WAVE — connect it to your music library (Navidrome, Jellyfin or Plex) and an LLM provider (Ollama by default) in about ten minutes.',
 };
 
 // Render per-request so canonicals/og:url pick up the runtime SITE_URL — a
