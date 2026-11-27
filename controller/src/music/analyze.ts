@@ -27,6 +27,7 @@ import {
 import { probeListenerCount } from '../broadcast/listeners.js';
 import { sweepKeepLastFromDisk } from '../broadcast/pick-stems.js';
 import { planAcoustics, type AcousticsPlan, type WorkRequest } from './acoustics-plan.js';
+import { heldIds } from './held-rows.js';
 
 // Status events for the panel, mirrored to the `[analyze] …` console line.
 const logEvent = makeEventLogger('analyze');
@@ -50,6 +51,17 @@ export interface AnalyzeOptions {
 }
 
 // Env wins ON, never off; else the admin toggle (settings.audio.embeddings).
+// A scope query, less the rows a walk held because the music source no longer
+// serves them (held-rows.ts): analysing one is a guaranteed 404, and a run of
+// them trips the pass's "backend unreachable" guard. The cap applies after the
+// filter, so held rows never use up a limited pass.
+function servedScope(cap: number | undefined, query: (cap: number | undefined) => string[]): string[] {
+  const held = heldIds();
+  if (!held.size) return query(cap);
+  const served = query(undefined).filter((id) => !held.has(id));
+  return cap ? served.slice(0, cap) : served;
+}
+
 function audioBackfillDefault(): boolean {
   const v = (process.env.ANALYZE_AUDIO_EMBEDDING || '').toLowerCase();
   if (v === '1' || v === 'true' || v === 'yes') return true;
@@ -381,7 +393,7 @@ async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeSt
     ? []
     : reAnalyzeScope
       ? (cap ? reAnalyzeScope.slice(0, cap) : reAnalyzeScope)
-      : db.needsAnalysisIds(cap);
+      : servedScope(cap, (n) => db.needsAnalysisIds(n));
   let ids = bpmIds;
 
   // Audio backfill: also target analysed tracks lacking a CLAP vector, so
@@ -399,7 +411,7 @@ async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeSt
   const audioBackfill = audioDecision.widen;
   if (audioBackfill && !reAnalyzeScope && !plan) {
     const seen = new Set(bpmIds);
-    const audioIds = db.unanalysedAudioIds(cap).filter(id => !seen.has(id));
+    const audioIds = servedScope(cap, (n) => db.unanalysedAudioIds(n)).filter(id => !seen.has(id));
     ids = cap ? [...bpmIds, ...audioIds].slice(0, cap) : [...bpmIds, ...audioIds];
     if (audioIds.length > 0) {
       console.log(`[analyze] audio backfill: +${ids.length - bpmIds.length} already-analysed tracks missing an audio vector`);
@@ -416,7 +428,7 @@ async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeSt
   const includeTailMissing = tailVocalBackfillAvailable(analyzer.tailVocalAvailable());
   if (vocalBackfill && !reAnalyzeScope && !plan) {
     const seen = new Set(ids);
-    const vocalIds = db.needsVocalIds(cap, includeTailMissing).filter(id => !seen.has(id));
+    const vocalIds = servedScope(cap, (n) => db.needsVocalIds(n, includeTailMissing)).filter(id => !seen.has(id));
     const before = ids.length;
     ids = cap ? [...ids, ...vocalIds].slice(0, cap) : [...ids, ...vocalIds];
     if (ids.length > before) {

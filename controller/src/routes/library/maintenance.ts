@@ -256,6 +256,8 @@ router.post('/library/reconcile', requireAdmin, (req, res) => {
   startReconcile({
     confirmReplaced: req.body?.confirmReplaced === true,
     acceptReplaced: req.body?.acceptReplaced === true,
+    // Remove the rows a walk held back (a mass removal, music/prune-policy.ts).
+    confirmPrune: req.body?.confirmPrune === true,
   });
   res.json({ ok: true, tagger });
 });

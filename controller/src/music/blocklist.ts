@@ -78,6 +78,8 @@ const trackKey = (title: unknown, artist: unknown, album: unknown) => {
   const al = nameKey(album);
   return t && ar && al ? `${t}${KEY_SEP}${ar}${KEY_SEP}${al}` : null;
 };
+/** The track tier's name key, for the source-switch block check (music/id-rotation.ts). */
+export const trackNameKey = trackKey;
 
 // Bumped on every index rebuild and playlist refresh, so a cache of what the
 // list blocks (library-overview.ts) knows when to recount.
@@ -194,6 +196,19 @@ function parseStore(raw: any): { entries: BlockEntry[]; rules: BlockRule[]; drop
   const rawRules = Array.isArray(raw?.rules) ? raw.rules : [];
   const parsedRules = rawRules.map(coerceStoredRule).filter((r: BlockRule | null): r is BlockRule => r !== null);
   return { entries: parsedEntries, rules: parsedRules, droppedRules: rawRules.length - parsedRules.length };
+}
+
+/**
+ * The stored entries, read without loading the list. A walk child reads them
+ * here, never through load(): a loaded list makes the walk skip blocked songs,
+ * and a prune over its ids would delete their rows (#2272). Missing or corrupt → [].
+ */
+export async function readStoredEntries(): Promise<BlockEntry[]> {
+  try {
+    return parseStore(JSON.parse(await readFile(FILE_PATH, 'utf8'))).entries;
+  } catch {
+    return [];
+  }
 }
 
 export async function load() {
@@ -356,9 +371,9 @@ export async function remapIds(
   return changed;
 }
 
-// Return the blocking entry for raw songs or library rows. Resolve IDs before name fallback;
-// album names are paired with artist names. Stable precedence determines which entry the admin
-// action removes.
+// Return the blocking entry for raw songs or library rows. Resolve IDs before name fallback,
+// then the most specific name first; album names are paired with artist names. Stable
+// precedence determines which entry the admin action removes.
 export function matchOf(song: any): BlockEntry | null {
   if (!song || entries.length === 0) return null;
   return (

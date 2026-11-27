@@ -70,6 +70,7 @@ globalThis.fetch = (input, init) => {
 `);
 const db = await import('../src/music/library-db.js');
 const rotation = await import('../src/music/id-rotation.js');
+const heldRows = await import('../src/music/held-rows.js');
 await db.open({ embeddingDim: 8, adoptStoredDim: true });
 
 function vectors(id: string) {
@@ -170,6 +171,9 @@ for (const confirmMassPrune of [false, true]) {
     assert.equal(db.trackCount(), 3);
     assertPreserved('missing-1', before);
     assert.deepEqual(requests, ['getScanStatus']);
+    // Kept, but not served: the pick and analysis paths leave it out (held-rows.ts).
+    assert.deepEqual([...heldRows.heldIds()], ['missing-1']);
+    assert.deepEqual(heldRows.rejectHeld([{ id: 'keep-1' }, { id: 'missing-1' }]), [{ id: 'keep-1' }]);
 
     scanning = false;
     const pruned = await rotation.adoptAndPrune(live, { confirmMassPrune });
@@ -179,6 +183,7 @@ for (const confirmMassPrune of [false, true]) {
     assert.equal(db.getTrack('missing-1'), null);
     assert.deepEqual(vectors('missing-1'), { text: undefined, audio: undefined });
     assert.deepEqual(requests, ['getScanStatus', 'getScanStatus']);
+    assert.equal(heldRows.heldIds().size, 0, 'the record goes with the rows');
   });
 }
 

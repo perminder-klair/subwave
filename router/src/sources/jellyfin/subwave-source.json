@@ -1,0 +1,15 @@
+{
+  "name": "jellyfin",
+  "label": "Jellyfin",
+  "description": "Stream a Jellyfin music library. Favourites become stars and Jellyfin playlists are shared both ways.",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "idPrefix": "jf",
+  "entry": "index.ts",
+  "homepage": "https://jellyfin.org",
+  "config": [
+    { "key": "url", "label": "Server URL", "type": "url", "required": true, "env": "JELLYFIN_URL", "placeholder": "http://jellyfin:8096", "affectsIds": true },
+    { "key": "apiKey", "label": "API key", "type": "secret", "required": true, "env": "JELLYFIN_API_KEY", "help": "Dashboard → API Keys → +." },
+    { "key": "user", "label": "User", "type": "string", "env": "JELLYFIN_USER", "help": "Whose favourites and playlists to use. Defaults to the first user.", "affectsIds": false }
+  ]
+}

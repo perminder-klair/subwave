@@ -8,7 +8,8 @@ import express from 'express';
 import { requireAdmin } from '../middleware/auth.js';
 import { validateBody } from '../middleware/validate.js';
 import { stationCreateSchema, stationRenameSchema, type StationCreate } from '../schemas/station.js';
-import { config, STATE_ROOT } from '../config.js';
+import { STATE_ROOT } from '../config.js';
+import { storedNavidrome } from '../setup/config.js';
 import { envHasNavidrome } from '../setup/firstRun.js';
 import { MAX_STATIONS } from '../stations/pure.js';
 import * as settings from '../settings.js';
@@ -98,14 +99,17 @@ router.get('/stations', requireAdmin, (req, res) => {
 router.post('/stations', requireAdmin, validateBody(stationCreateSchema), async (req, res) => {
   try {
     const { name, mode } = req.body as StationCreate;
+    // The station's own Navidrome connection, never the live one: on a
+    // music-router station the live connection is the router (#692).
+    const navidrome = await storedNavidrome();
     const { id, converted } = await manager.createStation(STATE_ROOT, {
       name,
       mode,
       currentName: currentName(),
       currentNavidrome: {
-        url: config.navidrome.url,
-        user: config.navidrome.user,
-        pass: config.navidrome.password,
+        url: navidrome.url,
+        user: navidrome.user,
+        pass: navidrome.password,
       },
     });
     // Conversion moved this station's files under stations/main, so the process

@@ -1,0 +1,5 @@
+{ "name": "slow-stream", "label": "Slow stream", "version": "1", "apiVersion": 1, "idPrefix": "slow",
+  "config": [
+    { "key": "delayMs", "label": "Delay before the stream starts", "type": "number", "default": 300 },
+    { "key": "kind", "label": "Body kind (web or node)", "type": "string", "default": "web" }
+  ] }

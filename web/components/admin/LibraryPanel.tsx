@@ -111,6 +111,8 @@ function LibraryBody() {
         onStop={tag.stopTagger}
         onRescan={tag.rescanTagger}
         onReconcile={tag.reconcile}
+        onConfirmPrune={tag.confirmPrune}
+        pruning={tag.pruning}
         onCountLibrary={tag.countLibrary}
         onOpenTab={setTab}
         musicServerUrl={tag.musicServerUrl}

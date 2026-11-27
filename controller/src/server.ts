@@ -69,7 +69,8 @@ import { router as connectRoutes } from './routes/connect.js';
 import { router as mcpRoutes } from './routes/mcp.js';
 import { router as nowPlayingFileRoutes } from './routes/now-playing-file.js';
 import { loadSecretsIntoEnv } from './setup/secrets.js';
-import { loadNavidromeConfig } from './setup/config.js';
+import { loadNavidromeConfig, loadSetupConfig } from './setup/config.js';
+import { readSelection, writeRouterConfig } from './setup/music-source.js';
 import { getSetupStatus } from './setup/firstRun.js';
 import * as library from './music/library.js';
 
@@ -198,6 +199,16 @@ app.listen(config.server.port, async (err?: Error) => {
     }
   } catch (err: any) {
     console.error('[secrets] load failed:', err.message);
+  }
+
+  // The music router's config.json — its credentials and this station's
+  // source selection (#692). Written before the connection load below, which
+  // reads the credentials back in router mode. The router idles in navidrome
+  // mode, so on a default install this only provisions its credentials.
+  try {
+    await writeRouterConfig(readSelection(await loadSetupConfig()));
+  } catch (err: any) {
+    console.error('[music-source] router config write failed:', err.message);
   }
 
   // Load the active station connection using the shared precedence policy.
@@ -346,8 +357,10 @@ app.listen(config.server.port, async (err?: Error) => {
   // Terminate a tagger/analyzer child orphaned by a restart: it is detached and
   // keeps running, so a second Start would double-write the library DB.
   try {
-    const { recoverFromRestart } = await import('./broadcast/tagger.js');
+    const { recoverFromRestart, resumeSourceSwitchAtBoot } = await import('./broadcast/tagger.js');
     recoverFromRestart();
+    // A music-source switch whose carry-across walk never finished (#692).
+    resumeSourceSwitchAtBoot();
   } catch (err: any) {
     console.error('[tagger] restart recovery failed:', err.message);
   }

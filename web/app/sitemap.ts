@@ -28,6 +28,7 @@ const ROUTES = [
   '/manual/skills',
   '/manual/themes',
   '/manual/analysis',
+  '/manual/music-sources',
   '/manual/observatory',
   '/manual/concepts',
   '/manual/faq',

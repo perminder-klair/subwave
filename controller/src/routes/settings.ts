@@ -5,6 +5,7 @@ import { router as coreRoutes } from './settings/core.js';
 import { router as llmRoutes } from './settings/llm.js';
 import { router as ttsRoutes } from './settings/tts.js';
 import { router as stationRoutes } from './settings/station.js';
+import { router as musicSourceRoutes } from './settings/music-source.js';
 
 export const router = express.Router();
 
@@ -13,4 +14,5 @@ router.use(coreRoutes);
 router.use(llmRoutes);
 router.use(ttsRoutes);
 router.use(stationRoutes);
+router.use(musicSourceRoutes);
 

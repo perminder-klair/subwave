@@ -1,0 +1,3 @@
+{ "name": "good", "label": "Good fixture", "version": "0.1.0", "apiVersion": 1, "idPrefix": "good",
+  "config": [ { "key": "greeting", "label": "Greeting", "type": "string", "required": true, "env": "GOOD_GREETING" },
+              { "key": "count", "label": "Count", "type": "number", "default": 2 } ] }

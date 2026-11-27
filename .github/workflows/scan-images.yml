@@ -27,7 +27,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [caddy, broadcast, controller, web, analyzer]
+        image: [caddy, broadcast, controller, web, analyzer, router]
     steps:
       - name: Scan ${{ matrix.image }}
         uses: aquasecurity/trivy-action@0.28.0

@@ -21,11 +21,15 @@ interface NavidromeSectionProps {
   data: SettingsData;
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
   refresh: () => void;
+  /** Rendered inside the Music source section, which owns the header. */
+  embedded?: boolean;
+  /** The station plays through the music router; saving keeps these on file. */
+  routerLive?: boolean;
 }
 
 type TestResult = { ok: boolean; serverVersion?: string; serverType?: string; error?: string };
 
-export function NavidromeSection({ data, adminFetch, refresh }: NavidromeSectionProps) {
+export function NavidromeSection({ data, adminFetch, refresh, embedded, routerLive }: NavidromeSectionProps) {
   const nv = data.navidrome;
   // Seed once from the GET payload; later refreshes must not clobber typing.
   const [url, setUrl] = useState(() => nv?.url ?? '');
@@ -88,12 +92,14 @@ export function NavidromeSection({ data, adminFetch, refresh }: NavidromeSection
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body()),
       });
-      const j = (await r.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+      const j = (await r.json().catch(() => ({}))) as { ok?: boolean; error?: string; live?: boolean };
       if (!r.ok || j.ok === false) {
         notify.err(j.error || `Save failed (${r.status})`);
         return;
       }
-      notify.ok('Navidrome connection saved — auto playlist rebuilding');
+      notify.ok(j.live === false
+        ? 'Navidrome connection saved — kept for switching back; the station plays through the router'
+        : 'Navidrome connection saved — auto playlist rebuilding');
       setPass('');
       setResult(null);
       refresh();
@@ -145,16 +151,18 @@ export function NavidromeSection({ data, adminFetch, refresh }: NavidromeSection
 
   return (
     <>
-      <SectionHeader
-        eyebrow="music source"
-        title="The Navidrome server the DJ pulls from."
-        sub={<>
-          Every track pick, cover, and library lookup goes through this
-          Subsonic connection. Changes apply immediately — no restart — and the
-          auto playlist is rebuilt against the new server. The same values are
-          managed by the onboarding wizard and <code>subwave setup</code>.
-        </>}
-      />
+      {!embedded && (
+        <SectionHeader
+          eyebrow="music source"
+          title="The Navidrome server the DJ pulls from."
+          sub={<>
+            Every track pick, cover, and library lookup goes through this
+            Subsonic connection. Changes apply immediately — no restart — and the
+            auto playlist is rebuilt against the new server. The same values are
+            managed by the onboarding wizard and <code>subwave setup</code>.
+          </>}
+        />
+      )}
 
       <Card title="Navidrome server" sub="url · credentials">
         <div className="grid gap-[18px]">
@@ -244,10 +252,12 @@ export function NavidromeSection({ data, adminFetch, refresh }: NavidromeSection
         </div>
       ) : (
         <SaveBar
-          note="Applies immediately — the auto playlist is rebuilt with the new connection; no restart needed. Saving with an unreachable server is allowed (it may not be up yet); use Test to check."
+          note={routerLive
+            ? 'The station plays through the music router right now. Saving keeps this connection on file; press "Play from Navidrome" above to switch back.'
+            : 'Applies immediately — the auto playlist is rebuilt with the new connection; no restart needed. Saving with an unreachable server is allowed (it may not be up yet); use Test to check.'}
           busy={busy}
           onSave={save}
-          saveLabel="Save music source"
+          saveLabel={routerLive ? 'Save Navidrome connection' : 'Save music source'}
           dirty={dirty}
         />
       )}

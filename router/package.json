@@ -1,0 +1,28 @@
+{
+  "name": "@subwave/router",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "SUB/WAVE music router: serves the Subsonic API the controller speaks, answered by pluggable music-source plugins.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "lint": "tsc --noEmit",
+    "test": "tsx scripts/run-tests.ts",
+    "conformance": "tsx scripts/conformance.ts"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "tsx": "^4.23.15",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.20.5",
+    "typescript": "^6.0.3"
+  }
+}
