@@ -27,7 +27,7 @@ import {
 import { probeListenerCount } from '../broadcast/listeners.js';
 import { sweepKeepLastFromDisk } from '../broadcast/pick-stems.js';
 import { planAcoustics, type AcousticsPlan, type WorkRequest } from './acoustics-plan.js';
-import { heldIds } from './held-rows.js';
+import { servedFilter } from './held-rows.js';
 
 // Status events for the panel, mirrored to the `[analyze] …` console line.
 const logEvent = makeEventLogger('analyze');
@@ -51,14 +51,15 @@ export interface AnalyzeOptions {
 }
 
 // Env wins ON, never off; else the admin toggle (settings.audio.embeddings).
-// A scope query, less the rows a walk held because the music source no longer
-// serves them (held-rows.ts): analysing one is a guaranteed 404, and a run of
-// them trips the pass's "backend unreachable" guard. The cap applies after the
-// filter, so held rows never use up a limited pass.
+// A scope query, less the rows the music source does not serve now: held by a
+// walk, or not yet carried across a pending switch (held-rows.ts). Analysing
+// one is a guaranteed 404, and a run of them trips the pass's "backend
+// unreachable" guard. The cap applies after the filter, so those rows never
+// use up a limited pass.
 function servedScope(cap: number | undefined, query: (cap: number | undefined) => string[]): string[] {
-  const held = heldIds();
-  if (!held.size) return query(cap);
-  const served = query(undefined).filter((id) => !held.has(id));
+  const isServed = servedFilter();
+  if (!isServed) return query(cap);
+  const served = query(undefined).filter(isServed);
   return cap ? served.slice(0, cap) : served;
 }
 
