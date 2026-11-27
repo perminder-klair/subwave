@@ -1,8 +1,8 @@
 name: Publish source SDK
 
-# Publishes @subwave/source-sdk (router/source-sdk, built from router/src/sdk)
+# Stages @subwave/source-sdk (router/source-sdk, built from router/src/sdk)
 # to npm. The package is versioned with the plugin apiVersion, not with the
-# station, so most station releases leave it alone: a tag push publishes only
+# station, so most station releases leave it alone: a tag push stages it only
 # when router/source-sdk/package.json names a version npm doesn't have yet.
 #
 # Bump that version in the PR that changes router/src/sdk: a minor for an
@@ -11,22 +11,35 @@ name: Publish source SDK
 # holds the two together).
 #
 # Triggers:
-#   - push of a tag like v1.2.3 (release-please, through its PAT) → publish
-#   - manual workflow_dispatch → build + `npm publish --dry-run` only, from any
-#     ref, so a dispatch never publishes
+#   - push of a tag like v1.2.3 (release-please, through its PAT) → stage, for
+#     a maintainer to approve
+#   - manual workflow_dispatch → build + `npm publish --dry-run`, from any ref.
+#     Tick `stage` to stage the version instead, without cutting a release;
+#     that only runs from develop or main.
 #
-# Needs the NPM_TOKEN secret: an npm automation (or granular, publish-scoped)
-# token for the @subwave scope. Without it the tag run warns and stops.
+# Stages through npm trusted publishing (OIDC), so there is no NPM_TOKEN secret
+# to rotate: on npmjs.com, @subwave/source-sdk → Settings → Trusted publisher
+# names this repository and this workflow file, and allows only
+# `npm stage publish`. A staged version goes live once a maintainer approves it
+# on npmjs.com (or with the npm CLI) through a 2FA challenge; a plain
+# `npm publish` from here is refused. npm only offers the trusted-publisher
+# setting for a package that already exists, so 1.0.0 was published by hand.
+# Staging needs npm >= 11.15.0, hence the upgrade step below.
 
 on:
   push:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      stage:
+        description: Stage this version for approval on npmjs.com (develop or main only)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
-  id-token: write   # npm --provenance
+  id-token: write   # trusted publishing and provenance
 
 concurrency:
   group: publish-source-sdk
@@ -42,6 +55,9 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+
+      - name: Upgrade npm (staged publishing needs 11.15.0 or newer)
+        run: npm install -g npm@^11.15.0
 
       - name: Install router dependencies (typescript)
         run: npm ci --no-audit --no-fund
@@ -67,20 +83,19 @@ jobs:
           fi
 
       - name: Dry run
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && !inputs.stage
         run: npm publish --dry-run
         working-directory: router/source-sdk
 
-      - name: Publish
-        if: github.event_name == 'push' && steps.version.outputs.exists == 'false'
+      - name: Stage for approval
+        if: >-
+          steps.version.outputs.exists == 'false' && (
+            github.event_name == 'push' ||
+            (inputs.stage && (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main'))
+          )
         working-directory: router/source-sdk
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           PKG: ${{ steps.version.outputs.name }}@${{ steps.version.outputs.version }}
         run: |
-          if [ -z "$NODE_AUTH_TOKEN" ]; then
-            echo "::warning::NPM_TOKEN is not set; $PKG was not published."
-            exit 0
-          fi
-          npm publish --provenance --access public
-          echo "::notice::Published $PKG"
+          npm stage publish --access public
+          echo "::notice::Staged $PKG: approve it on npmjs.com to publish it."
