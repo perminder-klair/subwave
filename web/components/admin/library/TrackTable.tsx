@@ -14,7 +14,6 @@ import {
   EnergyMeter,
   MENU_ITEM,
   MENU_PANEL,
-  Thumb,
   blockedByLabel,
   fmtDuration,
   unblockLabel,
@@ -22,6 +21,7 @@ import {
 } from './bits';
 import { BlockMenu, HeartButton, QueueMenu, likeStateFor } from './row-actions';
 import { ManualTagEditor } from './ManualTagEditor';
+import { PreviewBar, PreviewButton, usePreviewControls } from './PreviewControls';
 
 interface TrackTableProps {
   tab: TableVariant;
@@ -86,6 +86,13 @@ export function TrackTable(p: TrackTableProps) {
     );
   }
 
+  return <TrackRows {...p} />;
+}
+
+// Split from TrackTable so the preview hooks run only once rows exist (the
+// early returns above render no player).
+function TrackRows(p: TrackTableProps) {
+  const { snap, player, linkFor } = usePreviewControls();
   const allSelected = p.rows.length > 0 && p.rows.every(t => p.selected.has(t.id));
 
   return (
@@ -123,7 +130,11 @@ export function TrackTable(p: TrackTableProps) {
                 aria-label={`select ${t.title || 'track'}`}
               />
             </label>
-            <Thumb track={t} />
+            <PreviewButton
+              track={t}
+              snap={snap}
+              onPress={() => player?.toggle(t.id, linkFor(t.id))}
+            />
             <div className="min-w-0 flex-1">
               <div className="flex min-w-0 items-center gap-2">
                 <div className="lib-title">{t.title || '—'}</div>
@@ -242,6 +253,7 @@ export function TrackTable(p: TrackTableProps) {
               )}
             </div>
           </div>
+          {snap.id === t.id && player && <PreviewBar track={t} snap={snap} player={player} />}
           {editing && (
             <ManualTagEditor
               track={t}
