@@ -22,7 +22,7 @@ import {
   rootOp,
   type Inspected,
 } from '../sources.ts';
-import { err, exitIfCancelled, header, info, muted, ok, p, pc, warn } from '../ui.ts';
+import { MENU_BACK, err, exitIfCancelled, header, info, muted, ok, p, pauseForEnter, pc, warn } from '../ui.ts';
 
 // Keep in step with controller/src/schemas/music-source.ts (musicPluginInfoSchema,
 // routerStatusSchema) and GET /settings/music-source; only what is shown here.
@@ -205,6 +205,8 @@ export async function runSourceAdd(opts: SourceAddOpts): Promise<void> {
     muted('      - /path/to/your/music:/music:ro');
     muted("The plugin's README says what it needs.");
   } catch (e) {
+    // Esc at a prompt inside the menu means "go back", not a failure.
+    if (e === MENU_BACK) throw e;
     err((e as Error).message);
     process.exitCode = 1;
   } finally {
@@ -267,7 +269,41 @@ export async function runSourceRemove(opts: SourceRemoveOpts): Promise<void> {
     const scan = await rescan(station.env);
     if ('error' in scan) muted(`The router drops it on its next scan (${scan.error}).`);
   } catch (e) {
+    // Esc at a prompt inside the menu means "go back", not a failure.
+    if (e === MENU_BACK) throw e;
     err((e as Error).message);
     process.exitCode = 1;
   }
+}
+
+// ---- the interactive menu's entry -------------------------------------------------
+
+export async function runSourceMenu(): Promise<void> {
+  const installed = installedFolders();
+  const choice = exitIfCancelled(await p.select({
+    message: 'Music-source plugins',
+    options: [
+      { value: 'list', label: 'list', hint: 'installed and built-in plugins, with any load errors' },
+      { value: 'add', label: 'add', hint: 'install one from a folder, git URL, GitHub link or archive URL' },
+      ...(installed.length ? [{ value: 'remove', label: 'remove', hint: 'remove an installed plugin' }] : []),
+    ],
+  }));
+
+  if (choice === 'list') {
+    await runSourceList();
+  } else if (choice === 'add') {
+    const source = exitIfCancelled(await p.text({
+      message: 'Plugin folder or link',
+      placeholder: 'https://github.com/someone/subwave-emby  or  ./my-plugin',
+      validate: (v) => (v && v.trim() ? undefined : 'Enter a folder or a link'),
+    }));
+    await runSourceAdd({ source: source.trim() });
+  } else if (choice === 'remove') {
+    const name = exitIfCancelled(await p.select({
+      message: 'Remove which plugin?',
+      options: installed.map((n) => ({ value: n, label: n, hint: str(installedManifest(n)?.label) })),
+    }));
+    await runSourceRemove({ name });
+  }
+  await pauseForEnter();
 }
