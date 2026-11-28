@@ -818,6 +818,9 @@ function vecCount(d: Database.Database): number {
 //     walked since, or a server that reported no album artist id; either way
 //     episode-source cannot judge the row's credit and keeps the pre-column
 //     rule. Its index is a read accelerator (stats.ts STATS_INDEXES).
+//   - `grid_provenance_json`: where a Beat This grid came from (model,
+//     window, source fingerprint, timing evidence), written beside beats_json
+//     and bars_json. NULL until a learned grid is measured.
 //   - `stems_tail_misses`: stem passes in a row whose proven tail did not land
 //     (#2238, music/stem-stamp-policy.ts). Such a pass leaves stems_at unset so
 //     the backfill tries again, up to a bound. NULL = none; reset with stems_at.
@@ -844,6 +847,7 @@ function ensureNamedColumns(d: Database.Database): void {
     // so a prepared artist episode reads the same set from the mirror as from
     // the artist's albums (#2333). NULL = not walked since this column arrived.
     ['album_artist_id', 'TEXT'],
+    ['grid_provenance_json', 'TEXT'],
   ];
   const missing = () => {
     const have = new Set((d.pragma('table_info(tracks)') as Array<{ name: string }>).map((c) => c.name));

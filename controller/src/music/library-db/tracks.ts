@@ -1,6 +1,7 @@
 // Per-track reads and writes: metadata, tags, enrichment, analysis and vectors.
 // The write path every ingest pass (tagger, analyzer, enricher) goes through.
 
+import { parseBeatGridProvenance, type BeatGridProvenance } from '../../schemas/beat-grid.js';
 import { ANALYSIS_VERSION, AUDIO_EMBEDDING_DIM, SQL_HAS_MOODS, SQL_TAIL_VOCAL_RANGES, TAGGER_VERSION, getEmbeddingDim, requireDb } from './handle.js';
 import {
   FACETS, FACET_VERSIONS, SQL_WHOLE_FILE_LOUDNESS, WHOLE_FILE_LOUDNESS_EXTRAS, clearFacetFailures, clearFacetRows,
@@ -444,7 +445,7 @@ export function clearTrackAudio(id: string, fileSize?: number | null): void {
       `UPDATE tracks SET bpm = NULL, musical_key = NULL, intro_ms = NULL, analysis_confidence = NULL,
          analysis_version = NULL, loudness_lufs = NULL, peak_db = NULL, ${CLEAR_WHOLE_FILE_EXTRAS},
          structure_json = NULL, vocal_ranges_json = NULL, pace_json = NULL, beats_json = NULL,
-         bars_json = NULL, key_ranges_json = NULL, audio_moods = NULL, audio_mood_scores_json = NULL,
+         bars_json = NULL, grid_provenance_json = NULL, key_ranges_json = NULL, audio_moods = NULL, audio_mood_scores_json = NULL,
          audio_descriptors = NULL, audio_descriptor_scores_json = NULL,
          outro_json = NULL, tail_silence_ms = NULL, tail_start_ms = NULL, tail_version = NULL, lead_silence_ms = NULL,
          edge_lead_ms = NULL, edge_tail_ms = NULL, decoded_duration_ms = NULL,
@@ -1065,6 +1066,7 @@ interface TrackAnalysisWrite {
   pace?: TrackPaceSpan[] | null;
   beats?: number[] | null;
   bars?: number[] | null;
+  gridProvenance?: BeatGridProvenance | null;
   keyRanges?: TrackKeyRange[] | null;
   // null keeps the existing value (COALESCE): a pass that couldn't reach the
   // tail must not wipe a complete pass's measurement.
@@ -1207,6 +1209,7 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
         pace_json           = ?,
         beats_json          = ?,
         bars_json           = ?,
+        grid_provenance_json = ?,
         key_ranges_json     = ?,
         lead_silence_ms     = ?,
         -- COALESCE: vocal activity is gated separately (ANALYZE_VOCAL_ACTIVITY),
@@ -1251,6 +1254,7 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
       a.pace && a.pace.length ? JSON.stringify(a.pace) : null,
       a.beats && a.beats.length ? JSON.stringify(a.beats) : null,
       a.bars && a.bars.length ? JSON.stringify(a.bars) : null,
+      gridProvenanceJson(a.gridProvenance),
       a.keyRanges && a.keyRanges.length ? JSON.stringify(a.keyRanges) : null,
       Number.isFinite(a.leadSilenceMs as number) ? Math.max(0, Math.round(a.leadSilenceMs as number)) : null,
       a.vocalRanges != null ? JSON.stringify(a.vocalRanges) : null,
@@ -1313,6 +1317,7 @@ export interface FacetWrite {
     pace: TrackPaceSpan[] | null;
     beats: number[] | null;
     bars: number[] | null;
+    gridProvenance?: BeatGridProvenance | null;
     keyRanges: TrackKeyRange[] | null;
     leadSilenceMs: number | null;
   };
@@ -1359,6 +1364,11 @@ export interface FacetWrite {
   tailUnplaced?: boolean;
 }
 
+function gridProvenanceJson(value: unknown): string | null {
+  const parsed = parseBeatGridProvenance(value);
+  return parsed ? JSON.stringify(parsed) : null;
+}
+
 const finite = (v: unknown): number | null => (Number.isFinite(v as number) ? (v as number) : null);
 const jsonOrNull = (v: unknown[] | null | undefined): string | null => (v && v.length ? JSON.stringify(v) : null);
 
@@ -1376,14 +1386,14 @@ export function writeFacetResults(id: string, w: FacetWrite): void {
       const h = w.head;
       d.prepare(
         `UPDATE tracks SET bpm = ?, musical_key = ?, intro_ms = ?, analysis_confidence = ?,
-           structure_json = ?, pace_json = ?, beats_json = ?, bars_json = ?, key_ranges_json = ?,
+           structure_json = ?, pace_json = ?, beats_json = ?, bars_json = ?, grid_provenance_json = ?, key_ranges_json = ?,
            lead_silence_ms = ?, analysis_version = ?
          WHERE id = ?`,
       ).run(
         finite(h.bpm), h.musicalKey ?? null,
         finite(h.introMs) != null ? Math.round(h.introMs as number) : null,
         finite(h.confidence),
-        jsonOrNull(h.sections), jsonOrNull(h.pace), jsonOrNull(h.beats), jsonOrNull(h.bars), jsonOrNull(h.keyRanges),
+        jsonOrNull(h.sections), jsonOrNull(h.pace), jsonOrNull(h.beats), jsonOrNull(h.bars), gridProvenanceJson(h.gridProvenance), jsonOrNull(h.keyRanges),
         finite(h.leadSilenceMs) != null ? Math.max(0, Math.round(h.leadSilenceMs as number)) : null,
         ANALYSIS_VERSION, id,
       );
@@ -1671,7 +1681,7 @@ export function clearAnalysis(opts: { keepVocal?: boolean; clearStems?: boolean 
       loudness_lufs = CASE WHEN ${SQL_WHOLE_FILE_LOUDNESS} THEN loudness_lufs END,
       peak_db = CASE WHEN ${SQL_WHOLE_FILE_LOUDNESS} THEN peak_db END,
       ${KEEP_WHOLE_FILE_EXTRAS},
-      structure_json = NULL, pace_json = NULL, beats_json = NULL, bars_json = NULL,
+      structure_json = NULL, pace_json = NULL, beats_json = NULL, bars_json = NULL, grid_provenance_json = NULL,
       key_ranges_json = NULL,
       lead_silence_ms = NULL,${tailCols}${vocalCol}${stemsCol} analysis_version = NULL,
       audio_moods = NULL, audio_mood_scores_json = NULL,

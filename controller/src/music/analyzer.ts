@@ -16,6 +16,7 @@ import { envInt } from '../util/env.js';
 import { parseLoudnessCurve, type LoudnessCurve } from './loudness-curve.js';
 import { parseWholeLoudnessCurve, type WholeLoudnessCurve } from './whole-loudness-curve.js';
 import { getDb, trackFileSize } from './library-db.js';
+import { parseBeatGridProvenance, type BeatGridProvenance } from '../schemas/beat-grid.js';
 
 // A structural span over the track, in ms. Contiguous over the analysed
 // window; the first is the intro/leading section.
@@ -58,6 +59,7 @@ export interface AnalysisResult {
   // Beat and downbeat (bar) timestamps in ms.
   beats: number[] | null;
   bars: number[] | null;
+  gridProvenance?: BeatGridProvenance | null;
   // Per-region key; the scalar musicalKey stays the back-compat dominant key.
   keyRanges: KeyRange[] | null;
   // Integrated loudness (LUFS, BS.1770) + peak (dBFS); needs pyloudnorm. null
@@ -131,6 +133,7 @@ export interface OutroInfo {
   bpm: number | null;          // tail tempo (outros drift/ritard vs the lead)
   beats: number[] | null;
   bars: number[] | null;
+  gridProvenance?: BeatGridProvenance | null;
   // Tail vocal spans. [] = analysed instrumental tail; the key must be OMITTED
   // (not null) when detection didn't run — outro_json is the JSON.stringify of
   // this object and the vocal backfill probes the raw text for '"vocalRanges"'.
@@ -226,6 +229,7 @@ function parseOutro(v: unknown): OutroInfo | null {
   // "vocalRanges" for the backfill probe.
   const vocalRanges = parseVocalRanges(o?.vocalRanges);
   const loudnessCurve = parseLoudnessCurve(o?.loudnessCurve);
+  const gridProvenance = parseBeatGridProvenance(o?.gridProvenance);
   return {
     startMs: Math.round(startMs),
     ending,
@@ -235,6 +239,7 @@ function parseOutro(v: unknown): OutroInfo | null {
     bars: parseMsList(o?.bars),
     ...(vocalRanges !== null ? { vocalRanges } : {}),
     ...(loudnessCurve ? { loudnessCurve } : {}),
+    ...(gridProvenance ? { gridProvenance } : {}),
   };
 }
 
@@ -317,6 +322,7 @@ interface WorkerMessage {
   pace_curve?: unknown;
   beats?: unknown;
   bars?: unknown;
+  grid_provenance?: unknown;
   key_ranges?: unknown;
   audio_embedding?: unknown;
   outro?: unknown;
@@ -502,6 +508,7 @@ function toAnalysisResult(msg: WorkerMessage): AnalysisResult {
           paceCurve: parsePaceCurve(msg.pace_curve),
           beats: parseMsList(msg.beats),
           bars: parseMsList(msg.bars),
+          gridProvenance: parseBeatGridProvenance(msg.grid_provenance),
           keyRanges: parseKeyRanges(msg.key_ranges),
           audioEmbedding: parseAudioEmbedding(msg.audio_embedding),
           outro,
@@ -728,6 +735,7 @@ async function sidecarRequest(body: ({ url: string } | { path: string }) & Analy
     paceCurve: parsePaceCurve(resBody.pace_curve),
     beats: parseMsList(resBody.beats),
     bars: parseMsList(resBody.bars),
+    gridProvenance: parseBeatGridProvenance(resBody.grid_provenance),
     keyRanges: parseKeyRanges(resBody.key_ranges),
     audioEmbedding: parseAudioEmbedding(resBody.audio_embedding),
     outro,
