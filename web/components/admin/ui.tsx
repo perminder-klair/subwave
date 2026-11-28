@@ -34,6 +34,7 @@ export interface CardProps {
   className?: string;
   bodyClass?: string;
   headClass?: string;
+  headingLevel?: 2 | 3;
   // Drops the box border/background and side padding, for sections inside
   // EditorDialog (.card.is-flat in globals.css).
   flat?: boolean;
@@ -44,7 +45,8 @@ export interface CardProps {
   anchor?: string;
 }
 
-export function Card({ title, sub, right, children, className, bodyClass, headClass, flat, anchor }: CardProps) {
+export function Card({ title, sub, right, children, className, bodyClass, headClass, flat, anchor, headingLevel }: CardProps) {
+  const Heading = headingLevel === 2 ? 'h2' : headingLevel === 3 ? 'h3' : 'span';
   // Only a plain-string title is slugged; an interpolated one would give a slug
   // that moves with the data.
   const slug = anchor ?? (typeof title === 'string' ? cardAnchor(title) : undefined);
@@ -52,7 +54,7 @@ export function Card({ title, sub, right, children, className, bodyClass, headCl
     <section data-card={slug} className={cn('card', flat && 'is-flat', className)}>
       {(title || right) && (
         <div className={cn('card-head', headClass)}>
-          {title && <span className="title">{title}</span>}
+          {title && <Heading className="title">{title}</Heading>}
           {sub && <span className="sub">{sub}</span>}
           {right && <span className="right">{right}</span>}
         </div>

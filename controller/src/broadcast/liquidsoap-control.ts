@@ -15,6 +15,14 @@ import {
 const HOST = process.env.LIQUIDSOAP_HOST || 'broadcast';
 const PORT = parseInt(process.env.LIQUIDSOAP_PORT || '1234', 10);
 
+export async function flowPlaybackStatus(): Promise<{ version: number; pending: string; playing: string }> {
+  try {
+    const status = JSON.parse(await sendCommand('subflow.status'));
+    if (![1, 2].includes(status.version) || typeof status.pending !== 'string' || typeof status.playing !== 'string') throw new Error();
+    return status;
+  } catch { throw new Error('Protected Flow playback is unavailable. Rebuild the broadcast service before queueing a Flow.'); }
+}
+
 export function sendCommand(cmd: string, timeoutMs = 3000, { requireComplete = false }: { requireComplete?: boolean } = {}): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     const sock = net.createConnection({ host: HOST, port: PORT });

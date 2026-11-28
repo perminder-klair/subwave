@@ -72,6 +72,22 @@ test('the isolated writer prompt never carries the announce-model contract', () 
   assert.doesNotMatch(prompt, /This is Marvin Gaye\.|Next up, Marvin Gaye\./);
 });
 
+test('a Flow link describes only the short sequence, not the full album', () => {
+  const prompt = linkPrompt({
+    current: { title: 'Save Our Now', artist: 'Devin Townsend', album: 'Epicloud' },
+    flow: { name: 'Flow', duration: 480, tracks: [
+      { title: 'Save Our Now', artist: 'Devin Townsend', album: 'Epicloud' },
+      { title: 'True North', artist: 'Devin Townsend', album: 'Epicloud' },
+      { title: 'Lucky Animals', artist: 'Devin Townsend', album: 'Epicloud' },
+    ] },
+    context: null,
+  });
+  assert.match(prompt, /only this short, ordered sequence of two or three tracks, not the whole album/);
+  assert.match(prompt, /Never state a track count/);
+  assert.match(prompt, /"openingTrack":"Save Our Now"/);
+  assert.doesNotMatch(prompt, /"name":"Flow"|"duration":480|"Lucky Animals"/);
+});
+
 // ── announce-line.ts — the station composes and alternates, the model never does ──
 
 test('announceLine alternates against the line that last aired, and trims the artist', () => {

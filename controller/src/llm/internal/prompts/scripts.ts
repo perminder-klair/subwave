@@ -365,12 +365,20 @@ export function linkPrompt({
   persona = null,
   includeIntroBudget = true,
   guestContribution = null,
+  flow = null,
   steerIntro = null,
 }: any): string {
   const speaker = persona || settings.getEffectivePersona();
+  const flowFacts = flow ? {
+    album: flow.tracks?.[0]?.album ?? current?.album ?? null,
+    artist: flow.tracks?.[0]?.artist ?? current?.artist ?? null,
+    openingTrack: flow.tracks?.[0]?.title ?? current?.title ?? null,
+  } : null;
   const rules = [
     'Output only the words to be spoken on air.',
-    'The named track is already playing. Focus on it and do not refer to the previous track.',
+    flow
+      ? 'Introduce only this short, ordered sequence of two or three tracks, not the whole album. In one concise, natural sentence, name the supplied album and artist; you may mention the opening track. Never state a track count, use the saved Flow name as a title, imply the whole album is playing, add album-wide praise or predictions, greet the listener, add a second sentence, or include a stage direction. Use only supplied facts and the presenter’s voice and language. For example: "Here’s a nice flow of tracks from [album] by [artist]." The opening track is playing now; later members follow in order. Do not describe internal protection, selection or queue mechanics or refer to the previous track.'
+      : 'The named track is already playing. Give a natural introduction in the presenter’s voice that identifies the supplied artist and track title, keeping their roles distinct. Focus on this track and do not refer to the previous track.',
     'Treat supplied sleeve notes as verified facts, but do not add or infer further music-history claims.',
     'The supplied day of week is for accuracy, not generic atmosphere. Mention it only when it adds something specific and natural; do not use it as a default opener or repeat it from link to link.',
     'Music facts are limited to the exact entries in Verified facts and the supplied episode source data: do not use remembered or learned album, release, chart, reputation, influence, relationship or history information.',
@@ -400,6 +408,7 @@ export function linkPrompt({
 
   const sections = [
     'Task: Give a brief spoken introduction to the track now playing.',
+    flowFacts ? `Flow facts (about the short sequence only): ${JSON.stringify(flowFacts)}` : '',
     `Rules:\n${rules.map((rule) => `- ${rule}`).join('\n')}`,
     facts,
     context?.episodeEditorial || '',
@@ -500,7 +509,7 @@ export async function generateLink(args: any) {
     topP: 0.92,
     repeatPenalty: 1.2,
     seed: randomSeed(),
-    kind: 'generateLink',
+    kind: args.flow ? 'generateFlowLink' : 'generateLink',
   });
 }
 
